@@ -1,0 +1,719 @@
+openapi: 3.1.0
+
+info:
+  title: RustMail API
+  version: 0.1.0
+  description: >
+    REST and WebSocket API for RustMail — a self-hosted SMTP mail catcher.
+    All IDs are ULIDs (time-sortable). All timestamps are ISO 8601 UTC.
+    Base path: /api/v1
+
+servers:
+  - url: http://localhost:8025
+    description: Default local server
+
+tags:
+  - name: Messages
+    description: List, read, update, and delete captured messages
+  - name: Attachments
+    description: List and download message attachments
+  - name: Export
+    description: Download messages in alternative formats
+  - name: Release
+    description: Forward a captured message to a real SMTP server
+  - name: Assert
+    description: CI/CD assertion endpoints — return 200 on pass, 417 on failure
+  - name: Authentication
+    description: Email authentication header parsing (DKIM, SPF, DMARC, ARC)
+  - name: WebSocket
+    description: Real-time event stream
+
+paths:
+
+  /api/v1/messages:
+    get:
+      operationId: listMessages
+      summary: List messages
+      description: >
+        Returns messages ordered by `created_at` descending (newest first).
+        Use `limit` and `offset` for pagination. `total` reflects the count
+        before pagination is applied.
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/QueryParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - $ref: '#/components/parameters/OffsetParam'
+      responses:
+        '200':
+          description: Paginated list of message summaries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageList'
+              example:
+                messages:
+                  - id: 01HZ9RQABCDEFGHJKMNPQRSTUV
+                    sender: alice@example.com
+                    recipients: '["bob@example.com"]'
+                    subject: Hello world
+                    size: 1024
+                    has_attachments: false
+                    is_read: false
+                    created_at: '2026-03-21T10:00:00Z'
+                total: 1
+
+    delete:
+      operationId: deleteAllMessages
+      summary: Delete all messages
+      tags: [Messages]
+      responses:
+        '200':
+          description: Number of messages deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeleteAllResult'
+              example:
+                deleted: 42
+
+  /api/v1/messages/{id}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: getMessage
+      summary: Get a single message with full body
+      tags: [Messages]
+      responses:
+        '200':
+          description: Full message including parsed body fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+              example:
+                id: 01HZ9RQABCDEFGHJKMNPQRSTUV
+                sender: alice@example.com
+                recipients: '["bob@example.com"]'
+                subject: Hello world
+                size: 1024
+                has_attachments: false
+                is_read: true
+                created_at: '2026-03-21T10:00:00Z'
+                text_body: Hello Bob!
+                html_body: '<p>Hello Bob!</p>'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    patch:
+      operationId: updateMessage
+      summary: Update message fields
+      tags: [Messages]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessageUpdate'
+            example:
+              is_read: true
+      responses:
+        '200':
+          description: Updated message summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageSummary'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      operationId: deleteMessage
+      summary: Delete a single message
+      tags: [Messages]
+      responses:
+        '204':
+          description: Message deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/raw:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: getMessageRaw
+      summary: Download raw RFC 822 message source
+      tags: [Messages]
+      responses:
+        '200':
+          description: >
+            Raw RFC 822 message bytes. Content-Disposition is
+            `attachment; filename="<id>.eml"`.
+          content:
+            message/rfc822:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/attachments:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: listAttachments
+      summary: List attachments for a message (metadata only)
+      tags: [Attachments]
+      responses:
+        '200':
+          description: List of attachment metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [attachments]
+                properties:
+                  attachments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Attachment'
+              example:
+                attachments:
+                  - id: 01HZ9RQABCDEFGHJKMNPQRFILE
+                    message_id: 01HZ9RQABCDEFGHJKMNPQRSTUV
+                    filename: invoice.pdf
+                    content_type: application/pdf
+                    size: 48321
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/attachments/{aid}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+      - $ref: '#/components/parameters/AttachmentId'
+
+    get:
+      operationId: downloadAttachment
+      summary: Download an attachment
+      tags: [Attachments]
+      responses:
+        '200':
+          description: >
+            Attachment file. Content-Type matches the attachment's stored
+            content_type. Content-Disposition is attachment; filename="<name>".
+          content:
+            '*/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/inline/{cid}:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+      - name: cid
+        in: path
+        required: true
+        description: Content-ID of the inline image (without angle brackets)
+        schema:
+          type: string
+
+    get:
+      operationId: getInlineAttachment
+      summary: Get an inline image by Content-ID
+      description: >
+        Returns the inline image matching the given Content-ID. Used by the
+        HTML preview to resolve `cid:` references. Only serves image/* types;
+        falls back to application/octet-stream otherwise.
+      tags: [Attachments]
+      responses:
+        '200':
+          description: Inline image content with appropriate Content-Type and immutable cache headers.
+          content:
+            'image/*':
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/export:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: exportMessage
+      summary: Export a message as EML or JSON
+      tags: [Export]
+      parameters:
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [eml, json]
+          description: >
+            `eml` returns the raw RFC 822 bytes as a downloadable file.
+            `json` returns a JSON representation of the full message.
+      responses:
+        '200':
+          description: >
+            Exported message. Content-Type is `message/rfc822` for `eml`
+            and `application/json` for `json`.
+          content:
+            message/rfc822:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        '400':
+          description: Invalid or missing format parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/release:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    post:
+      operationId: releaseMessage
+      summary: Forward a captured message to a real SMTP server
+      tags: [Release]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+            example:
+              host: smtp.mailgun.org
+              port: 587
+      responses:
+        '204':
+          description: Message forwarded successfully
+        '400':
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          description: Downstream SMTP server unreachable or returned an error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/v1/messages/{id}/auth:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: getAuthResults
+      summary: Get email authentication results
+      description: >
+        Parses authentication-related headers from the raw message and returns
+        structured DKIM, SPF, DMARC, and ARC results. Reads `Authentication-Results`,
+        `DKIM-Signature`, `Received-SPF`, and `ARC-Authentication-Results` headers.
+        Does not perform cryptographic validation — it displays what upstream mail
+        servers have already verified.
+      tags: [Authentication]
+      responses:
+        '200':
+          description: Parsed authentication results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResults'
+              example:
+                dkim:
+                  - status: pass
+                    details: "dkim=pass header.d=example.com header.s=selector1"
+                  - status: info
+                    details: "domain=example.com selector=selector1 algorithm=rsa-sha256"
+                spf:
+                  - status: pass
+                    details: "spf=pass smtp.mailfrom=alice@example.com"
+                dmarc:
+                  - status: pass
+                    details: "dmarc=pass header.from=example.com"
+                arc:
+                  - status: pass
+                    details: "arc=pass"
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/assert/count:
+    get:
+      operationId: assertCount
+      summary: Assert message count matches constraints
+      description: >
+        Returns `200 OK` when the number of messages matching the given filters
+        satisfies the `min`/`max` bounds. Returns `417 Expectation Failed`
+        otherwise. Designed for use in CI pipelines with `curl -f`.
+        If neither `min` nor `max` is provided, the assertion always passes
+        and the response contains the raw count.
+      tags: [Assert]
+      parameters:
+        - name: min
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+          description: Minimum number of matching messages (inclusive)
+        - name: max
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+          description: Maximum number of matching messages (inclusive)
+        - name: subject
+          in: query
+          schema:
+            type: string
+          description: Filter by subject substring (case-insensitive)
+        - name: sender
+          in: query
+          schema:
+            type: string
+          description: Filter by sender address substring (case-insensitive)
+        - name: recipient
+          in: query
+          schema:
+            type: string
+          description: Filter by recipient address substring (case-insensitive)
+      responses:
+        '200':
+          description: Assertion passed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssertResult'
+              example:
+                count: 2
+                ok: true
+        '417':
+          description: Expectation Failed — assertion did not pass
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssertResult'
+              example:
+                count: 0
+                ok: false
+
+  /api/v1/ws:
+    get:
+      operationId: websocket
+      summary: WebSocket real-time event stream
+      description: >
+        Upgrade to a WebSocket connection to receive real-time inbox events.
+        The server sends JSON text frames. Clients do not need to send frames
+        (ping/pong is handled at the protocol level).
+
+
+        **Event types:**
+
+
+        | type | data |
+        |---|---|
+        | `message:new` | `MessageSummary` object |
+        | `message:delete` | `{ "id": "<ulid>" }` |
+        | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
+        | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
+        | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |
+        | `messages:clear` | _(no data field)_ |
+      tags: [WebSocket]
+      responses:
+        '101':
+          description: Switching Protocols — WebSocket handshake successful
+
+components:
+
+  parameters:
+
+    MessageId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+      description: ULID of the message
+
+    AttachmentId:
+      name: aid
+      in: path
+      required: true
+      schema:
+        type: string
+      description: ULID of the attachment
+
+    QueryParam:
+      name: q
+      in: query
+      schema:
+        type: string
+      description: Full-text search query (matches subject, body, sender, recipients)
+
+    LimitParam:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+        default: 50
+      description: Maximum number of results to return
+
+    OffsetParam:
+      name: offset
+      in: query
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+      description: Number of results to skip (for pagination)
+
+  schemas:
+
+    MessageSummary:
+      type: object
+      required:
+        - id
+        - sender
+        - recipients
+        - size
+        - has_attachments
+        - is_read
+        - created_at
+      properties:
+        id:
+          type: string
+          description: ULID — time-sortable unique identifier
+          example: 01HZ9RQABCDEFGHJKMNPQRSTUV
+        sender:
+          type: string
+          description: Envelope sender address (MAIL FROM)
+          example: alice@example.com
+        recipients:
+          type: string
+          description: JSON-encoded array of recipient addresses (RCPT TO)
+          example: '["bob@example.com","carol@example.com"]'
+        subject:
+          type: string
+          nullable: true
+          description: Message subject header value
+          example: Hello world
+        size:
+          type: integer
+          description: Raw message size in bytes
+          example: 1024
+        has_attachments:
+          type: boolean
+          description: True if the message contains at least one attachment
+          example: false
+        is_read:
+          type: boolean
+          description: Whether the message has been marked as read
+          example: false
+        is_starred:
+          type: boolean
+          description: Whether the message has been starred
+          example: false
+        tags:
+          type: array
+          items:
+            type: string
+          description: User-assigned tags
+          example: []
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when the message was received (ISO 8601 UTC)
+          example: '2026-03-21T10:00:00Z'
+
+    Message:
+      allOf:
+        - $ref: '#/components/schemas/MessageSummary'
+        - type: object
+          properties:
+            text_body:
+              type: string
+              nullable: true
+              description: Decoded plain-text body part
+            html_body:
+              type: string
+              nullable: true
+              description: Decoded HTML body part
+
+    MessageList:
+      type: object
+      required: [messages, total]
+      properties:
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/MessageSummary'
+        total:
+          type: integer
+          description: Total number of messages matching the query (before limit/offset)
+          example: 120
+
+    MessageUpdate:
+      type: object
+      minProperties: 1
+      properties:
+        is_read:
+          type: boolean
+          description: Mark the message as read or unread
+        is_starred:
+          type: boolean
+          description: Star or unstar the message
+        tags:
+          type: array
+          items:
+            type: string
+          maxItems: 20
+          description: Replace the message's tags (max 20, each max 50 chars)
+
+    Attachment:
+      type: object
+      required: [id, message_id]
+      properties:
+        id:
+          type: string
+          description: ULID of the attachment
+          example: 01HZ9RQABCDEFGHJKMNPQRFILE
+        message_id:
+          type: string
+          description: ULID of the parent message
+          example: 01HZ9RQABCDEFGHJKMNPQRSTUV
+        filename:
+          type: string
+          nullable: true
+          description: Original filename from the MIME part
+          example: invoice.pdf
+        content_type:
+          type: string
+          nullable: true
+          description: MIME content type of the attachment
+          example: application/pdf
+        size:
+          type: integer
+          nullable: true
+          description: Attachment size in bytes
+          example: 48321
+
+    ReleaseRequest:
+      type: object
+      required: [host]
+      properties:
+        host:
+          type: string
+          description: >
+            Hostname of the target SMTP server. Must exactly match the host
+            configured via `--release-host`. Requests to any other host are
+            rejected with 403.
+          example: smtp.mailgun.org
+        port:
+          type: integer
+          enum: [25, 465, 587, 2525]
+          default: 25
+          description: >
+            TCP port of the target SMTP server. Only standard SMTP ports are
+            accepted (25, 465, 587, 2525). If `--release-host` includes a port,
+            this must match exactly or the request is rejected with 403.
+          example: 587
+
+    AssertResult:
+      type: object
+      required: [ok, count]
+      properties:
+        ok:
+          type: boolean
+          description: Whether the assertion passed
+          example: true
+        count:
+          type: integer
+          description: Number of messages that matched the given filters
+          example: 2
+
+    AuthCheck:
+      type: object
+      required: [status, details]
+      properties:
+        status:
+          type: string
+          description: >
+            Authentication result status. Common values: pass, fail, softfail,
+            neutral, temperror, permerror, none, info.
+          example: pass
+        details:
+          type: string
+          description: Full detail string from the parsed header
+          example: "dkim=pass header.d=example.com header.s=selector1"
+
+    AuthResults:
+      type: object
+      required: [dkim, spf, dmarc, arc]
+      properties:
+        dkim:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthCheck'
+          description: DKIM authentication results and signature details
+        spf:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthCheck'
+          description: SPF authentication results
+        dmarc:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthCheck'
+          description: DMARC authentication results
+        arc:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuthCheck'
+          description: ARC (Authenticated Received Chain) results
+
+    DeleteAllResult:
+      type: object
+      required: [deleted]
+      properties:
+        deleted:
+          type: integer
+          description: Number of messages that were deleted
+          example: 42
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message
+          example: message not found
+
+  responses:
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: message not found

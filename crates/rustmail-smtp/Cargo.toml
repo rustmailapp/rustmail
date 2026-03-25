@@ -1,0 +1,23 @@
+[package]
+name = "rustmail-smtp"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "Lightweight ESMTP capture server for the RustMail mail catcher"
+keywords = ["smtp", "email", "testing", "development"]
+categories = ["development-tools", "network-programming"]
+
+[features]
+test-util = []
+
+[dependencies]
+tokio = { workspace = true }
+mail-parser = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+ulid = { workspace = true }

@@ -1,0 +1,289 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+  REGISTRY: ghcr.io
+  IMAGE_NAME: rustmailapp/rustmail
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-binaries:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install pnpm
+        run: corepack enable
+
+      - name: Build UI
+        working-directory: ui
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Configure linker for aarch64-linux
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          mkdir -p .cargo
+          cat >> .cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      - name: Build release binary
+        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustmail-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/rustmail
+
+  docker:
+    name: Docker
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.version }}
+
+  release:
+    name: GitHub Release
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          for dir in artifacts/rustmail-*/; do
+            target=$(basename "$dir" | sed 's/^rustmail-//')
+            chmod +x "$dir/rustmail"
+            tar -czf "release/rustmail-${target}.tar.gz" -C "$dir" rustmail
+          done
+
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV=$(git tag --sort=-v:refname -l 'v*' | sed -n '2p')
+          if [ -z "$PREV" ]; then
+            PREV=$(git rev-list --max-parents=0 HEAD)
+          fi
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV="${{ steps.prev_tag.outputs.tag }}"
+          CURRENT="${{ github.ref_name }}"
+
+          BODY=""
+
+          FEATS=$(git log "$PREV".."$CURRENT" --pretty=format:"%s" | grep -E "^feat(\(.+\))?:" | sed -E 's/^feat(\([^)]*\))?: //' || true)
+          if [ -n "$FEATS" ]; then
+            BODY="${BODY}## New Features\n"
+            while IFS= read -r line; do
+              BODY="${BODY}- ${line}\n"
+            done <<< "$FEATS"
+            BODY="${BODY}\n"
+          fi
+
+          FIXES=$(git log "$PREV".."$CURRENT" --pretty=format:"%s" | grep -E "^fix(\(.+\))?:" | sed -E 's/^fix(\([^)]*\))?: //' || true)
+          if [ -n "$FIXES" ]; then
+            BODY="${BODY}## Bug Fixes\n"
+            while IFS= read -r line; do
+              BODY="${BODY}- ${line}\n"
+            done <<< "$FIXES"
+            BODY="${BODY}\n"
+          fi
+
+          PERF=$(git log "$PREV".."$CURRENT" --pretty=format:"%s" | grep -E "^perf(\(.+\))?:" | sed -E 's/^perf(\([^)]*\))?: //' || true)
+          if [ -n "$PERF" ]; then
+            BODY="${BODY}## Performance\n"
+            while IFS= read -r line; do
+              BODY="${BODY}- ${line}\n"
+            done <<< "$PERF"
+            BODY="${BODY}\n"
+          fi
+
+          CHORES=$(git log "$PREV".."$CURRENT" --pretty=format:"%s" | grep -E "^(chore|refactor|style|ci|docs|build)(\(.+\))?:" | sed -E 's/^[a-z]+(\([^)]*\))?: //' || true)
+          if [ -n "$CHORES" ]; then
+            BODY="${BODY}## Other Changes\n"
+            while IFS= read -r line; do
+              BODY="${BODY}- ${line}\n"
+            done <<< "$CHORES"
+            BODY="${BODY}\n"
+          fi
+
+          if [ -z "$BODY" ]; then
+            BODY="No categorized changes in this release."
+          fi
+
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo -e "$BODY"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes
+        env:
+          RELEASE_BODY: ${{ steps.changelog.outputs.body }}
+        run: printenv RELEASE_BODY > /tmp/release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file /tmp/release-notes.md \
+            release/rustmail-*
+
+  update-homebrew:
+    name: Update Homebrew Tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release tarballs and compute SHAs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p assets
+
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
+            gh release download "v${VERSION}" \
+              --repo rustmailapp/rustmail \
+              --pattern "rustmail-${target}.tar.gz" \
+              --dir assets
+            SHA=$(sha256sum "assets/rustmail-${target}.tar.gz" | awk '{print $1}')
+            echo "SHA_${target//-/_}=${SHA}" >> "$GITHUB_ENV"
+          done
+
+      - name: Checkout homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: rustmailapp/homebrew-rustmail
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > Formula/rustmail.rb << 'FORMULA'
+          class Rustmail < Formula
+            desc "Self-hosted SMTP mail catcher with web UI, REST API, and CI assertions"
+            homepage "https://github.com/rustmailapp/rustmail"
+            version "__VERSION__"
+            license "MIT OR Apache-2.0"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/rustmailapp/rustmail/releases/download/v__VERSION__/rustmail-aarch64-apple-darwin.tar.gz"
+                sha256 "__SHA_AARCH64_APPLE__"
+              end
+              on_intel do
+                url "https://github.com/rustmailapp/rustmail/releases/download/v__VERSION__/rustmail-x86_64-apple-darwin.tar.gz"
+                sha256 "__SHA_X86_64_APPLE__"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/rustmailapp/rustmail/releases/download/v__VERSION__/rustmail-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "__SHA_AARCH64_LINUX__"
+              end
+              on_intel do
+                url "https://github.com/rustmailapp/rustmail/releases/download/v__VERSION__/rustmail-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "__SHA_X86_64_LINUX__"
+              end
+            end
+
+            def install
+              bin.install "rustmail"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/rustmail --version")
+            end
+          end
+          FORMULA
+          sed -i "s/__VERSION__/${VERSION}/g" Formula/rustmail.rb
+          sed -i "s/__SHA_AARCH64_APPLE__/${SHA_aarch64_apple_darwin}/g" Formula/rustmail.rb
+          sed -i "s/__SHA_X86_64_APPLE__/${SHA_x86_64_apple_darwin}/g" Formula/rustmail.rb
+          sed -i "s/__SHA_AARCH64_LINUX__/${SHA_aarch64_unknown_linux_gnu}/g" Formula/rustmail.rb
+          sed -i "s/__SHA_X86_64_LINUX__/${SHA_x86_64_unknown_linux_gnu}/g" Formula/rustmail.rb
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/rustmail.rb
+          git commit -m "rustmail ${VERSION}"
+          git push

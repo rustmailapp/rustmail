@@ -1,0 +1,35 @@
+[package]
+name = "rustmail-api"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "HTTP REST API and WebSocket server for the RustMail mail catcher"
+keywords = ["smtp", "email", "api", "websocket"]
+categories = ["development-tools", "web-programming::http-server"]
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+rust-embed = { workspace = true }
+mime_guess = { workspace = true }
+lettre = { workspace = true }
+mail-parser = { workspace = true }
+
+rustmail-storage = { workspace = true }
+
+[dev-dependencies]
+sqlx = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }

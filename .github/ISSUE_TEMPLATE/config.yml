@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://rustmail.app
+    about: Check the docs before opening an issue
+  - name: Questions & Discussions
+    url: https://github.com/rustmailapp/rustmail/discussions
+    about: Ask questions or start a discussion

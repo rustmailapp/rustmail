@@ -1,0 +1,49 @@
+[package]
+name = "rustmail-server"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "A modern, self-hosted SMTP mail catcher with web UI, REST API, and CI assertions"
+keywords = ["smtp", "email", "testing", "mailcatcher", "development"]
+categories = ["development-tools", "command-line-utilities"]
+
+[[bin]]
+name = "rustmail"
+path = "src/main.rs"
+
+[features]
+default = ["tui"]
+tui = ["dep:rustmail-tui"]
+
+[dependencies]
+tokio = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+sqlx = { workspace = true }
+axum = { workspace = true }
+toml = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+time = { workspace = true }
+
+dirs = { workspace = true }
+
+rustmail-smtp = { workspace = true }
+rustmail-storage = { workspace = true }
+rustmail-api = { workspace = true }
+rustmail-tui = { workspace = true, optional = true }
+
+[dev-dependencies]
+rustmail-smtp = { workspace = true, features = ["test-util"] }
+reqwest = { workspace = true }
+axum = { workspace = true }
+portpicker = "0.1"
+tokio-tungstenite = "0.28"
+tempfile = "3.20"

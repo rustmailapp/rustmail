@@ -1,0 +1,51 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rustmail-smtp",
+    "crates/rustmail-storage",
+    "crates/rustmail-api",
+    "crates/rustmail-server",
+    "crates/rustmail-tui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rustmailapp/rustmail"
+homepage = "https://github.com/rustmailapp/rustmail"
+readme = "README.md"
+
+[workspace.dependencies]
+tokio = { version = "1.44", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ulid = { version = "1.2", features = ["serde"] }
+mail-parser = "0.11"
+axum = { version = "0.8", features = ["ws"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "compression-gzip"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+toml = "0.8"
+lettre = { version = "0.11", default-features = false, features = ["tokio1-rustls-tls", "smtp-transport", "builder"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rust-embed = { version = "8.11", features = ["mime-guess", "include-exclude"] }
+mime_guess = "2.0"
+time = { version = "0.3", features = ["formatting", "macros"] }
+dirs = "6.0"
+
+rustmail-smtp = { path = "crates/rustmail-smtp", version = "0.1.0" }
+rustmail-storage = { path = "crates/rustmail-storage", version = "0.1.0" }
+rustmail-api = { path = "crates/rustmail-api", version = "0.1.0" }
+rustmail-tui = { path = "crates/rustmail-tui", version = "0.1.0" }
+
+[profile.release]
+strip = true
+lto = "fat"
+codegen-units = 1
+panic = "abort"

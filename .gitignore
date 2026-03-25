@@ -1,0 +1,25 @@
+/target
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+.env
+.env.*
+*.pem
+*.key
+config.toml
+.DS_Store
+node_modules/
+
+# Nix
+result
+result-*
+
+# Internal docs (not for public repo)
+CLAUDE.md
+BRIEF.md
+RUSTMAIL.md
+
+# Docs
+docs/.vitepress/dist
+docs/.vitepress/cache
