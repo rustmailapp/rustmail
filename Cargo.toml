@@ -44,6 +44,12 @@ rustmail-storage = { path = "crates/rustmail-storage", version = "0.1.1" }
 rustmail-api = { path = "crates/rustmail-api", version = "0.1.1" }
 rustmail-tui = { path = "crates/rustmail-tui", version = "0.1.1" }
 
+[workspace.metadata.release]
+shared-version = "workspace"
+tag-name = "v{{version}}"
+consolidate-commits = true
+dependent-version = "upgrade"
+
 [profile.release]
 strip = true
 lto = "fat"
