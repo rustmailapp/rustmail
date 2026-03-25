@@ -267,6 +267,14 @@ jobs:
               bin.install "rustmail"
             end
 
+            service do
+              run [opt_bin/"rustmail", "serve"]
+              keep_alive true
+              working_dir var/"rustmail"
+              log_path var/"log/rustmail.log"
+              error_log_path var/"log/rustmail.log"
+            end
+
             test do
               assert_match version.to_s, shell_output("#{bin}/rustmail --version")
             end
