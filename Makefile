@@ -9,7 +9,10 @@ dev-ui:
 	cd ui && pnpm dev
 
 dev-server:
-	cargo watch -x 'run -- --ephemeral --http-port 8025 --smtp-port 1025'
+	cargo watch -x 'run -- --db-path ./dev.db --http-port 8025 --smtp-port 1025'
+
+dev-tui:
+	cargo run -- tui
 
 # Production build — UI first, then Rust binary with embedded assets
 build: build-ui build-server

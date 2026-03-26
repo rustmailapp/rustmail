@@ -1,12 +1,15 @@
 use anyhow::Result;
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 pub enum Event {
   Key(KeyEvent),
+  Mouse(MouseEvent),
+  Resize,
   Tick,
   WsMessage(String),
+  WsStatus(bool),
 }
 
 pub struct EventHandler {
@@ -37,6 +40,12 @@ pub fn create_event_handler() -> (EventHandler, mpsc::UnboundedSender<Event>) {
           match maybe_event {
             Some(Ok(CrosstermEvent::Key(key))) => {
               let _ = event_tx.send(Event::Key(key));
+            }
+            Some(Ok(CrosstermEvent::Mouse(mouse))) => {
+              let _ = event_tx.send(Event::Mouse(mouse));
+            }
+            Some(Ok(CrosstermEvent::Resize(_, _))) => {
+              let _ = event_tx.send(Event::Resize);
             }
             Some(Err(_)) | None => break,
             _ => {}
