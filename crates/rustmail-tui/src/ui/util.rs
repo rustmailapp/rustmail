@@ -1,3 +1,7 @@
+pub fn display_width(s: &str) -> usize {
+  unicode_width::UnicodeWidthStr::width(s)
+}
+
 pub fn format_size(bytes: i64) -> String {
   if bytes < 1024 {
     format!("{}B", bytes)
@@ -16,14 +20,29 @@ pub fn format_date(iso: &str) -> String {
 }
 
 pub fn truncate(s: &str, max: usize) -> String {
-  let char_count = s.chars().count();
-  if char_count <= max {
+  use unicode_width::UnicodeWidthStr;
+
+  let width = UnicodeWidthStr::width(s);
+  if width <= max {
     s.to_string()
   } else if max > 2 {
-    let truncated: String = s.chars().take(max - 2).collect();
-    format!("{}..", truncated)
+    let mut w = 0;
+    let truncated: String = s
+      .chars()
+      .take_while(|c| {
+        w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+        w <= max - 2
+      })
+      .collect();
+    format!("{truncated}..")
   } else {
-    s.chars().take(max).collect()
+    let mut w = 0;
+    s.chars()
+      .take_while(|c| {
+        w += unicode_width::UnicodeWidthChar::width(*c).unwrap_or(0);
+        w <= max
+      })
+      .collect()
   }
 }
 

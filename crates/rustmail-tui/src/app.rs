@@ -1,13 +1,19 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{
+  KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
+use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
 
 use crate::api::{ApiClient, Message, MessageSummary, WsEvent};
 use crate::event::{self, Event};
 use crate::ui;
+
+const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -15,12 +21,20 @@ pub enum Mode {
   Search,
   RawView,
   Confirm,
+  Help,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
   List,
   Preview,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewTab {
+  Text,
+  Headers,
+  Raw,
 }
 
 pub struct App {
@@ -37,9 +51,15 @@ pub struct App {
   pub offset: i64,
   pub page_size: i64,
 
+  pub list_state: ListState,
+  pub list_scrollbar_state: ScrollbarState,
+
   pub preview: Option<Message>,
   pub preview_scroll: u16,
   pub preview_loading: bool,
+  pub preview_scrollbar_state: ScrollbarState,
+  pub preview_tab: PreviewTab,
+  pub preview_raw: Option<String>,
   last_preview_id: Option<String>,
 
   pub raw_content: Option<String>,
@@ -48,13 +68,20 @@ pub struct App {
   pub search_query: String,
   pub search_input: String,
 
-  pub status_message: Option<String>,
-  status_ticks: u16,
   pub confirm_action: Option<String>,
 
   pub error: Option<String>,
   error_ticks: u16,
   pub loading: bool,
+
+  pub ws_connected: bool,
+  pub spinner_frame: usize,
+
+  pub list_area: Rect,
+  pub list_table_area: Rect,
+  pub preview_area: Rect,
+  pub tab_area: Rect,
+  pub tab_ranges: [(u16, u16); 3],
 }
 
 impl App {
@@ -73,9 +100,15 @@ impl App {
       offset: 0,
       page_size: 50,
 
+      list_state: ListState::default().with_selected(Some(0)),
+      list_scrollbar_state: ScrollbarState::default(),
+
       preview: None,
       preview_scroll: 0,
       preview_loading: false,
+      preview_scrollbar_state: ScrollbarState::default(),
+      preview_tab: PreviewTab::Text,
+      preview_raw: None,
       last_preview_id: None,
 
       raw_content: None,
@@ -84,20 +117,24 @@ impl App {
       search_query: String::new(),
       search_input: String::new(),
 
-      status_message: None,
-      status_ticks: 0,
       confirm_action: None,
 
       error: None,
       error_ticks: 0,
       loading: false,
+
+      ws_connected: false,
+      spinner_frame: 0,
+
+      list_area: Rect::default(),
+      list_table_area: Rect::default(),
+      preview_area: Rect::default(),
+      tab_area: Rect::default(),
+      tab_ranges: [(0, 0); 3],
     }
   }
 
-  pub async fn run(
-    &mut self,
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-  ) -> Result<()> {
+  pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
     let (mut events, ws_sender) = event::create_event_handler();
 
     self.connect_websocket(ws_sender);
@@ -108,8 +145,11 @@ impl App {
 
       match events.next().await? {
         Event::Key(key) => self.handle_key(key).await,
+        Event::Mouse(mouse) => self.handle_mouse(mouse).await,
+        Event::Resize => {}
         Event::Tick => self.on_tick(),
         Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
+        Event::WsStatus(connected) => self.ws_connected = connected,
       }
     }
 
@@ -119,11 +159,14 @@ impl App {
   fn connect_websocket(&self, tx: mpsc::UnboundedSender<Event>) {
     let ws_url = self.ws_url.clone();
     tokio::spawn(async move {
+      let mut delay = Duration::from_secs(2);
       loop {
-        match connect_ws(&ws_url, &tx).await {
-          Ok(()) | Err(_) => {}
+        let _ = tx.send(Event::WsStatus(false));
+        if connect_ws(&ws_url, &tx).await.is_ok() {
+          delay = Duration::from_secs(2);
         }
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(30));
       }
     });
   }
@@ -138,6 +181,7 @@ impl App {
       Mode::Search => self.handle_search_key(key).await,
       Mode::RawView => self.handle_raw_view_key(key),
       Mode::Confirm => self.handle_confirm_key(key).await,
+      Mode::Help => self.handle_help_key(key),
       Mode::Normal => self.handle_normal_key(key).await,
     }
   }
@@ -153,36 +197,24 @@ impl App {
     match key.code {
       KeyCode::Char('q') => self.running = false,
       KeyCode::Char('j') | KeyCode::Down => {
-        if !self.messages.is_empty() {
-          let old = self.selected;
-          self.selected = (self.selected + 1).min(self.messages.len() - 1);
-          if old != self.selected {
-            self.load_preview().await;
-          }
+        if self.select_next() {
+          self.load_preview().await;
         }
       }
       KeyCode::Char('k') | KeyCode::Up => {
-        if !self.messages.is_empty() {
-          let old = self.selected;
-          self.selected = self.selected.saturating_sub(1);
-          if old != self.selected {
-            self.load_preview().await;
-          }
+        if self.select_prev() {
+          self.load_preview().await;
         }
       }
       KeyCode::Char('g') => {
-        if !self.messages.is_empty() && self.selected != 0 {
-          self.selected = 0;
+        if self.select_message(0) {
           self.load_preview().await;
         }
       }
       KeyCode::Char('G') => {
-        if !self.messages.is_empty() {
-          let last = self.messages.len() - 1;
-          if self.selected != last {
-            self.selected = last;
-            self.load_preview().await;
-          }
+        let last = self.messages.len().saturating_sub(1);
+        if self.select_message(last) {
+          self.load_preview().await;
         }
       }
       KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
@@ -206,9 +238,7 @@ impl App {
       KeyCode::Char(']') => self.next_page().await,
       KeyCode::Char('[') => self.prev_page().await,
       KeyCode::Char('?') => {
-        self.set_status(
-          "j/k:nav  Enter:preview  /:search  r:read  s:star  d:del  D:clear  R:raw  [/]:page  q:quit",
-        );
+        self.mode = Mode::Help;
       }
       _ => {}
     }
@@ -226,11 +256,36 @@ impl App {
       KeyCode::Char('k') | KeyCode::Up => {
         self.preview_scroll = self.preview_scroll.saturating_sub(1);
       }
+      KeyCode::Char('1') => self.switch_preview_tab(PreviewTab::Text),
+      KeyCode::Char('2') => self.switch_preview_tab(PreviewTab::Headers),
+      KeyCode::Char('3') => {
+        self.switch_preview_tab(PreviewTab::Raw);
+        self.ensure_raw_loaded().await;
+      }
       KeyCode::Char('r') => self.toggle_read().await,
       KeyCode::Char('s') => self.toggle_star().await,
       KeyCode::Char('d') => self.delete_selected().await,
       KeyCode::Char('R') => self.show_raw().await,
       _ => {}
+    }
+  }
+
+  fn switch_preview_tab(&mut self, tab: PreviewTab) {
+    self.preview_tab = tab;
+    self.preview_scroll = 0;
+  }
+
+  async fn ensure_raw_loaded(&mut self) {
+    if self.preview_raw.is_some() {
+      return;
+    }
+    let Some(msg) = self.messages.get(self.selected) else {
+      return;
+    };
+    let id = msg.id.clone();
+    match self.api.get_raw_message(&id).await {
+      Ok(raw) => self.preview_raw = Some(raw),
+      Err(e) => self.set_error(format!("Failed to load raw: {}", e)),
     }
   }
 
@@ -241,10 +296,20 @@ impl App {
         self.mode = Mode::Normal;
         self.offset = 0;
         self.selected = 0;
+        self.sync_list_state();
         self.fetch_messages().await;
       }
       KeyCode::Esc => {
-        self.mode = Mode::Normal;
+        if self.search_input.is_empty() && !self.search_query.is_empty() {
+          self.search_query.clear();
+          self.mode = Mode::Normal;
+          self.offset = 0;
+          self.selected = 0;
+          self.sync_list_state();
+          self.fetch_messages().await;
+        } else {
+          self.mode = Mode::Normal;
+        }
       }
       KeyCode::Backspace => {
         self.search_input.pop();
@@ -289,14 +354,79 @@ impl App {
     }
   }
 
-  fn on_tick(&mut self) {
-    if self.status_message.is_some() {
-      self.status_ticks += 1;
-      if self.status_ticks >= 30 {
-        self.status_message = None;
-        self.status_ticks = 0;
+  fn handle_help_key(&mut self, key: KeyEvent) {
+    match key.code {
+      KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Enter => {
+        self.mode = Mode::Normal;
       }
+      _ => {}
     }
+  }
+
+  async fn handle_mouse(&mut self, event: MouseEvent) {
+    match event.kind {
+      MouseEventKind::Down(MouseButton::Left) => {
+        let pos = Position::new(event.column, event.row);
+
+        if self.tab_area.contains(pos) {
+          let abs_x = event.column;
+          let tabs = [PreviewTab::Text, PreviewTab::Headers, PreviewTab::Raw];
+          for (i, tab) in tabs.iter().enumerate() {
+            let (start, end) = self.tab_ranges[i];
+            let tab_start = self.tab_area.x + start;
+            let tab_end = self.tab_area.x + end;
+            if abs_x >= tab_start && abs_x < tab_end {
+              if *tab == PreviewTab::Raw {
+                self.switch_preview_tab(PreviewTab::Raw);
+                self.ensure_raw_loaded().await;
+              } else {
+                self.switch_preview_tab(*tab);
+              }
+              break;
+            }
+          }
+          self.focus = Focus::Preview;
+        } else if self.list_table_area.contains(pos) {
+          self.focus = Focus::List;
+          let row_offset = event.row.saturating_sub(self.list_table_area.y);
+          let scroll_offset = self.list_state.offset();
+          let idx = scroll_offset + (row_offset / 2) as usize;
+          if idx < self.messages.len() && idx != self.selected {
+            self.selected = idx;
+            self.sync_list_state();
+            self.load_preview().await;
+          }
+        } else if self.list_area.contains(pos) {
+          self.focus = Focus::List;
+        } else if self.preview_area.contains(pos) {
+          self.focus = Focus::Preview;
+        }
+      }
+      MouseEventKind::ScrollDown => {
+        let pos = Position::new(event.column, event.row);
+        if self.list_area.contains(pos) {
+          if self.select_next() {
+            self.load_preview().await;
+          }
+        } else if self.preview_area.contains(pos) {
+          self.preview_scroll = self.preview_scroll.saturating_add(3);
+        }
+      }
+      MouseEventKind::ScrollUp => {
+        let pos = Position::new(event.column, event.row);
+        if self.list_area.contains(pos) {
+          if self.select_prev() {
+            self.load_preview().await;
+          }
+        } else if self.preview_area.contains(pos) {
+          self.preview_scroll = self.preview_scroll.saturating_sub(3);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn on_tick(&mut self) {
     if self.error.is_some() {
       self.error_ticks += 1;
       if self.error_ticks >= 50 {
@@ -304,16 +434,48 @@ impl App {
         self.error_ticks = 0;
       }
     }
-  }
-
-  fn set_status(&mut self, msg: &str) {
-    self.status_message = Some(msg.into());
-    self.status_ticks = 0;
+    if self.loading || self.preview_loading {
+      self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
+    }
   }
 
   fn set_error(&mut self, msg: String) {
     self.error = Some(msg);
     self.error_ticks = 0;
+  }
+
+  fn select_message(&mut self, idx: usize) -> bool {
+    if idx < self.messages.len() && idx != self.selected {
+      self.selected = idx;
+      self.sync_list_state();
+      true
+    } else {
+      false
+    }
+  }
+
+  fn select_next(&mut self) -> bool {
+    if self.messages.is_empty() {
+      return false;
+    }
+    let idx = (self.selected + 1).min(self.messages.len() - 1);
+    self.select_message(idx)
+  }
+
+  fn select_prev(&mut self) -> bool {
+    if self.messages.is_empty() {
+      return false;
+    }
+    let idx = self.selected.saturating_sub(1);
+    self.select_message(idx)
+  }
+
+  pub fn sync_list_state(&mut self) {
+    self.list_state.select(Some(self.selected));
+    self.list_scrollbar_state = self
+      .list_scrollbar_state
+      .content_length(self.messages.len())
+      .position(self.selected);
   }
 
   pub async fn fetch_messages(&mut self) {
@@ -337,6 +499,7 @@ impl App {
         if self.selected >= self.messages.len() && !self.messages.is_empty() {
           self.selected = self.messages.len() - 1;
         }
+        self.sync_list_state();
         self.load_preview().await;
       }
       Err(e) => {
@@ -350,6 +513,7 @@ impl App {
     let Some(msg) = self.messages.get(self.selected) else {
       self.preview = None;
       self.last_preview_id = None;
+      self.preview_raw = None;
       return;
     };
 
@@ -361,6 +525,8 @@ impl App {
     let was_unread = !msg.is_read;
     self.preview_loading = true;
     self.preview_scroll = 0;
+    self.preview_raw = None;
+    self.preview_tab = PreviewTab::Text;
 
     match self.api.get_message(&target_id).await {
       Ok(detail) => {
@@ -422,11 +588,12 @@ impl App {
     let id = msg.id.clone();
     if self.api.delete_message(&id).await.is_ok() {
       self.messages.retain(|m| m.id != id);
-      self.total -= 1;
       if self.selected >= self.messages.len() && self.selected > 0 {
         self.selected -= 1;
       }
       self.last_preview_id = None;
+      self.preview_raw = None;
+      self.sync_list_state();
       self.load_preview().await;
     }
   }
@@ -434,10 +601,11 @@ impl App {
   async fn delete_all(&mut self) {
     if self.api.delete_all_messages().await.is_ok() {
       self.messages.clear();
-      self.total = 0;
       self.selected = 0;
       self.preview = None;
       self.last_preview_id = None;
+      self.preview_raw = None;
+      self.sync_list_state();
     }
   }
 
@@ -464,6 +632,8 @@ impl App {
       self.offset = new_offset;
       self.selected = 0;
       self.last_preview_id = None;
+      self.preview_raw = None;
+      self.sync_list_state();
       self.fetch_messages().await;
     }
   }
@@ -473,6 +643,8 @@ impl App {
       self.offset = (self.offset - self.page_size).max(0);
       self.selected = 0;
       self.last_preview_id = None;
+      self.preview_raw = None;
+      self.sync_list_state();
       self.fetch_messages().await;
     }
   }
@@ -490,22 +662,23 @@ impl App {
           if self.messages.len() > self.page_size as usize {
             self.messages.pop();
           }
-          self.selected += 1;
+          self.selected = (self.selected + 1).min(self.messages.len().saturating_sub(1));
+          self.sync_list_state();
         }
       }
       WsEvent::MessageDelete { id } => {
+        self.total = (self.total - 1).max(0);
         if let Some(pos) = self.messages.iter().position(|m| m.id == id) {
           self.messages.remove(pos);
-          self.total -= 1;
           if self.selected >= self.messages.len() && self.selected > 0 {
             self.selected -= 1;
           }
+          self.sync_list_state();
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
+            self.preview_raw = None;
             self.load_preview().await;
           }
-        } else {
-          self.total -= 1;
         }
       }
       WsEvent::MessageRead { id, is_read } => {
@@ -529,6 +702,8 @@ impl App {
         self.selected = 0;
         self.preview = None;
         self.last_preview_id = None;
+        self.preview_raw = None;
+        self.sync_list_state();
       }
     }
   }
@@ -544,6 +719,10 @@ impl App {
   pub fn unread_count(&self) -> usize {
     self.messages.iter().filter(|m| !m.is_read).count()
   }
+
+  pub fn spinner_char(&self) -> char {
+    SPINNER_FRAMES[self.spinner_frame]
+  }
 }
 
 async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> {
@@ -551,6 +730,7 @@ async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> 
   use tokio_tungstenite::connect_async;
 
   let (ws_stream, _) = connect_async(url).await?;
+  let _ = tx.send(Event::WsStatus(true));
   let (_, mut read) = ws_stream.split();
 
   while let Some(msg) = read.next().await {
