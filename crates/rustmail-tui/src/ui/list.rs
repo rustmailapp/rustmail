@@ -1,7 +1,6 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{
-  Block, BorderType, Borders, HighlightSpacing, List, ListItem, Paragraph, Scrollbar,
-  ScrollbarOrientation,
+  Block, BorderType, HighlightSpacing, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
 };
 
 use super::util::{display_width, format_date, format_size, parse_sender, truncate};
@@ -45,11 +44,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
     ));
   }
 
-  let block = Block::default()
+  let block = Block::bordered()
     .title(title)
-    .title_bottom(Line::from(bottom_left_spans).alignment(Alignment::Left))
-    .title_bottom(Line::from(bottom_right_spans).alignment(Alignment::Right))
-    .borders(Borders::ALL)
+    .title_bottom(Line::from(bottom_left_spans).left_aligned())
+    .title_bottom(Line::from(bottom_right_spans).right_aligned())
     .border_type(BorderType::Rounded)
     .border_style(border_style);
 
@@ -60,10 +58,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
   let has_query = !app.search_query.is_empty();
 
   let (search_area, list_area) = if search_active || has_query {
-    let chunks = Layout::default()
-      .direction(Direction::Vertical)
-      .constraints([Constraint::Length(2), Constraint::Min(0)])
-      .split(inner);
+    let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(inner);
     (Some(chunks[0]), chunks[1])
   } else {
     (None, inner)

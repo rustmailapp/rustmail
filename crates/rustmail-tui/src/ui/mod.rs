@@ -4,7 +4,7 @@ mod preview;
 pub mod util;
 
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Paragraph, Wrap};
 
 use crate::app::{App, Focus, Mode};
 use crate::theme;
@@ -36,13 +36,11 @@ fn render_main(frame: &mut Frame, app: &mut App, theme: &theme::Theme) {
     }
   } else {
     let list_pct = if area.width >= 120 { 35 } else { 40 };
-    let panes = Layout::default()
-      .direction(Direction::Horizontal)
-      .constraints([
-        Constraint::Percentage(list_pct),
-        Constraint::Percentage(100 - list_pct),
-      ])
-      .split(area);
+    let panes = Layout::horizontal([
+      Constraint::Percentage(list_pct),
+      Constraint::Percentage(100 - list_pct),
+    ])
+    .split(area);
 
     app.list_area = panes[0];
     app.preview_area = panes[1];
@@ -59,7 +57,7 @@ fn render_main(frame: &mut Frame, app: &mut App, theme: &theme::Theme) {
     popups::render_help(frame, area, theme);
   }
 
-  if let Some(ref err) = app.error.clone() {
+  if let Some(err) = app.error.as_deref() {
     popups::render_error(frame, err, area, theme);
   }
 }
@@ -69,14 +67,9 @@ fn render_raw_view(frame: &mut Frame, app: &App, theme: &theme::Theme) {
 
   let content = app.raw_content.as_deref().unwrap_or("");
 
-  let block = Block::default()
-    .title(" Raw Message (RFC 5322) ")
-    .title_alignment(Alignment::Center)
-    .title_bottom(
-      Line::from(Span::styled(" q:close  j/k:scroll ", theme.help_desc))
-        .alignment(Alignment::Center),
-    )
-    .borders(Borders::ALL)
+  let block = Block::bordered()
+    .title(Line::from(" Raw Message (RFC 5322) ").centered())
+    .title_bottom(Line::from(Span::styled(" q:close  j/k:scroll ", theme.help_desc)).centered())
     .border_type(BorderType::Rounded)
     .border_style(theme.border_unfocused);
 

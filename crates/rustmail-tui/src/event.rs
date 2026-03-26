@@ -1,6 +1,6 @@
 use anyhow::Result;
-use crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use futures_util::StreamExt;
+use ratatui::crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use tokio::sync::mpsc;
 
 pub enum Event {

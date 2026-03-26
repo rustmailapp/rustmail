@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{
+  KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use ratatui::prelude::*;
 use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
@@ -131,10 +134,7 @@ impl App {
     }
   }
 
-  pub async fn run(
-    &mut self,
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-  ) -> Result<()> {
+  pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
     let (mut events, ws_sender) = event::create_event_handler();
 
     self.connect_websocket(ws_sender);
@@ -159,12 +159,14 @@ impl App {
   fn connect_websocket(&self, tx: mpsc::UnboundedSender<Event>) {
     let ws_url = self.ws_url.clone();
     tokio::spawn(async move {
+      let mut delay = Duration::from_secs(2);
       loop {
         let _ = tx.send(Event::WsStatus(false));
-        match connect_ws(&ws_url, &tx).await {
-          Ok(()) | Err(_) => {}
+        if connect_ws(&ws_url, &tx).await.is_ok() {
+          delay = Duration::from_secs(2);
         }
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(Duration::from_secs(30));
       }
     });
   }
@@ -195,40 +197,24 @@ impl App {
     match key.code {
       KeyCode::Char('q') => self.running = false,
       KeyCode::Char('j') | KeyCode::Down => {
-        if !self.messages.is_empty() {
-          let old = self.selected;
-          self.selected = (self.selected + 1).min(self.messages.len() - 1);
-          if old != self.selected {
-            self.sync_list_state();
-            self.load_preview().await;
-          }
+        if self.select_next() {
+          self.load_preview().await;
         }
       }
       KeyCode::Char('k') | KeyCode::Up => {
-        if !self.messages.is_empty() {
-          let old = self.selected;
-          self.selected = self.selected.saturating_sub(1);
-          if old != self.selected {
-            self.sync_list_state();
-            self.load_preview().await;
-          }
+        if self.select_prev() {
+          self.load_preview().await;
         }
       }
       KeyCode::Char('g') => {
-        if !self.messages.is_empty() && self.selected != 0 {
-          self.selected = 0;
-          self.sync_list_state();
+        if self.select_message(0) {
           self.load_preview().await;
         }
       }
       KeyCode::Char('G') => {
-        if !self.messages.is_empty() {
-          let last = self.messages.len() - 1;
-          if self.selected != last {
-            self.selected = last;
-            self.sync_list_state();
-            self.load_preview().await;
-          }
+        let last = self.messages.len().saturating_sub(1);
+        if self.select_message(last) {
+          self.load_preview().await;
         }
       }
       KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
@@ -380,11 +366,10 @@ impl App {
   async fn handle_mouse(&mut self, event: MouseEvent) {
     match event.kind {
       MouseEventKind::Down(MouseButton::Left) => {
-        let row = event.row;
-        let col = event.column;
+        let pos = Position::new(event.column, event.row);
 
-        if self.tab_area.contains(Position::new(col, row)) {
-          let abs_x = col;
+        if self.tab_area.contains(pos) {
+          let abs_x = event.column;
           let tabs = [PreviewTab::Text, PreviewTab::Headers, PreviewTab::Raw];
           for (i, tab) in tabs.iter().enumerate() {
             let (start, end) = self.tab_ranges[i];
@@ -401,9 +386,9 @@ impl App {
             }
           }
           self.focus = Focus::Preview;
-        } else if self.list_table_area.contains(Position::new(col, row)) {
+        } else if self.list_table_area.contains(pos) {
           self.focus = Focus::List;
-          let row_offset = row.saturating_sub(self.list_table_area.y);
+          let row_offset = event.row.saturating_sub(self.list_table_area.y);
           let scroll_offset = self.list_state.offset();
           let idx = scroll_offset + (row_offset / 2) as usize;
           if idx < self.messages.len() && idx != self.selected {
@@ -411,49 +396,29 @@ impl App {
             self.sync_list_state();
             self.load_preview().await;
           }
-        } else if self.list_area.contains(Position::new(col, row)) {
+        } else if self.list_area.contains(pos) {
           self.focus = Focus::List;
-        } else if self.preview_area.contains(Position::new(col, row)) {
+        } else if self.preview_area.contains(pos) {
           self.focus = Focus::Preview;
         }
       }
       MouseEventKind::ScrollDown => {
-        if self
-          .list_area
-          .contains(Position::new(event.column, event.row))
-        {
-          if !self.messages.is_empty() {
-            let old = self.selected;
-            self.selected = (self.selected + 1).min(self.messages.len() - 1);
-            if old != self.selected {
-              self.sync_list_state();
-              self.load_preview().await;
-            }
+        let pos = Position::new(event.column, event.row);
+        if self.list_area.contains(pos) {
+          if self.select_next() {
+            self.load_preview().await;
           }
-        } else if self
-          .preview_area
-          .contains(Position::new(event.column, event.row))
-        {
+        } else if self.preview_area.contains(pos) {
           self.preview_scroll = self.preview_scroll.saturating_add(3);
         }
       }
       MouseEventKind::ScrollUp => {
-        if self
-          .list_area
-          .contains(Position::new(event.column, event.row))
-        {
-          if !self.messages.is_empty() {
-            let old = self.selected;
-            self.selected = self.selected.saturating_sub(1);
-            if old != self.selected {
-              self.sync_list_state();
-              self.load_preview().await;
-            }
+        let pos = Position::new(event.column, event.row);
+        if self.list_area.contains(pos) {
+          if self.select_prev() {
+            self.load_preview().await;
           }
-        } else if self
-          .preview_area
-          .contains(Position::new(event.column, event.row))
-        {
+        } else if self.preview_area.contains(pos) {
           self.preview_scroll = self.preview_scroll.saturating_sub(3);
         }
       }
@@ -477,6 +442,32 @@ impl App {
   fn set_error(&mut self, msg: String) {
     self.error = Some(msg);
     self.error_ticks = 0;
+  }
+
+  fn select_message(&mut self, idx: usize) -> bool {
+    if idx < self.messages.len() && idx != self.selected {
+      self.selected = idx;
+      self.sync_list_state();
+      true
+    } else {
+      false
+    }
+  }
+
+  fn select_next(&mut self) -> bool {
+    if self.messages.is_empty() {
+      return false;
+    }
+    let idx = (self.selected + 1).min(self.messages.len() - 1);
+    self.select_message(idx)
+  }
+
+  fn select_prev(&mut self) -> bool {
+    if self.messages.is_empty() {
+      return false;
+    }
+    let idx = self.selected.saturating_sub(1);
+    self.select_message(idx)
   }
 
   pub fn sync_list_state(&mut self) {
@@ -671,7 +662,7 @@ impl App {
           if self.messages.len() > self.page_size as usize {
             self.messages.pop();
           }
-          self.selected += 1;
+          self.selected = (self.selected + 1).min(self.messages.len().saturating_sub(1));
           self.sync_list_state();
         }
       }

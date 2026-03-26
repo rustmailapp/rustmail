@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 use crate::theme::Theme;
 
@@ -12,9 +12,8 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, theme: &Theme) {
 
   frame.render_widget(Clear, popup_area);
 
-  let block = Block::default()
+  let block = Block::bordered()
     .title(" Confirm ")
-    .borders(Borders::ALL)
     .border_type(BorderType::Rounded)
     .border_style(theme.border_error);
 
@@ -58,12 +57,9 @@ pub fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
 
   frame.render_widget(Clear, popup_area);
 
-  let block = Block::default()
+  let block = Block::bordered()
     .title(" Keyboard Shortcuts ")
-    .title_bottom(
-      Line::from(Span::styled(" Esc to close ", theme.help_desc)).alignment(Alignment::Center),
-    )
-    .borders(Borders::ALL)
+    .title_bottom(Line::from(Span::styled(" Esc to close ", theme.help_desc)).centered())
     .border_type(BorderType::Rounded)
     .border_style(theme.popup_border);
 
@@ -91,8 +87,7 @@ pub fn render_error(frame: &mut Frame, err: &str, area: Rect, theme: &Theme) {
 
   frame.render_widget(Clear, popup_area);
 
-  let block = Block::default()
-    .borders(Borders::ALL)
+  let block = Block::bordered()
     .border_type(BorderType::Rounded)
     .border_style(theme.border_error);
 
