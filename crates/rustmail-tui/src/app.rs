@@ -78,6 +78,7 @@ pub struct App {
   pub list_table_area: Rect,
   pub preview_area: Rect,
   pub tab_area: Rect,
+  pub tab_ranges: [(u16, u16); 3],
 }
 
 impl App {
@@ -126,6 +127,7 @@ impl App {
       list_table_area: Rect::default(),
       preview_area: Rect::default(),
       tab_area: Rect::default(),
+      tab_ranges: [(0, 0); 3],
     }
   }
 
@@ -382,15 +384,20 @@ impl App {
         let col = event.column;
 
         if self.tab_area.contains(Position::new(col, row)) {
-          let relative_x = col.saturating_sub(self.tab_area.x);
-          let tab_width = self.tab_area.width / 3;
-          let tab_idx = (relative_x / tab_width).min(2);
-          match tab_idx {
-            0 => self.switch_preview_tab(PreviewTab::Text),
-            1 => self.switch_preview_tab(PreviewTab::Headers),
-            _ => {
-              self.switch_preview_tab(PreviewTab::Raw);
-              self.ensure_raw_loaded().await;
+          let abs_x = col;
+          let tabs = [PreviewTab::Text, PreviewTab::Headers, PreviewTab::Raw];
+          for (i, tab) in tabs.iter().enumerate() {
+            let (start, end) = self.tab_ranges[i];
+            let tab_start = self.tab_area.x + start;
+            let tab_end = self.tab_area.x + end;
+            if abs_x >= tab_start && abs_x < tab_end {
+              if *tab == PreviewTab::Raw {
+                self.switch_preview_tab(PreviewTab::Raw);
+                self.ensure_raw_loaded().await;
+              } else {
+                self.switch_preview_tab(*tab);
+              }
+              break;
             }
           }
           self.focus = Focus::Preview;

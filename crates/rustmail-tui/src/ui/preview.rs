@@ -1,6 +1,6 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{
-  Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, Tabs, Wrap,
+  Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
 };
 
 use super::util::{format_size, truncate};
@@ -57,20 +57,34 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
   app.tab_area = tab_chunks[0];
   let content_area = tab_chunks[1];
 
-  let tab_titles = vec![" Text ", " Headers ", " Raw "];
-  let selected_idx = match app.preview_tab {
-    PreviewTab::Text => 0,
-    PreviewTab::Headers => 1,
-    PreviewTab::Raw => 2,
-  };
+  let tab_titles = [
+    ("1 Text", PreviewTab::Text),
+    ("2 Headers", PreviewTab::Headers),
+    ("3 Raw", PreviewTab::Raw),
+  ];
+  let mut spans: Vec<Span> = Vec::new();
+  let mut x_offset: u16 = 0;
 
-  let tabs = Tabs::new(tab_titles)
-    .select(selected_idx)
-    .style(theme.tab_inactive)
-    .highlight_style(theme.tab_highlight)
-    .divider("│");
+  for (i, (label, tab)) in tab_titles.iter().enumerate() {
+    if i > 0 {
+      spans.push(Span::styled(" ", theme.tab_inactive));
+      x_offset += 1;
+    }
+    let start = x_offset;
+    if app.preview_tab == *tab {
+      spans.push(Span::styled("", theme.tab_pill_edge));
+      spans.push(Span::styled(format!(" {label} "), theme.tab_highlight));
+      spans.push(Span::styled("", theme.tab_pill_edge));
+      x_offset += 2 + label.len() as u16 + 2;
+    } else {
+      spans.push(Span::styled(format!(" {label} "), theme.tab_inactive));
+      x_offset += label.len() as u16 + 2;
+    }
+    app.tab_ranges[i] = (start, x_offset);
+  }
 
-  frame.render_widget(tabs, tab_chunks[0]);
+  let tabs_line = Paragraph::new(Line::from(spans));
+  frame.render_widget(tabs_line, tab_chunks[0]);
 
   let lines = match app.preview_tab {
     PreviewTab::Text => render_text_lines(msg, content_area.width, theme),

@@ -11,9 +11,11 @@ pub struct Theme {
   pub row_selected: Style,
   pub row_unread: Style,
   pub row_read: Style,
+  pub row_read_sender: Style,
 
   pub tab_inactive: Style,
   pub tab_highlight: Style,
+  pub tab_pill_edge: Style,
 
   pub help_desc: Style,
 
@@ -27,7 +29,6 @@ pub struct Theme {
 
   pub spinner: Style,
   pub empty_hint: Style,
-
 }
 
 pub const DEFAULT: Theme = Theme {
@@ -40,13 +41,15 @@ pub const DEFAULT: Theme = Theme {
 
   row_selected: Style::new().bg(Color::DarkGray).fg(Color::White),
   row_unread: Style::new().add_modifier(Modifier::BOLD),
-  row_read: Style::new().fg(Color::Gray),
+  row_read: Style::new().fg(Color::DarkGray),
+  row_read_sender: Style::new().fg(Color::White),
 
   tab_inactive: Style::new().fg(Color::DarkGray),
   tab_highlight: Style::new()
     .fg(Color::Cyan)
-    .add_modifier(Modifier::BOLD)
-    .add_modifier(Modifier::UNDERLINED),
+    .bg(Color::DarkGray)
+    .add_modifier(Modifier::BOLD),
+  tab_pill_edge: Style::new().fg(Color::DarkGray),
 
   help_desc: Style::new().fg(Color::DarkGray),
 

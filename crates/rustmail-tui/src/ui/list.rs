@@ -121,8 +121,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
   let scrollbar_reserve: u16 = if has_scrollbar { 1 } else { 0 };
   let accent_width = 1u16;
   let right_pad = 1u16;
-  let content_width =
-    list_area.width.saturating_sub(accent_width + right_pad + scrollbar_reserve) as usize;
+  let content_width = list_area
+    .width
+    .saturating_sub(accent_width + right_pad + scrollbar_reserve) as usize;
 
   let items: Vec<ListItem> = app
     .messages
@@ -156,7 +157,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
       let sender_style = if is_unread {
         theme.row_unread
       } else {
-        theme.row_read
+        theme.row_read_sender
       };
 
       let right1 = if icons.is_empty() {
