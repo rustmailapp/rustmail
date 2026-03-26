@@ -129,7 +129,7 @@ fn render_text_lines(msg: &crate::api::Message, width: u16, theme: &Theme) -> Ve
   let size_str = format_size(msg.size);
   let mut meta_parts = vec![size_str];
   if msg.has_attachments {
-    meta_parts.push("📎 attachments".into());
+    meta_parts.push("@ attachments".into());
   }
   if msg.is_starred {
     meta_parts.push("★ starred".into());

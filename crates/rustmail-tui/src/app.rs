@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::prelude::*;
-use ratatui::widgets::{ScrollbarState, TableState};
+use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
 
 use crate::api::{ApiClient, Message, MessageSummary, WsEvent};
@@ -48,7 +48,7 @@ pub struct App {
   pub offset: i64,
   pub page_size: i64,
 
-  pub table_state: TableState,
+  pub list_state: ListState,
   pub list_scrollbar_state: ScrollbarState,
 
   pub preview: Option<Message>,
@@ -75,6 +75,7 @@ pub struct App {
   pub spinner_frame: usize,
 
   pub list_area: Rect,
+  pub list_table_area: Rect,
   pub preview_area: Rect,
   pub tab_area: Rect,
 }
@@ -95,7 +96,7 @@ impl App {
       offset: 0,
       page_size: 50,
 
-      table_state: TableState::default().with_selected(Some(0)),
+      list_state: ListState::default().with_selected(Some(0)),
       list_scrollbar_state: ScrollbarState::default(),
 
       preview: None,
@@ -122,6 +123,7 @@ impl App {
       spinner_frame: 0,
 
       list_area: Rect::default(),
+      list_table_area: Rect::default(),
       preview_area: Rect::default(),
       tab_area: Rect::default(),
     }
@@ -195,7 +197,7 @@ impl App {
           let old = self.selected;
           self.selected = (self.selected + 1).min(self.messages.len() - 1);
           if old != self.selected {
-            self.sync_table_state();
+            self.sync_list_state();
             self.load_preview().await;
           }
         }
@@ -205,7 +207,7 @@ impl App {
           let old = self.selected;
           self.selected = self.selected.saturating_sub(1);
           if old != self.selected {
-            self.sync_table_state();
+            self.sync_list_state();
             self.load_preview().await;
           }
         }
@@ -213,7 +215,7 @@ impl App {
       KeyCode::Char('g') => {
         if !self.messages.is_empty() && self.selected != 0 {
           self.selected = 0;
-          self.sync_table_state();
+          self.sync_list_state();
           self.load_preview().await;
         }
       }
@@ -222,7 +224,7 @@ impl App {
           let last = self.messages.len() - 1;
           if self.selected != last {
             self.selected = last;
-            self.sync_table_state();
+            self.sync_list_state();
             self.load_preview().await;
           }
         }
@@ -306,7 +308,7 @@ impl App {
         self.mode = Mode::Normal;
         self.offset = 0;
         self.selected = 0;
-        self.sync_table_state();
+        self.sync_list_state();
         self.fetch_messages().await;
       }
       KeyCode::Esc => {
@@ -315,7 +317,7 @@ impl App {
           self.mode = Mode::Normal;
           self.offset = 0;
           self.selected = 0;
-          self.sync_table_state();
+          self.sync_list_state();
           self.fetch_messages().await;
         } else {
           self.mode = Mode::Normal;
@@ -392,15 +394,18 @@ impl App {
             }
           }
           self.focus = Focus::Preview;
-        } else if self.list_area.contains(Position::new(col, row)) {
+        } else if self.list_table_area.contains(Position::new(col, row)) {
           self.focus = Focus::List;
-          let row_offset = row.saturating_sub(self.list_area.y + 1);
-          let idx = self.table_state.offset() + (row_offset / 2) as usize;
+          let row_offset = row.saturating_sub(self.list_table_area.y);
+          let scroll_offset = self.list_state.offset();
+          let idx = scroll_offset + (row_offset / 2) as usize;
           if idx < self.messages.len() && idx != self.selected {
             self.selected = idx;
-            self.sync_table_state();
+            self.sync_list_state();
             self.load_preview().await;
           }
+        } else if self.list_area.contains(Position::new(col, row)) {
+          self.focus = Focus::List;
         } else if self.preview_area.contains(Position::new(col, row)) {
           self.focus = Focus::Preview;
         }
@@ -414,7 +419,7 @@ impl App {
             let old = self.selected;
             self.selected = (self.selected + 1).min(self.messages.len() - 1);
             if old != self.selected {
-              self.sync_table_state();
+              self.sync_list_state();
               self.load_preview().await;
             }
           }
@@ -434,7 +439,7 @@ impl App {
             let old = self.selected;
             self.selected = self.selected.saturating_sub(1);
             if old != self.selected {
-              self.sync_table_state();
+              self.sync_list_state();
               self.load_preview().await;
             }
           }
@@ -467,8 +472,8 @@ impl App {
     self.error_ticks = 0;
   }
 
-  pub fn sync_table_state(&mut self) {
-    self.table_state.select(Some(self.selected));
+  pub fn sync_list_state(&mut self) {
+    self.list_state.select(Some(self.selected));
     self.list_scrollbar_state = self
       .list_scrollbar_state
       .content_length(self.messages.len())
@@ -496,7 +501,7 @@ impl App {
         if self.selected >= self.messages.len() && !self.messages.is_empty() {
           self.selected = self.messages.len() - 1;
         }
-        self.sync_table_state();
+        self.sync_list_state();
         self.load_preview().await;
       }
       Err(e) => {
@@ -585,13 +590,12 @@ impl App {
     let id = msg.id.clone();
     if self.api.delete_message(&id).await.is_ok() {
       self.messages.retain(|m| m.id != id);
-      self.total -= 1;
       if self.selected >= self.messages.len() && self.selected > 0 {
         self.selected -= 1;
       }
       self.last_preview_id = None;
       self.preview_raw = None;
-      self.sync_table_state();
+      self.sync_list_state();
       self.load_preview().await;
     }
   }
@@ -599,12 +603,11 @@ impl App {
   async fn delete_all(&mut self) {
     if self.api.delete_all_messages().await.is_ok() {
       self.messages.clear();
-      self.total = 0;
       self.selected = 0;
       self.preview = None;
       self.last_preview_id = None;
       self.preview_raw = None;
-      self.sync_table_state();
+      self.sync_list_state();
     }
   }
 
@@ -632,7 +635,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
-      self.sync_table_state();
+      self.sync_list_state();
       self.fetch_messages().await;
     }
   }
@@ -643,7 +646,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
-      self.sync_table_state();
+      self.sync_list_state();
       self.fetch_messages().await;
     }
   }
@@ -662,24 +665,22 @@ impl App {
             self.messages.pop();
           }
           self.selected += 1;
-          self.sync_table_state();
+          self.sync_list_state();
         }
       }
       WsEvent::MessageDelete { id } => {
+        self.total = (self.total - 1).max(0);
         if let Some(pos) = self.messages.iter().position(|m| m.id == id) {
           self.messages.remove(pos);
-          self.total -= 1;
           if self.selected >= self.messages.len() && self.selected > 0 {
             self.selected -= 1;
           }
-          self.sync_table_state();
+          self.sync_list_state();
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
             self.preview_raw = None;
             self.load_preview().await;
           }
-        } else {
-          self.total -= 1;
         }
       }
       WsEvent::MessageRead { id, is_read } => {
@@ -704,7 +705,7 @@ impl App {
         self.preview = None;
         self.last_preview_id = None;
         self.preview_raw = None;
-        self.sync_table_state();
+        self.sync_list_state();
       }
     }
   }

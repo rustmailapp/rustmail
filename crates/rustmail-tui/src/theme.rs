@@ -11,7 +11,6 @@ pub struct Theme {
   pub row_selected: Style,
   pub row_unread: Style,
   pub row_read: Style,
-  pub row_starred: Style,
 
   pub tab_inactive: Style,
   pub tab_highlight: Style,
@@ -21,7 +20,6 @@ pub struct Theme {
   pub status_ok: Style,
   pub status_err: Style,
 
-  pub popup_dim: Style,
   pub popup_border: Style,
 
   pub scrollbar_track: Style,
@@ -30,7 +28,6 @@ pub struct Theme {
   pub spinner: Style,
   pub empty_hint: Style,
 
-  pub table_header: Style,
 }
 
 pub const DEFAULT: Theme = Theme {
@@ -44,7 +41,6 @@ pub const DEFAULT: Theme = Theme {
   row_selected: Style::new().bg(Color::DarkGray).fg(Color::White),
   row_unread: Style::new().add_modifier(Modifier::BOLD),
   row_read: Style::new().fg(Color::Gray),
-  row_starred: Style::new().fg(Color::Yellow),
 
   tab_inactive: Style::new().fg(Color::DarkGray),
   tab_highlight: Style::new()
@@ -57,7 +53,6 @@ pub const DEFAULT: Theme = Theme {
   status_ok: Style::new().fg(Color::Green),
   status_err: Style::new().fg(Color::Red),
 
-  popup_dim: Style::new().bg(Color::Black),
   popup_border: Style::new().fg(Color::Cyan),
 
   scrollbar_track: Style::new().fg(Color::DarkGray),
@@ -65,8 +60,4 @@ pub const DEFAULT: Theme = Theme {
 
   spinner: Style::new().fg(Color::Cyan),
   empty_hint: Style::new().fg(Color::DarkGray),
-
-  table_header: Style::new()
-    .fg(Color::DarkGray)
-    .add_modifier(Modifier::BOLD),
 };

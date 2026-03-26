@@ -1,12 +1,9 @@
-use ratatui::buffer::Cell;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 
 use crate::theme::Theme;
 
 pub fn render_confirm(frame: &mut Frame, area: Rect, theme: &Theme) {
-  render_dim_overlay(frame, area, theme);
-
   let width = 40u16.min(area.width.saturating_sub(4));
   let height = 5u16;
   let x = (area.width.saturating_sub(width)) / 2;
@@ -34,8 +31,6 @@ pub fn render_confirm(frame: &mut Frame, area: Rect, theme: &Theme) {
 }
 
 pub fn render_help(frame: &mut Frame, area: Rect, theme: &Theme) {
-  render_dim_overlay(frame, area, theme);
-
   let shortcuts = [
     ("j / k", "Navigate up/down"),
     ("Enter / l", "Open preview"),
@@ -103,36 +98,4 @@ pub fn render_error(frame: &mut Frame, err: &str, area: Rect, theme: &Theme) {
 
   let paragraph = Paragraph::new(err).block(block).style(theme.border_error);
   frame.render_widget(paragraph, popup_area);
-}
-
-fn render_dim_overlay(frame: &mut Frame, area: Rect, _theme: &Theme) {
-  let buf = frame.buffer_mut();
-  for y in area.y..area.y + area.height {
-    for x in area.x..area.x + area.width {
-      let cell = &mut buf[(x, y)];
-      dim_cell(cell);
-    }
-  }
-}
-
-fn dim_cell(cell: &mut Cell) {
-  cell.set_fg(dim_color(cell.fg));
-  cell.set_bg(dim_color(cell.bg));
-}
-
-fn dim_color(color: Color) -> Color {
-  match color {
-    Color::Rgb(r, g, b) => Color::Rgb(r / 3, g / 3, b / 3),
-    Color::White => Color::DarkGray,
-    Color::Gray => Color::DarkGray,
-    Color::DarkGray => Color::Rgb(30, 30, 30),
-    Color::Cyan => Color::Rgb(20, 50, 50),
-    Color::Red => Color::Rgb(50, 15, 15),
-    Color::Green => Color::Rgb(15, 50, 15),
-    Color::Yellow => Color::Rgb(50, 50, 15),
-    Color::Blue => Color::Rgb(15, 15, 50),
-    Color::Magenta => Color::Rgb(50, 15, 50),
-    Color::Reset => Color::Rgb(20, 20, 20),
-    _ => Color::Rgb(30, 30, 30),
-  }
 }

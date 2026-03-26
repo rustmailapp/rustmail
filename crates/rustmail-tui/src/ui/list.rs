@@ -1,9 +1,10 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{
-  Block, BorderType, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, Table,
+  Block, BorderType, Borders, HighlightSpacing, List, ListItem, Paragraph, Scrollbar,
+  ScrollbarOrientation,
 };
 
-use super::util::{format_date, format_size, parse_sender, truncate};
+use super::util::{display_width, format_date, format_size, parse_sender, truncate};
 use crate::app::{App, Focus, Mode};
 use crate::theme::Theme;
 
@@ -58,7 +59,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
   let search_active = app.mode == Mode::Search;
   let has_query = !app.search_query.is_empty();
 
-  let (search_area, table_area) = if search_active || has_query {
+  let (search_area, list_area) = if search_active || has_query {
     let chunks = Layout::default()
       .direction(Direction::Vertical)
       .constraints([Constraint::Length(2), Constraint::Min(0)])
@@ -67,6 +68,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
   } else {
     (None, inner)
   };
+
+  app.list_table_area = list_area;
 
   if let Some(search_area) = search_area {
     let input_area = Rect::new(search_area.x, search_area.y, search_area.width, 1);
@@ -108,15 +111,20 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
     let p = Paragraph::new(empty)
       .alignment(Alignment::Center)
       .style(theme.empty_hint);
-    frame.render_widget(p, table_area);
+    frame.render_widget(p, list_area);
     return;
   }
 
-  let content_width = table_area.width.saturating_sub(2) as usize;
+  let lines_per_item = 2u16;
+  let visible_items = (list_area.height / lines_per_item) as usize;
+  let has_scrollbar = app.messages.len() > visible_items;
+  let scrollbar_reserve: u16 = if has_scrollbar { 1 } else { 0 };
+  let accent_width = 1u16;
+  let right_pad = 1u16;
+  let content_width =
+    list_area.width.saturating_sub(accent_width + right_pad + scrollbar_reserve) as usize;
 
-  let widths = [Constraint::Length(1), Constraint::Min(0)];
-
-  let rows: Vec<Row> = app
+  let items: Vec<ListItem> = app
     .messages
     .iter()
     .map(|msg| {
@@ -139,7 +147,10 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         icons.push('★');
       }
       if msg.has_attachments {
-        icons.push_str(" 📎");
+        if !icons.is_empty() {
+          icons.push(' ');
+        }
+        icons.push('@');
       }
 
       let sender_style = if is_unread {
@@ -148,21 +159,26 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         theme.row_read
       };
 
-      let right1 = format!("{icons}  {date}");
-      let right1_len = right1.chars().count();
+      let right1 = if icons.is_empty() {
+        date.clone()
+      } else {
+        format!("{icons}  {date}")
+      };
+      let right1_len = display_width(&right1);
       let sender_max = content_width.saturating_sub(right1_len + 1);
       let sender_display = truncate(&sender, sender_max);
 
-      let padding1 = content_width.saturating_sub(sender_display.chars().count() + right1_len);
+      let padding1 = content_width.saturating_sub(display_width(&sender_display) + right1_len);
 
       let line1 = Line::from(vec![
+        Span::styled(accent, accent_style),
         Span::styled(sender_display, sender_style),
         Span::raw(" ".repeat(padding1)),
         Span::styled(right1, theme.help_desc),
       ]);
 
       let right2 = format!("  {size}");
-      let right2_len = right2.chars().count();
+      let right2_len = display_width(&right2);
       let subject_max = content_width.saturating_sub(right2_len + 1);
       let subject_display = truncate(subject, subject_max);
 
@@ -172,39 +188,33 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         theme.row_read
       };
 
-      let padding2 = content_width.saturating_sub(subject_display.chars().count() + right2_len);
+      let padding2 = content_width.saturating_sub(display_width(&subject_display) + right2_len);
 
       let line2 = Line::from(vec![
+        Span::styled(accent, accent_style),
         Span::styled(subject_display, subject_style),
         Span::raw(" ".repeat(padding2)),
         Span::styled(right2, theme.help_desc),
       ]);
 
-      let accent_cell = Cell::from(Text::from(vec![
-        Line::from(Span::styled(accent, accent_style)),
-        Line::from(Span::styled(accent, accent_style)),
-      ]));
-
-      let content_cell = Cell::from(Text::from(vec![line1, line2]));
-
-      Row::new(vec![accent_cell, content_cell]).height(2)
+      ListItem::new(vec![line1, line2])
     })
     .collect();
 
-  let table = Table::new(rows, widths).row_highlight_style(theme.row_selected);
+  let list = List::new(items)
+    .highlight_style(theme.row_selected)
+    .highlight_spacing(HighlightSpacing::Always);
 
-  frame.render_stateful_widget(table, table_area, &mut app.table_state);
+  frame.render_stateful_widget(list, list_area, &mut app.list_state);
 
-  let row_height = 2u16;
-  let visible_rows = (table_area.height / row_height) as usize;
-  if app.messages.len() > visible_rows {
+  if has_scrollbar {
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
       .track_style(theme.scrollbar_track)
       .thumb_style(theme.scrollbar_thumb);
 
     frame.render_stateful_widget(
       scrollbar,
-      table_area.inner(ratatui::layout::Margin {
+      list_area.inner(ratatui::layout::Margin {
         vertical: 1,
         horizontal: 0,
       }),
