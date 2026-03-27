@@ -14,6 +14,14 @@ See the [Docker guide](/docker) for Compose, persistence, and configuration.
 brew install rustmailapp/rustmail/rustmail
 ```
 
+## Arch Linux (AUR)
+
+```sh
+yay -S rustmail-bin
+```
+
+Or with any AUR helper (`paru -S rustmail-bin`, `pacman -S rustmail-bin` via chaotic-aur, etc.).
+
 ## From Source
 
 ```sh

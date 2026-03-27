@@ -15,20 +15,9 @@ permissions:
   packages: write
 
 jobs:
-  build-binaries:
-    name: Build (${{ matrix.target }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            runner: ubuntu-latest
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-          - target: aarch64-apple-darwin
-            runner: macos-latest
+  build-ui:
+    name: Build UI
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
 
@@ -43,26 +32,69 @@ jobs:
         working-directory: ui
         run: pnpm install --frozen-lockfile && pnpm build
 
+      - name: Upload UI dist
+        uses: actions/upload-artifact@v6
+        with:
+          name: ui-dist
+          path: ui/dist
+
+  build-binaries:
+    name: Build (${{ matrix.target }})
+    needs: build-ui
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            cross: true
+          - target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-latest
+            cross: true
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-latest
+            cross: true
+          - target: armv7-unknown-linux-musleabihf
+            runner: ubuntu-latest
+            cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            cross: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download UI dist
+        uses: actions/download-artifact@v7
+        with:
+          name: ui-dist
+          path: ui/dist
+
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.cross }}
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install cross-compilation toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
+      - name: Install cross
+        if: matrix.cross
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz -C /usr/local/bin
 
-      - name: Configure linker for aarch64-linux
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml <<'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
+      - name: Build release binary (cross)
+        if: matrix.cross
+        run: cross build --release --no-default-features --target ${{ matrix.target }}
 
-      - name: Build release binary
+      - name: Build release binary (native)
+        if: ${{ !matrix.cross }}
         run: cargo build --release --no-default-features --target ${{ matrix.target }}
 
       - name: Upload artifact
@@ -78,15 +110,29 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download Linux binary
-        uses: actions/download-artifact@v6
+      - name: Download Linux GNU binaries
+        uses: actions/download-artifact@v7
         with:
-          name: rustmail-x86_64-unknown-linux-gnu
-          path: docker/
+          pattern: rustmail-*-linux-gnu*
+          path: artifacts
+
+      - name: Prepare Docker context
+        run: |
+          mkdir -p docker/linux/amd64 docker/linux/arm64 docker/linux/arm/v7
+          cp artifacts/rustmail-x86_64-unknown-linux-gnu/rustmail docker/linux/amd64/rustmail
+          cp artifacts/rustmail-aarch64-unknown-linux-gnu/rustmail docker/linux/arm64/rustmail
+          cp artifacts/rustmail-armv7-unknown-linux-gnueabihf/rustmail docker/linux/arm/v7/rustmail
+          chmod +x docker/linux/amd64/rustmail docker/linux/arm64/rustmail docker/linux/arm/v7/rustmail
 
       - name: Extract tag
         id: tag
         run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v4
@@ -101,6 +147,7 @@ jobs:
           context: docker/
           file: docker/Dockerfile.ci
           push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.version }}
@@ -115,8 +162,9 @@ jobs:
           fetch-depth: 0
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
+          pattern: rustmail-*
           path: artifacts
 
       - name: Prepare release assets
@@ -300,5 +348,102 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/rustmail.rb
+          git commit -m "rustmail ${VERSION}"
+          git push
+
+  update-aur:
+    name: Update AUR Package
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release tarballs and compute SHAs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          mkdir -p assets
+
+          for target in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            gh release download "v${VERSION}" \
+              --repo rustmailapp/rustmail \
+              --pattern "rustmail-${target}.tar.gz" \
+              --dir assets
+            SHA=$(sha256sum "assets/rustmail-${target}.tar.gz" | awk '{print $1}')
+            echo "SHA_${target//-/_}=${SHA}" >> "$GITHUB_ENV"
+          done
+
+      - name: Checkout AUR repo
+        uses: actions/checkout@v6
+        with:
+          repository: rustmailapp/aur-rustmail
+          token: ${{ secrets.AUR_REPO_TOKEN }}
+
+      - name: Update PKGBUILD
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > PKGBUILD << 'PKGBUILD_EOF'
+          # Maintainer: RustMail <hello@rustmail.app>
+          pkgname=rustmail-bin
+          pkgver=__VERSION__
+          pkgrel=1
+          pkgdesc="Self-hosted SMTP mail catcher with web UI, REST API, and CI assertions"
+          arch=('x86_64' 'aarch64')
+          url="https://github.com/rustmailapp/rustmail"
+          license=('MIT' 'Apache-2.0')
+          provides=('rustmail')
+          conflicts=('rustmail')
+          depends=('glibc')
+
+          source_x86_64=("${url}/releases/download/v${pkgver}/rustmail-x86_64-unknown-linux-gnu.tar.gz")
+          source_aarch64=("${url}/releases/download/v${pkgver}/rustmail-aarch64-unknown-linux-gnu.tar.gz")
+
+          sha256sums_x86_64=('__SHA_X86_64__')
+          sha256sums_aarch64=('__SHA_AARCH64__')
+
+          package() {
+            install -Dm755 rustmail "${pkgdir}/usr/bin/rustmail"
+          }
+          PKGBUILD_EOF
+          sed -i "s/__VERSION__/${VERSION}/g" PKGBUILD
+          sed -i "s/__SHA_X86_64__/${SHA_x86_64_unknown_linux_gnu}/g" PKGBUILD
+          sed -i "s/__SHA_AARCH64__/${SHA_aarch64_unknown_linux_gnu}/g" PKGBUILD
+
+      - name: Update .SRCINFO
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat > .SRCINFO << SRCINFO_EOF
+          pkgbase = rustmail-bin
+          	pkgdesc = Self-hosted SMTP mail catcher with web UI, REST API, and CI assertions
+          	pkgver = ${VERSION}
+          	pkgrel = 1
+          	url = https://github.com/rustmailapp/rustmail
+          	arch = x86_64
+          	arch = aarch64
+          	license = MIT
+          	license = Apache-2.0
+          	depends = glibc
+          	provides = rustmail
+          	conflicts = rustmail
+          	source_x86_64 = https://github.com/rustmailapp/rustmail/releases/download/v${VERSION}/rustmail-x86_64-unknown-linux-gnu.tar.gz
+          	sha256sums_x86_64 = ${SHA_x86_64_unknown_linux_gnu}
+          	source_aarch64 = https://github.com/rustmailapp/rustmail/releases/download/v${VERSION}/rustmail-aarch64-unknown-linux-gnu.tar.gz
+          	sha256sums_aarch64 = ${SHA_aarch64_unknown_linux_gnu}
+
+          pkgname = rustmail-bin
+          SRCINFO_EOF
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
           git commit -m "rustmail ${VERSION}"
           git push
