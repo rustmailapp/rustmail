@@ -6,7 +6,7 @@
 docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
 ```
 
-See the [Docker guide](/docker) for Compose, persistence, and configuration.
+See the [Docker guide](/getting-started/docker) for Compose, persistence, and configuration.
 
 ## Homebrew
 
