@@ -13,12 +13,6 @@ services:
     environment:
       RUSTMAIL_LOG_LEVEL: info
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "wget", "-qO", "/dev/null", "http://127.0.0.1:8025/api/v1/messages"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
 
 volumes:
   rustmail-data:
