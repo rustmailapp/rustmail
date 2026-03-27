@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 FROM node:22-alpine AS ui-builder
 WORKDIR /app/ui
 COPY ui/package.json ui/pnpm-lock.yaml ./
@@ -5,22 +7,24 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY ui/ .
 RUN pnpm build
 
-FROM rust:1.94-alpine3.21 AS chef
-RUN apk add --no-cache musl-dev && cargo install cargo-chef@0.1.77
+FROM lukemathwalker/cargo-chef:0.1.77-rust-1.94-alpine3.21 AS chef
+RUN apk add --no-cache musl-dev
 WORKDIR /app
 
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
-RUN cargo chef prepare --recipe-path recipe.json
+RUN cargo chef prepare --recipe-path recipe.json --bin rustmail
 
 FROM chef AS rust-builder
 COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --no-default-features --recipe-path recipe.json
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo chef cook --release --no-default-features --recipe-path recipe.json
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY --from=ui-builder /app/ui/dist ui/dist
-RUN cargo build --release --no-default-features --bin rustmail
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo build --release --no-default-features --bin rustmail
 
 FROM alpine:3.21
 RUN addgroup -S rustmail && adduser -S -G rustmail rustmail
