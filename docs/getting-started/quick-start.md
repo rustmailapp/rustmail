@@ -5,7 +5,7 @@
 ### Docker
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_BIND=0.0.0.0 ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
 ```
 
 ### Binary

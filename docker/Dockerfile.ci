@@ -9,7 +9,8 @@ COPY --chmod=755 ${TARGETPLATFORM}/rustmail /usr/local/bin/rustmail
 USER rustmail
 EXPOSE 1025 8025
 VOLUME ["/data"]
-ENV RUSTMAIL_DB_PATH=/data/rustmail.db
+ENV RUSTMAIL_DB_PATH=/data/rustmail.db \
+    RUSTMAIL_BIND=0.0.0.0
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD wget -qO /dev/null http://127.0.0.1:8025/api/v1/messages || exit 1
 ENTRYPOINT ["rustmail"]

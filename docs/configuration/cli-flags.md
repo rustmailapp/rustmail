@@ -6,7 +6,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 
 | CLI Flag | Environment Variable | Default | Description |
 |---|---|---|---|
-| `--bind` | `RUSTMAIL_BIND` | `127.0.0.1` | IP address to bind SMTP and HTTP listeners to. Use `0.0.0.0` for Docker or remote access. |
+| `--bind` | `RUSTMAIL_BIND` | `127.0.0.1` | IP address to bind SMTP and HTTP listeners to. Docker images default to `0.0.0.0`. Use `0.0.0.0` for remote access outside Docker. |
 | `--smtp-port` | `RUSTMAIL_SMTP_PORT` | `1025` | SMTP listener port |
 | `--http-port` | `RUSTMAIL_HTTP_PORT` | `8025` | HTTP and WebSocket port |
 | `--db-path` | `RUSTMAIL_DB_PATH` | `./rustmail.db` | Path to the SQLite database file |
