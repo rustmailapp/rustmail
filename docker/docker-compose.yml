@@ -11,8 +11,6 @@ services:
     volumes:
       - rustmail-data:/data
     environment:
-      RUSTMAIL_BIND: "0.0.0.0"
-      RUSTMAIL_DB_PATH: /data/rustmail.db
       RUSTMAIL_LOG_LEVEL: info
     restart: unless-stopped
     healthcheck:

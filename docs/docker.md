@@ -5,7 +5,7 @@ RustMail ships a multi-arch Docker image supporting `linux/amd64`, `linux/arm64`
 ## Quick Start
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_BIND=0.0.0.0 ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
 ```
 
 ## Docker Compose
@@ -17,9 +17,6 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
-    environment:
-      RUSTMAIL_BIND: "0.0.0.0"
-      RUSTMAIL_DB_PATH: "/data/rustmail.db"
     volumes:
       - rustmail-data:/data
 
@@ -27,21 +24,14 @@ volumes:
   rustmail-data:
 ```
 
-::: warning Bind Address
-When running in Docker, you must set `RUSTMAIL_BIND=0.0.0.0` (or `--bind 0.0.0.0`) so the server listens on all interfaces inside the container. The default `127.0.0.1` only accepts connections from within the container itself.
-:::
-
 ## Persistence
 
-Mount a volume to `/data` and set `RUSTMAIL_DB_PATH=/data/rustmail.db` to persist emails across container restarts.
+Mount a volume to `/data` to persist emails across container restarts. The image sets `RUSTMAIL_DB_PATH=/data/rustmail.db` and `RUSTMAIL_BIND=0.0.0.0` by default.
 
 For ephemeral (CI) usage, skip the volume:
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 \
-  -e RUSTMAIL_BIND=0.0.0.0 \
-  -e RUSTMAIL_EPHEMERAL=true \
-  ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_EPHEMERAL=true ghcr.io/rustmailapp/rustmail:latest
 ```
 
 ## Environment Variables
