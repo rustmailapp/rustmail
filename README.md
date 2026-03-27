@@ -32,6 +32,12 @@
 brew install rustmailapp/rustmail/rustmail
 ```
 
+Or on Arch Linux (AUR):
+
+```sh
+yay -S rustmail-bin
+```
+
 Or with Docker:
 
 ```sh
@@ -75,6 +81,18 @@ Point your app's SMTP at `localhost:1025`, then open [localhost:8025](http://loc
 - **Webhook notifications** — fire-and-forget POST on new email via `--webhook-url`
 - **Email release** — forward captured emails to a real SMTP server
 - **Export** — download as EML or JSON
+
+### Platform Support
+
+Pre-built binaries and multi-arch Docker images for every major platform:
+
+| Platform | Architectures | Format |
+|----------|--------------|--------|
+| **Linux** | x86_64, aarch64, armv7 | gnu + musl (static) |
+| **macOS** | x86_64 (Intel), aarch64 (Apple Silicon) | native |
+| **Docker** | amd64, arm64, arm/v7 | multi-arch manifest |
+
+Static musl builds run on Alpine, distroless, and any Linux — no glibc required.
 
 ### Developer Experience
 

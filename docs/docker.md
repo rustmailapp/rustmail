@@ -1,6 +1,6 @@
 # Docker
 
-RustMail ships a multi-stage Docker image supporting `linux/amd64` and `linux/arm64`.
+RustMail ships a multi-arch Docker image supporting `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.
 
 ## Quick Start
 
