@@ -183,7 +183,7 @@ pub async fn get_inline_attachment(
 
   let content_type = attachment
     .content_type
-    .filter(|ct| ct.starts_with("image/"))
+    .filter(|ct| ct.starts_with("image/") && !ct.contains("svg"))
     .unwrap_or_else(|| "application/octet-stream".to_string());
 
   Ok((
