@@ -7,7 +7,7 @@
 //! - **WebSocket** — Real-time push for new messages, deletions, and read-state changes
 //! - **Embedded UI** — SolidJS frontend served as static files via [`rust_embed`]
 //!
-//! Security layers include CORS (`Access-Control-Allow-Origin: *` without credentials),
+//! Security layers include CORS (mirrors request origin, no credentials),
 //! `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 //! `Referrer-Policy: no-referrer`, and semaphore-based WebSocket connection limits.
 //!
@@ -73,7 +73,7 @@ pub fn router(state: AppState) -> Router {
     .route("/ws", get(ws::ws_handler));
 
   let cors = CorsLayer::new()
-    .allow_origin(AllowOrigin::any())
+    .allow_origin(AllowOrigin::mirror_request())
     .allow_methods(tower_http::cors::Any)
     .allow_headers(tower_http::cors::Any);
 

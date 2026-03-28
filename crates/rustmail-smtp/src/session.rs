@@ -73,7 +73,8 @@ impl Session {
       }
 
       let trimmed = line.trim();
-      debug!(peer = %self.peer, cmd = trimmed, "Received");
+      let log_cmd = redact_auth(trimmed);
+      debug!(peer = %self.peer, cmd = %log_cmd, "Received");
 
       let upper = trimmed.to_ascii_uppercase();
 
@@ -269,6 +270,14 @@ impl Session {
   async fn write(&mut self, response: &str) -> Result<(), SessionError> {
     self.stream.get_mut().write_all(response.as_bytes()).await?;
     Ok(())
+  }
+}
+
+fn redact_auth(cmd: &str) -> std::borrow::Cow<'_, str> {
+  if cmd.len() > 11 && cmd.as_bytes()[..10].eq_ignore_ascii_case(b"AUTH PLAIN") {
+    "AUTH PLAIN [REDACTED]".into()
+  } else {
+    cmd.into()
   }
 }
 
