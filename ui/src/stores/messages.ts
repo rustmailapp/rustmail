@@ -139,7 +139,8 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
-    setTimeout(connectWebSocket, reconnectDelay);
+    const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
+    setTimeout(connectWebSocket, jitter);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 

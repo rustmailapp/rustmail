@@ -316,7 +316,7 @@ function rewriteToAbsoluteUrls(html: string): string {
 
 function cspMeta(): string {
   const origin = location.origin;
-  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${origin} data:;">`;
+  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${origin} data:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">`;
 }
 
 function HtmlPreview(props: {
