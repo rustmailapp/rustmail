@@ -6,8 +6,10 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "1025:1025"
-      - "8025:8025"
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - rustmail-data:/data
     environment:
