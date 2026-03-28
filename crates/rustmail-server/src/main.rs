@@ -312,6 +312,59 @@ fn default_db_path() -> PathBuf {
     .join("rustmail.db")
 }
 
+fn validate_webhook_url(url: &str) -> Result<()> {
+  let parsed: reqwest::Url = url
+    .parse()
+    .map_err(|_| anyhow::anyhow!("invalid webhook URL: {}", url))?;
+
+  match parsed.scheme() {
+    "http" | "https" => {}
+    s => anyhow::bail!("webhook URL scheme must be http or https, got: {}", s),
+  }
+
+  let host = parsed
+    .host_str()
+    .ok_or_else(|| anyhow::anyhow!("webhook URL has no host"))?;
+
+  if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
+    anyhow::bail!("webhook URL must not point to localhost: {}", url);
+  }
+
+  if let Ok(ip) = host.parse::<std::net::IpAddr>()
+    && is_private_ip(ip)
+  {
+    anyhow::bail!(
+      "webhook URL must not point to a private/reserved IP: {}",
+      url
+    );
+  }
+
+  Ok(())
+}
+
+fn is_private_ip(ip: std::net::IpAddr) -> bool {
+  match ip {
+    std::net::IpAddr::V4(v4) => {
+      v4.is_private()
+        || v4.is_loopback()
+        || v4.is_link_local()
+        || v4.is_broadcast()
+        || v4.is_unspecified()
+        || v4.octets()[0] == 100 && (v4.octets()[1] & 0xC0) == 64 // CGN 100.64/10
+    }
+    std::net::IpAddr::V6(v6) => {
+      if let Some(v4) = v6.to_ipv4_mapped() {
+        return is_private_ip(std::net::IpAddr::V4(v4));
+      }
+      let segs = v6.segments();
+      v6.is_loopback()
+        || v6.is_unspecified()
+        || (segs[0] & 0xfe00) == 0xfc00 // unique local fc00::/7
+        || (segs[0] & 0xffc0) == 0xfe80 // link-local fe80::/10
+    }
+  }
+}
+
 fn parse_bind_addr(bind: &str) -> Result<std::net::IpAddr> {
   bind.parse().map_err(|_| {
     anyhow::anyhow!(
@@ -382,6 +435,10 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     max_message_size: args.max_message_size,
   };
   let smtp_server = SmtpServer::new(smtp_config, smtp_tx);
+
+  if let Some(ref url) = args.webhook_url {
+    validate_webhook_url(url)?;
+  }
 
   let webhook_client = args.webhook_url.as_ref().map(|_| reqwest::Client::new());
   let webhook_url = args.webhook_url.clone();
