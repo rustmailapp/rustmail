@@ -34,7 +34,7 @@ features:
   - icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><polyline points="3.29 7 12 12 20.71 7"/><path d="m7.5 4.27 9 5.15"/></svg>'
     title: One binary, no deps
     details: The frontend is embedded at compile time. Drop it on a server and run it.
-  - icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/></svg>'
-    title: REST API + OpenAPI
-    details: Full API with an OpenAPI 3.1 spec. Export emails, release to real SMTP, get webhook notifications.
+  - icon: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12h.01"/><path d="M15 12h.01"/><path d="M10 16c.5.3 1.2.5 2 .5s1.5-.2 2-.5"/><path d="M19.5 10c.5 0 1 .5 1 1v3c0 .5-.5 1-1 1"/><path d="M4.5 10c-.5 0-1 .5-1 1v3c0 .5.5 1 1 1"/><path d="M2 15.5V6.5C2 5.1 3.1 4 4.5 4h15C20.9 4 22 5.1 22 6.5v9c0 1.4-1.1 2.5-2.5 2.5h-15C3.1 18 2 16.9 2 15.5z"/></svg>'
+    title: DKIM / SPF / DMARC
+    details: Parses authentication headers with color-coded status badges. No other local mail catcher does this.
 ---

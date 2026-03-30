@@ -60,6 +60,7 @@ const reference: DefaultTheme.SidebarItem[] = [
       { text: "WebSocket", link: "/features/websocket" },
       { text: "Keyboard Shortcuts", link: "/features/keyboard-shortcuts" },
       { text: "Email Authentication", link: "/features/email-auth" },
+      { text: "Terminal UI", link: "/features/tui" },
     ],
   },
   {
@@ -151,7 +152,7 @@ export default defineConfig({
 
     footer: {
       message: "Released under the MIT / Apache 2.0 License.",
-      copyright: "Copyright © 2026 Davide Tacchini",
+      copyright: "Copyright © 2026 Smyile",
     },
   },
 });
