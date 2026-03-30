@@ -135,8 +135,8 @@ Full docs at [docs.rustmail.app](https://docs.rustmail.app) ([source](docs/)):
 - [Features](docs/features/webhooks.md) — Webhooks, Export, Release, Email Auth, WebSocket
 - [Integrations](docs/integrations/neovim.md) — Neovim Plugin
 - [API Reference](docs/api/index.md)
-- [Docker](docs/docker.md)
-- [Architecture](docs/architecture.md)
+- [Docker](docs/getting-started/docker.md)
+- [Architecture](docs/getting-started/architecture.md)
 
 ## License
 
