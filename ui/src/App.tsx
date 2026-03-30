@@ -34,7 +34,7 @@ export default function App() {
       const msg = msgs[idx];
       if (msg) {
         setSelectedId(msg.id);
-        if (!msg.is_read) api.markRead(msg.id, true);
+        if (!msg.is_read) api.markRead(msg.id, true).catch(() => {});
       }
     }
 
@@ -62,10 +62,14 @@ export default function App() {
             title: "Delete message",
             message: "This message will be permanently deleted.",
             confirmLabel: "Delete",
-          }).then((ok) => {
+          }).then(async (ok) => {
             if (ok) {
-              api.deleteMessage(id);
-              setSelectedId(null);
+              try {
+                await api.deleteMessage(id);
+                setSelectedId(null);
+              } catch {
+                console.error("Failed to delete message");
+              }
             }
           });
         }
@@ -78,8 +82,14 @@ export default function App() {
           title: "Clear all messages",
           message: `All ${count} messages will be permanently deleted.`,
           confirmLabel: "Clear all",
-        }).then((ok) => {
-          if (ok) api.deleteAllMessages();
+        }).then(async (ok) => {
+          if (ok) {
+            try {
+              await api.deleteAllMessages();
+            } catch {
+              console.error("Failed to clear messages");
+            }
+          }
         });
         break;
       }
@@ -87,7 +97,7 @@ export default function App() {
         const id = selectedId();
         if (id) {
           const msg = filteredMessages().find((m) => m.id === id);
-          if (msg) api.markStarred(id, !msg.is_starred);
+          if (msg) api.markStarred(id, !msg.is_starred).catch(() => {});
         }
         break;
       }

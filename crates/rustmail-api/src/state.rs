@@ -64,6 +64,8 @@ impl AppState {
 
   /// Sends an event to all connected WebSocket clients.
   pub fn broadcast(&self, event: WsEvent) {
-    let _ = self.ws_tx.send(event);
+    if let Err(e) = self.ws_tx.send(event) {
+      tracing::debug!(event = ?e.0, "No active WebSocket subscribers");
+    }
   }
 }

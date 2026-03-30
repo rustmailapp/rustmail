@@ -79,7 +79,11 @@ export default function Inbox() {
               onClick={async () => {
                 setSelectedId(msg.id);
                 if (!msg.is_read) {
-                  await api.markRead(msg.id, true);
+                  try {
+                    await api.markRead(msg.id, true);
+                  } catch {
+                    // WS event handles UI sync
+                  }
                 }
               }}
               class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
@@ -96,7 +100,7 @@ export default function Inbox() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      api.markStarred(msg.id, !msg.is_starred);
+                      api.markStarred(msg.id, !msg.is_starred).catch(() => {});
                     }}
                     class="cursor-pointer"
                     title={msg.is_starred ? "Unstar" : "Star"}

@@ -181,9 +181,17 @@ pub async fn get_inline_attachment(
     .get_attachment_by_content_id(&message_id, &content_id)
     .await?;
 
+  const SAFE_IMAGE_TYPES: &[&str] = &[
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/avif",
+    "image/bmp",
+  ];
   let content_type = attachment
     .content_type
-    .filter(|ct| ct.starts_with("image/") && !ct.contains("svg"))
+    .filter(|ct| SAFE_IMAGE_TYPES.iter().any(|safe| ct.eq_ignore_ascii_case(safe)))
     .unwrap_or_else(|| "application/octet-stream".to_string());
 
   Ok((
