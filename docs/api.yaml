@@ -2,7 +2,7 @@ openapi: 3.1.0
 
 info:
   title: RustMail API
-  version: 0.1.0
+  version: 0.2.0
   description: >
     REST and WebSocket API for RustMail — a self-hosted SMTP mail catcher.
     All IDs are ULIDs (time-sortable). All timestamps are ISO 8601 UTC.
