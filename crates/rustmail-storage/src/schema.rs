@@ -33,8 +33,13 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
   .execute(pool)
   .await?;
 
-  add_column_if_missing(pool, "messages", "is_starred", "is_starred INTEGER NOT NULL DEFAULT 0")
-    .await?;
+  add_column_if_missing(
+    pool,
+    "messages",
+    "is_starred",
+    "is_starred INTEGER NOT NULL DEFAULT 0",
+  )
+  .await?;
   add_column_if_missing(pool, "messages", "tags", "tags TEXT NOT NULL DEFAULT '[]'").await?;
 
   sqlx::query(

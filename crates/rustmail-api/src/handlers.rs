@@ -191,7 +191,11 @@ pub async fn get_inline_attachment(
   ];
   let content_type = attachment
     .content_type
-    .filter(|ct| SAFE_IMAGE_TYPES.iter().any(|safe| ct.eq_ignore_ascii_case(safe)))
+    .filter(|ct| {
+      SAFE_IMAGE_TYPES
+        .iter()
+        .any(|safe| ct.eq_ignore_ascii_case(safe))
+    })
     .unwrap_or_else(|| "application/octet-stream".to_string());
 
   Ok((
