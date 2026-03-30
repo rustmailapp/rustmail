@@ -17,8 +17,11 @@ services:
     ports:
       - "1025:1025"
       - "8025:8025"
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - rustmail-data:/data
+    restart: unless-stopped
 
 volumes:
   rustmail-data:

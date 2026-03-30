@@ -117,8 +117,10 @@ By default the action downloads the latest RustMail release. Pin to a specific v
 ```yaml
 - uses: rustmailapp/rustmail-action@v1
   with:
-    version: v0.1.0
+    version: v0.2.1  # pin to a release tag
 ```
+
+Check [GitHub Releases](https://github.com/rustmailapp/rustmail/releases) for available versions.
 
 ::: tip
 For non-GitHub CI systems, use the [CLI Assert Mode](/ci-integration/cli-assert) or [REST Assertions](/ci-integration/rest-assertions) directly.
