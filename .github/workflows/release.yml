@@ -95,11 +95,11 @@ jobs:
 
       - name: Build release binary (cross)
         if: matrix.cross
-        run: cross build --release --no-default-features --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Build release binary (native)
         if: ${{ !matrix.cross }}
-        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7
