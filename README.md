@@ -18,9 +18,16 @@
   <code>~7 MB binary</code> · <code>28 KB JS gzipped</code> · <code>zero runtime dependencies</code>
 </p>
 
-<p align="center" style="margin-bottom:unset">
-  <img src="docs/public/screenshot.png" alt="RustMail UI" width="700" />
-</p>
+<table align="center">
+  <tr>
+    <td align="center"><strong>Web UI</strong></td>
+    <td align="center"><strong>TUI</strong></td>
+  </tr>
+  <tr>
+    <td><img src="docs/public/screenshot-web.png" alt="RustMail Web UI" width="450" /></td>
+    <td><img src="docs/public/screenshot-tui.png" alt="RustMail TUI" width="450" /></td>
+  </tr>
+</table>
 
 <p align="center">
   Inspired by <a href="https://github.com/mailhog/MailHog">MailHog</a> and <a href="https://github.com/tweedegolf/mailcrab">MailCrab</a>
@@ -41,7 +48,7 @@ yay -S rustmail-bin
 Or with Docker:
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ```
 
 Or from source:

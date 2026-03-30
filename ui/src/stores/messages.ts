@@ -91,7 +91,13 @@ function connectWebSocket() {
   };
 
   ws.onmessage = (e) => {
-    const event: WsEvent = JSON.parse(e.data);
+    let event: WsEvent;
+    try {
+      event = JSON.parse(e.data);
+    } catch {
+      console.error("Failed to parse WebSocket message:", e.data);
+      return;
+    }
 
     switch (event.type) {
       case "message:new":

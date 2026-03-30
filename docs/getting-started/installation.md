@@ -3,7 +3,7 @@
 ## Docker
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ```
 
 See the [Docker guide](/getting-started/docker) for Compose, persistence, and configuration.

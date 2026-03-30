@@ -5,7 +5,7 @@ RustMail ships a multi-arch Docker image supporting `linux/amd64`, `linux/arm64`
 ## Quick Start
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ```
 
 ## Docker Compose
@@ -13,7 +13,7 @@ docker run -p 1025:1025 -p 8025:8025 ghcr.io/rustmailapp/rustmail:latest
 ```yaml
 services:
   rustmail:
-    image: ghcr.io/rustmailapp/rustmail:latest
+    image: smyile/rustmail:latest
     ports:
       - "1025:1025"
       - "8025:8025"
@@ -31,7 +31,7 @@ Mount a volume to `/data` to persist emails across container restarts. The image
 For ephemeral (CI) usage, skip the volume:
 
 ```sh
-docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_EPHEMERAL=true ghcr.io/rustmailapp/rustmail:latest
+docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_EPHEMERAL=true smyile/rustmail:latest
 ```
 
 ## Environment Variables

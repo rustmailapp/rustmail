@@ -88,6 +88,9 @@ fn serialize_json_string_as_array<S: Serializer>(
   json_str: &str,
   serializer: S,
 ) -> Result<S::Ok, S::Error> {
-  let tags: Vec<String> = serde_json::from_str(json_str).unwrap_or_default();
+  let tags: Vec<String> = serde_json::from_str(json_str).unwrap_or_else(|e| {
+    tracing::warn!(error = %e, raw = %json_str, "Failed to deserialize JSON array field");
+    Vec::new()
+  });
   tags.serialize(serializer)
 }

@@ -33,26 +33,14 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
   .execute(pool)
   .await?;
 
-  if let Err(e) =
-    sqlx::query("ALTER TABLE messages ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0")
-      .execute(pool)
-      .await
-  {
-    let msg = e.to_string();
-    if !msg.contains("duplicate column") {
-      return Err(e.into());
-    }
-  }
-
-  if let Err(e) = sqlx::query("ALTER TABLE messages ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'")
-    .execute(pool)
-    .await
-  {
-    let msg = e.to_string();
-    if !msg.contains("duplicate column") {
-      return Err(e.into());
-    }
-  }
+  add_column_if_missing(
+    pool,
+    "messages",
+    "is_starred",
+    "is_starred INTEGER NOT NULL DEFAULT 0",
+  )
+  .await?;
+  add_column_if_missing(pool, "messages", "tags", "tags TEXT NOT NULL DEFAULT '[]'").await?;
 
   sqlx::query(
     r#"
@@ -113,5 +101,26 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
     .execute(pool)
     .await?;
 
+  Ok(())
+}
+
+async fn add_column_if_missing(
+  pool: &SqlitePool,
+  table: &str,
+  column: &str,
+  definition: &str,
+) -> Result<(), StorageError> {
+  let exists: Option<(String,)> =
+    sqlx::query_as("SELECT name FROM pragma_table_info(?) WHERE name = ?")
+      .bind(table)
+      .bind(column)
+      .fetch_optional(pool)
+      .await?;
+
+  if exists.is_none() {
+    sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {definition}"))
+      .execute(pool)
+      .await?;
+  }
   Ok(())
 }

@@ -7,7 +7,7 @@ Internal reference for packaging and distribution channels.
 | Channel | Status | Notes |
 |---------|--------|-------|
 | **Homebrew** | Ready | `brew install rustmailapp/rustmail/rustmail` |
-| **Docker (GHCR)** | Ready | `ghcr.io/rustmailapp/rustmail:latest` |
+| **Docker** | Ready | `smyile/rustmail:latest` |
 | **GitHub Releases** | Ready | Multi-platform binaries via release workflow |
 | **Source** | Ready | `make build` (requires Node + pnpm + Rust) |
 | **crates.io** | Not used | All crates yanked. Binary can't be published (embedded UI requires Node build step) |
