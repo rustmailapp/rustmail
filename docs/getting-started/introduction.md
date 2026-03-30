@@ -4,6 +4,8 @@ RustMail is a local SMTP mail catcher. Point your app's outbound email at it dur
 
 It ships as a single binary — the frontend is compiled in, so there's nothing else to install or run.
 
+![RustMail web UI](/screenshot-web.png)
+
 ## Why RustMail?
 
 Most alternatives are either unmaintained (MailHog), minimal (MailCrab), or cloud-only (Mailtrap). RustMail is a self-hosted option that doesn't cut corners:

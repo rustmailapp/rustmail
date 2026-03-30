@@ -2,6 +2,8 @@
 
 RustMail includes a built-in terminal UI (TUI) that connects to a running RustMail instance. It provides a full email browser in your terminal with real-time updates via WebSocket.
 
+![RustMail TUI](/screenshot-tui.png)
+
 ## Usage
 
 ```sh
