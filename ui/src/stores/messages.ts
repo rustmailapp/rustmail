@@ -81,10 +81,15 @@ async function fetchMessages() {
 
 let reconnectDelay = 2000;
 const MAX_RECONNECT_DELAY = 30000;
+let currentWs: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
 function connectWebSocket() {
+  disconnectWebSocket();
+
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws`);
+  currentWs = ws;
 
   ws.onopen = () => {
     reconnectDelay = 2000;
@@ -145,12 +150,25 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    currentWs = null;
     const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
-    setTimeout(connectWebSocket, jitter);
+    reconnectTimer = setTimeout(connectWebSocket, jitter);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 
   return ws;
+}
+
+function disconnectWebSocket() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (currentWs) {
+    currentWs.onclose = null;
+    currentWs.close();
+    currentWs = null;
+  }
 }
 
 export {
@@ -171,4 +189,5 @@ export {
   allTags,
   fetchMessages,
   connectWebSocket,
+  disconnectWebSocket,
 };

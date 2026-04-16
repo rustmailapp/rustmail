@@ -8,6 +8,7 @@ import ConfirmDialog, { confirm } from "./components/ConfirmDialog";
 import {
   fetchMessages,
   connectWebSocket,
+  disconnectWebSocket,
   filteredMessages,
   total,
   selectedId,
@@ -129,6 +130,7 @@ export default function App() {
 
   onCleanup(() => {
     document.removeEventListener("keydown", handleKeydown);
+    disconnectWebSocket();
   });
 
   return (

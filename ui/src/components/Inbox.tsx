@@ -86,6 +86,12 @@ export default function Inbox() {
                   }
                 }
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  (e.currentTarget as HTMLElement).click();
+                }
+              }}
               class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
                 isSelected()
                   ? "bg-zinc-100 dark:bg-zinc-800/80"

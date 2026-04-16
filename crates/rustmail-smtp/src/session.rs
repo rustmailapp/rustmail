@@ -31,6 +31,7 @@ pub struct Session {
   peer: SocketAddr,
   sender: mpsc::Sender<ReceivedMessage>,
   max_message_size: usize,
+  greeted: bool,
   mail_from: Option<String>,
   rcpt_to: Vec<String>,
 }
@@ -47,6 +48,7 @@ impl Session {
       peer,
       sender,
       max_message_size,
+      greeted: false,
       mail_from: None,
       rcpt_to: Vec::new(),
     }
@@ -79,15 +81,22 @@ impl Session {
       let upper = trimmed.to_ascii_uppercase();
 
       if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+        self.greeted = true;
+        self.mail_from = None;
+        self.rcpt_to.clear();
         let ehlo = format!(
           "250-rustmail\r\n250-SIZE {}\r\n250-8BITMIME\r\n250-PIPELINING\r\n250-AUTH PLAIN LOGIN\r\n250 HELP\r\n",
           self.max_message_size
         );
         self.write(&ehlo).await?;
       } else if upper.starts_with("MAIL FROM:") {
-        self.mail_from = Some(extract_address(trimmed));
-        self.rcpt_to.clear();
-        self.write(OK).await?;
+        if !self.greeted {
+          self.write(BAD_SEQUENCE).await?;
+        } else {
+          self.mail_from = Some(extract_address(trimmed));
+          self.rcpt_to.clear();
+          self.write(OK).await?;
+        }
       } else if upper.starts_with("RCPT TO:") {
         if self.rcpt_to.len() >= MAX_RECIPIENTS {
           self.write("452 Too many recipients\r\n").await?;
