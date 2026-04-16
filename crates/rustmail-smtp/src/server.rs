@@ -5,6 +5,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info, warn};
 
+use tokio::io::AsyncWriteExt;
+
 use crate::message::ReceivedMessage;
 use crate::session::Session;
 
@@ -60,11 +62,14 @@ impl SmtpServer {
 
     loop {
       match listener.accept().await {
-        Ok((stream, peer)) => {
+        Ok((mut stream, peer)) => {
           let permit = match semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
               warn!(peer = %peer, "SMTP connection rejected: max concurrent sessions reached");
+              let _ = stream
+                .write_all(b"421 Service not available, too many connections\r\n")
+                .await;
               continue;
             }
           };

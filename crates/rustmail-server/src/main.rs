@@ -551,17 +551,19 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   tokio::select! {
       result = smtp_server.run() => {
-          if let Err(e) = result {
-              tracing::error!(error = %e, "SMTP server error");
+          match result {
+              Err(e) => anyhow::bail!("SMTP server failed: {e}"),
+              Ok(()) => anyhow::bail!("SMTP server exited unexpectedly"),
           }
       }
       result = axum::serve(listener, app) => {
-          if let Err(e) = result {
-              tracing::error!(error = %e, "HTTP server error");
+          match result {
+              Err(e) => anyhow::bail!("HTTP server failed: {e}"),
+              Ok(()) => anyhow::bail!("HTTP server exited unexpectedly"),
           }
       }
       _ = message_processor => {
-          tracing::error!("Message processor stopped unexpectedly");
+          anyhow::bail!("Message processor stopped unexpectedly");
       }
       _ = retention_task => {}
   }
