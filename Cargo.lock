@@ -2369,9 +2369,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.10"
+version = "0.103.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df33b2b81ac578cabaf06b89b0631153a3f416b0a886e8a7a1707fb51abbd1ef"
+checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-api"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "lettre",
@@ -2400,7 +2400,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-server"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-smtp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mail-parser",
  "serde",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-storage"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "mail-parser",
  "serde",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-tui"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "crossterm",
