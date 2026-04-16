@@ -91,25 +91,32 @@ impl ApiClient {
       req = req.query(&[("q", q)]);
     }
 
-    let resp = req.send().await?.json().await?;
+    let resp = req.send().await?.error_for_status()?.json().await?;
     Ok(resp)
   }
 
   pub async fn get_message(&self, id: &str) -> Result<Message> {
     let url = format!("{}/api/v1/messages/{}", self.base_url, id);
-    let resp = self.client.get(&url).send().await?.json().await?;
+    let resp = self
+      .client
+      .get(&url)
+      .send()
+      .await?
+      .error_for_status()?
+      .json()
+      .await?;
     Ok(resp)
   }
 
   pub async fn delete_message(&self, id: &str) -> Result<()> {
     let url = format!("{}/api/v1/messages/{}", self.base_url, id);
-    self.client.delete(&url).send().await?;
+    self.client.delete(&url).send().await?.error_for_status()?;
     Ok(())
   }
 
   pub async fn delete_all_messages(&self) -> Result<()> {
     let url = format!("{}/api/v1/messages", self.base_url);
-    self.client.delete(&url).send().await?;
+    self.client.delete(&url).send().await?.error_for_status()?;
     Ok(())
   }
 
@@ -127,13 +134,26 @@ impl ApiClient {
     if let Some(v) = is_starred {
       body.insert("is_starred".into(), serde_json::Value::Bool(v));
     }
-    self.client.patch(&url).json(&body).send().await?;
+    self
+      .client
+      .patch(&url)
+      .json(&body)
+      .send()
+      .await?
+      .error_for_status()?;
     Ok(())
   }
 
   pub async fn get_raw_message(&self, id: &str) -> Result<String> {
     let url = format!("{}/api/v1/messages/{}/raw", self.base_url, id);
-    let resp = self.client.get(&url).send().await?.text().await?;
+    let resp = self
+      .client
+      .get(&url)
+      .send()
+      .await?
+      .error_for_status()?
+      .text()
+      .await?;
     Ok(resp)
   }
 }

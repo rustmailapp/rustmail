@@ -3,6 +3,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, warn};
 
 use crate::state::AppState;
@@ -49,7 +50,11 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                         break;
                     }
                 }
-                Err(_) => break,
+                Err(RecvError::Lagged(n)) => {
+                    warn!(missed = n, "WebSocket client lagged, skipping missed events");
+                    continue;
+                }
+                Err(RecvError::Closed) => break,
             }
         }
         msg = socket.recv() => {
