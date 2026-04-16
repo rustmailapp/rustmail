@@ -67,7 +67,9 @@ impl SmtpServer {
             Ok(permit) => permit,
             Err(_) => {
               warn!(peer = %peer, "SMTP connection rejected: max concurrent sessions reached");
-              let _ = stream.write_all(b"421 Service not available, too many connections\r\n").await;
+              let _ = stream
+                .write_all(b"421 Service not available, too many connections\r\n")
+                .await;
               continue;
             }
           };

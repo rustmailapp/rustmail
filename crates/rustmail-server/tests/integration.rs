@@ -702,10 +702,8 @@ async fn smtp_session_limit_rejects_excess() {
   // The 101st connection should receive a 421 response and then be closed.
   let mut probe = TcpStream::connect(addr).await.unwrap();
   let mut buf = [0u8; 512];
-  let result = tokio::time::timeout(Duration::from_secs(2), async {
-    probe.read(&mut buf).await
-  })
-  .await;
+  let result =
+    tokio::time::timeout(Duration::from_secs(2), async { probe.read(&mut buf).await }).await;
 
   match result {
     Ok(Ok(0)) | Err(_) | Ok(Err(_)) => {}
