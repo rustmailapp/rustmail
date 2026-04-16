@@ -97,7 +97,14 @@ impl ApiClient {
 
   pub async fn get_message(&self, id: &str) -> Result<Message> {
     let url = format!("{}/api/v1/messages/{}", self.base_url, id);
-    let resp = self.client.get(&url).send().await?.error_for_status()?.json().await?;
+    let resp = self
+      .client
+      .get(&url)
+      .send()
+      .await?
+      .error_for_status()?
+      .json()
+      .await?;
     Ok(resp)
   }
 
@@ -127,13 +134,26 @@ impl ApiClient {
     if let Some(v) = is_starred {
       body.insert("is_starred".into(), serde_json::Value::Bool(v));
     }
-    self.client.patch(&url).json(&body).send().await?.error_for_status()?;
+    self
+      .client
+      .patch(&url)
+      .json(&body)
+      .send()
+      .await?
+      .error_for_status()?;
     Ok(())
   }
 
   pub async fn get_raw_message(&self, id: &str) -> Result<String> {
     let url = format!("{}/api/v1/messages/{}/raw", self.base_url, id);
-    let resp = self.client.get(&url).send().await?.error_for_status()?.text().await?;
+    let resp = self
+      .client
+      .get(&url)
+      .send()
+      .await?
+      .error_for_status()?
+      .text()
+      .await?;
     Ok(resp)
   }
 }
