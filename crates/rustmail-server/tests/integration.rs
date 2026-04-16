@@ -699,12 +699,10 @@ async fn smtp_session_limit_rejects_excess() {
 
   tokio::time::sleep(Duration::from_millis(200)).await;
 
-  // The 101st connection should be silently dropped by the semaphore.
-  // The server accepts the TCP connection but immediately continues without
-  // spawning a session, so we expect: EOF (0 bytes), timeout, or IO error.
+  // The 101st connection should receive a 421 response and then be closed.
   let mut probe = TcpStream::connect(addr).await.unwrap();
+  let mut buf = [0u8; 512];
   let result = tokio::time::timeout(Duration::from_secs(2), async {
-    let mut buf = [0u8; 512];
     probe.read(&mut buf).await
   })
   .await;
@@ -712,7 +710,11 @@ async fn smtp_session_limit_rejects_excess() {
   match result {
     Ok(Ok(0)) | Err(_) | Ok(Err(_)) => {}
     Ok(Ok(n)) => {
-      panic!("Expected connection to be rejected, but got {n} bytes");
+      let response = std::str::from_utf8(&buf[..n]).unwrap_or("");
+      assert!(
+        response.starts_with("421"),
+        "Expected 421 rejection, got: {response}"
+      );
     }
   }
 

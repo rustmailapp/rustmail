@@ -202,8 +202,14 @@ impl Session {
       raw: data,
     };
 
-    let _ = self.sender.send(message).await;
-    self.write(OK).await?;
+    if self.sender.send(message).await.is_err() {
+      warn!(peer = %self.peer, "Channel closed, message not stored");
+      self
+        .write("451 Requested action aborted: local error in processing\r\n")
+        .await?;
+    } else {
+      self.write(OK).await?;
+    }
     self.mail_from = None;
     self.rcpt_to.clear();
     Ok(())
