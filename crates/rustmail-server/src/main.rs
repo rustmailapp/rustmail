@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -442,6 +443,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let webhook_client = args.webhook_url.as_ref().map(|_| reqwest::Client::new());
   let webhook_url = args.webhook_url.clone();
+  let webhook_semaphore = Arc::new(tokio::sync::Semaphore::new(10));
 
   let message_processor = {
     let repo = repo.clone();
@@ -459,7 +461,12 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
               let client = client.clone();
               let url = url.clone();
               let payload = summary;
+              let sem = webhook_semaphore.clone();
               tokio::spawn(async move {
+                let _permit = match sem.acquire().await {
+                  Ok(p) => p,
+                  Err(_) => return,
+                };
                 if let Err(e) = client
                   .post(&url)
                   .json(&payload)

@@ -222,7 +222,7 @@ impl MessageRepository {
   fn sanitize_fts_query(query: &str) -> Option<String> {
     let sanitized: String = query
       .chars()
-      .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '@' | '.' | '-'))
+      .filter(|c| c.is_alphanumeric() || matches!(c, ' ' | '@' | '.' | '-' | '+' | '_'))
       .collect();
     if sanitized.trim().is_empty() {
       return None;

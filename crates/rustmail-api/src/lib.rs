@@ -40,7 +40,7 @@ use axum::Router;
 use axum::http::HeaderValue;
 use axum::routing::{delete, get, patch, post};
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
@@ -73,7 +73,7 @@ pub fn router(state: AppState) -> Router {
     .route("/ws", get(ws::ws_handler));
 
   let cors = CorsLayer::new()
-    .allow_origin(AllowOrigin::mirror_request())
+    .allow_origin(tower_http::cors::Any)
     .allow_methods(tower_http::cors::Any)
     .allow_headers(tower_http::cors::Any);
 
