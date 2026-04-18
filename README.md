@@ -86,6 +86,7 @@ Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases
 | **Auth header display** | Parses DKIM, SPF, DMARC, and ARC headers with color-coded status badges. |
 | **Webhooks** | Fire-and-forget POST on every new message. |
 | **Email release** | Forward captured emails to a real SMTP server. |
+| **Optional STARTTLS** | Advertised on the normal SMTP port when both `--smtp-tls-cert` and `--smtp-tls-key` are configured. |
 | **Export** | Download any email as EML or JSON. |
 | **Retention policies** | Auto-purge by age (`--retention`) or count (`--max-messages`). |
 | **TUI** | Optional terminal UI client for Neovim and headless workflows. |
@@ -120,7 +121,10 @@ Configure via CLI flags, `RUSTMAIL_*` environment variables, or a TOML config fi
 rustmail serve --bind 0.0.0.0 --smtp-port 2525 --http-port 9025
 rustmail serve --retention 24 --max-messages 1000
 rustmail serve --webhook-url https://hooks.example.com/email
+rustmail serve --smtp-tls-cert ./certs/localhost.pem --smtp-tls-key ./certs/localhost-key.pem
 ```
+
+STARTTLS is optional and uses the same SMTP port via explicit upgrade. RustMail advertises `STARTTLS` only when both the certificate and private key are configured.
 
 See the full [configuration reference](https://docs.rustmail.app/configuration/cli-flags).
 

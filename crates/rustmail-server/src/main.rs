@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -9,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 use rustmail_api::{AppState, WsEvent};
-use rustmail_smtp::{ReceivedMessage, SmtpServer, SmtpServerConfig};
+use rustmail_smtp::{ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, format_iso8601, initialize_database};
 
 #[derive(Parser)]
@@ -52,6 +53,12 @@ struct ServeArgs {
 
   #[arg(long, env = "RUSTMAIL_MAX_MESSAGE_SIZE", default_value = "10485760")]
   max_message_size: usize,
+
+  #[arg(long, env = "RUSTMAIL_SMTP_TLS_CERT")]
+  smtp_tls_cert: Option<PathBuf>,
+
+  #[arg(long, env = "RUSTMAIL_SMTP_TLS_KEY")]
+  smtp_tls_key: Option<PathBuf>,
 
   #[arg(long, env = "RUSTMAIL_RETENTION", default_value = "0")]
   retention: u64,
@@ -118,6 +125,8 @@ struct TomlConfig {
   db_path: Option<String>,
   ephemeral: Option<bool>,
   max_message_size: Option<usize>,
+  smtp_tls_cert: Option<String>,
+  smtp_tls_key: Option<String>,
   retention: Option<u64>,
   max_messages: Option<i64>,
   log_level: Option<String>,
@@ -149,6 +158,12 @@ fn apply_toml_to_env(config: &TomlConfig) {
   }
   if let Some(v) = config.max_message_size {
     set_if_absent("RUSTMAIL_MAX_MESSAGE_SIZE", &v.to_string());
+  }
+  if let Some(v) = &config.smtp_tls_cert {
+    set_if_absent("RUSTMAIL_SMTP_TLS_CERT", v);
+  }
+  if let Some(v) = &config.smtp_tls_key {
+    set_if_absent("RUSTMAIL_SMTP_TLS_KEY", v);
   }
   if let Some(v) = config.retention {
     set_if_absent("RUSTMAIL_RETENTION", &v.to_string());
@@ -234,6 +249,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
     host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
     port: args.smtp_port,
     max_message_size: args.max_message_size,
+    tls: None,
   };
   let smtp_server = SmtpServer::new(smtp_config, smtp_tx);
 
@@ -311,6 +327,64 @@ fn default_db_path() -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("."))
     .join("rustmail")
     .join("rustmail.db")
+}
+
+fn install_rustls_crypto_provider() {
+  if rustls::crypto::CryptoProvider::get_default().is_none() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+  }
+}
+
+fn load_smtp_tls_config(cert_path: &Path, key_path: &Path) -> Result<TlsConfig> {
+  install_rustls_crypto_provider();
+
+  let cert_file = std::fs::File::open(cert_path).with_context(|| {
+    format!(
+      "failed to open SMTP TLS certificate: {}",
+      cert_path.display()
+    )
+  })?;
+  let key_file = std::fs::File::open(key_path).with_context(|| {
+    format!(
+      "failed to open SMTP TLS private key: {}",
+      key_path.display()
+    )
+  })?;
+
+  let cert_chain = rustls_pemfile::certs(&mut BufReader::new(cert_file))
+    .collect::<Result<Vec<_>, _>>()
+    .context("failed to parse SMTP TLS certificate PEM")?;
+  if cert_chain.is_empty() {
+    anyhow::bail!("SMTP TLS certificate file did not contain any certificates");
+  }
+
+  let mut keys = rustls_pemfile::private_key(&mut BufReader::new(key_file))
+    .context("failed to parse SMTP TLS private key PEM")?;
+  let private_key = keys.take().ok_or_else(|| {
+    anyhow::anyhow!("SMTP TLS private key file did not contain a supported private key")
+  })?;
+
+  let server_config = rustls::ServerConfig::builder()
+    .with_no_client_auth()
+    .with_single_cert(cert_chain, private_key)
+    .context("failed to build SMTP TLS server config")?;
+
+  Ok(TlsConfig {
+    server_config: Arc::new(server_config),
+  })
+}
+
+fn build_smtp_tls_config(cert: Option<&Path>, key: Option<&Path>) -> Result<Option<TlsConfig>> {
+  match (cert, key) {
+    (Some(cert), Some(key)) => load_smtp_tls_config(cert, key).map(Some),
+    (None, None) => Ok(None),
+    (Some(_), None) => {
+      anyhow::bail!("SMTP TLS configuration requires both --smtp-tls-cert and --smtp-tls-key")
+    }
+    (None, Some(_)) => {
+      anyhow::bail!("SMTP TLS configuration requires both --smtp-tls-cert and --smtp-tls-key")
+    }
+  }
 }
 
 fn validate_webhook_url(url: &str) -> Result<()> {
@@ -393,6 +467,8 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     .init();
 
   let bind_addr = parse_bind_addr(&args.bind)?;
+  let smtp_tls =
+    build_smtp_tls_config(args.smtp_tls_cert.as_deref(), args.smtp_tls_key.as_deref())?;
 
   if !bind_addr.is_loopback() {
     tracing::warn!(
@@ -434,6 +510,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     host: bind_addr,
     port: args.smtp_port,
     max_message_size: args.max_message_size,
+    tls: smtp_tls,
   };
   let smtp_server = SmtpServer::new(smtp_config, smtp_tx);
 

@@ -1,16 +1,22 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+
+use rustls::ServerConfig as RustlsServerConfig;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info, warn};
-
-use tokio::io::AsyncWriteExt;
 
 use crate::message::ReceivedMessage;
 use crate::session::Session;
 
 const MAX_CONCURRENT_SESSIONS: usize = 100;
+
+#[derive(Debug, Clone)]
+pub struct TlsConfig {
+  pub server_config: Arc<RustlsServerConfig>,
+}
 
 /// Configuration for the SMTP capture server.
 #[derive(Debug, Clone)]
@@ -21,6 +27,8 @@ pub struct SmtpServerConfig {
   pub port: u16,
   /// Maximum accepted message size in bytes (default: 10 MiB).
   pub max_message_size: usize,
+  /// Optional TLS configuration for STARTTLS support.
+  pub tls: Option<TlsConfig>,
 }
 
 impl Default for SmtpServerConfig {
@@ -29,6 +37,7 @@ impl Default for SmtpServerConfig {
       host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
       port: 1025,
       max_message_size: 10 * 1024 * 1024,
+      tls: None,
     }
   }
 }
@@ -75,8 +84,9 @@ impl SmtpServer {
           };
           let sender = self.sender.clone();
           let max_size = self.config.max_message_size;
+          let tls = self.config.tls.clone();
           tokio::spawn(async move {
-            let mut session = Session::new(stream, peer, sender, max_size);
+            let mut session = Session::new(stream, peer, sender, max_size, tls);
             match tokio::time::timeout(Duration::from_secs(300), session.handle()).await {
               Ok(Err(e)) => error!(peer = %peer, error = %e, "SMTP session error"),
               Err(_) => warn!(peer = %peer, "SMTP session timed out after 5 minutes"),

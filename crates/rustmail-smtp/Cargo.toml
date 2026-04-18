@@ -21,3 +21,5 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
 ulid = { workspace = true }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }

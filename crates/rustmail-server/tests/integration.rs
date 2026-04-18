@@ -1,15 +1,83 @@
+use std::io::BufReader as StdBufReader;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use rustls::pki_types::{CertificateDer, ServerName};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio_rustls::TlsConnector;
 
 use rustmail_api::{AppState, WsEvent, router};
-use rustmail_smtp::{ReceivedMessage, Session, SmtpServer, SmtpServerConfig};
+use rustmail_smtp::{ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, initialize_database};
 
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+const STARTTLS_CERT_PATH: &str = concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/tests/fixtures/starttls-cert.pem"
+);
+const STARTTLS_KEY_PATH: &str = concat!(
+  env!("CARGO_MANIFEST_DIR"),
+  "/tests/fixtures/starttls-key.pem"
+);
+
+fn starttls_cert_path() -> PathBuf {
+  PathBuf::from(STARTTLS_CERT_PATH)
+}
+
+fn starttls_key_path() -> PathBuf {
+  PathBuf::from(STARTTLS_KEY_PATH)
+}
+
+fn load_test_tls_config() -> TlsConfig {
+  let cert_file = std::fs::File::open(starttls_cert_path()).unwrap();
+  let key_file = std::fs::File::open(starttls_key_path()).unwrap();
+
+  if rustls::crypto::CryptoProvider::get_default().is_none() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+  }
+
+  let certs = rustls_pemfile::certs(&mut StdBufReader::new(cert_file))
+    .collect::<Result<Vec<_>, _>>()
+    .unwrap();
+  let key = rustls_pemfile::private_key(&mut StdBufReader::new(key_file))
+    .unwrap()
+    .unwrap();
+
+  let server_config = rustls::ServerConfig::builder()
+    .with_no_client_auth()
+    .with_single_cert(certs, key)
+    .unwrap();
+
+  TlsConfig {
+    server_config: Arc::new(server_config),
+  }
+}
+
+fn load_test_cert_der() -> CertificateDer<'static> {
+  let cert_file = std::fs::File::open(starttls_cert_path()).unwrap();
+  rustls_pemfile::certs(&mut StdBufReader::new(cert_file))
+    .next()
+    .unwrap()
+    .unwrap()
+}
+
+fn test_tls_connector() -> TlsConnector {
+  if rustls::crypto::CryptoProvider::get_default().is_none() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+  }
+
+  let mut root_store = rustls::RootCertStore::empty();
+  root_store.add(load_test_cert_der()).unwrap();
+
+  let client_config = rustls::ClientConfig::builder()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+
+  TlsConnector::from(Arc::new(client_config))
+}
 
 struct ChildGuard(Option<tokio::process::Child>);
 
@@ -48,20 +116,61 @@ fn spawn_smtp_with_real_session(
   listener: tokio::net::TcpListener,
   tx: mpsc::Sender<ReceivedMessage>,
 ) {
+  spawn_smtp_with_real_session_and_tls(listener, tx, None);
+}
+
+fn spawn_smtp_with_real_session_and_tls(
+  listener: tokio::net::TcpListener,
+  tx: mpsc::Sender<ReceivedMessage>,
+  tls: Option<TlsConfig>,
+) {
   tokio::spawn(async move {
     loop {
       let Ok((stream, peer)) = listener.accept().await else {
         break;
       };
       let sender = tx.clone();
+      let tls = tls.clone();
       tokio::spawn(async move {
-        let mut session = Session::new(stream, peer, sender, MAX_MESSAGE_SIZE);
+        let mut session = Session::new(stream, peer, sender, MAX_MESSAGE_SIZE, tls);
         if let Err(e) = session.handle().await {
           eprintln!("SMTP session error: {e}");
         }
       });
     }
   });
+}
+
+async fn read_smtp_response_line<S>(stream: &mut BufReader<S>) -> String
+where
+  S: AsyncRead + AsyncWrite + Unpin,
+{
+  let mut line = String::new();
+  let bytes = stream.read_line(&mut line).await.unwrap();
+  assert!(bytes > 0, "expected SMTP response line");
+  line
+}
+
+async fn read_ehlo_response<S>(stream: &mut BufReader<S>) -> String
+where
+  S: AsyncRead + AsyncWrite + Unpin,
+{
+  stream.write_all(b"EHLO test\r\n").await.unwrap();
+
+  let mut response = String::new();
+  loop {
+    let line = read_smtp_response_line(stream).await;
+    response.push_str(&line);
+    if line.starts_with("250 ") {
+      break;
+    }
+  }
+
+  response
+}
+
+async fn read_banner(stream: &mut BufReader<TcpStream>) -> String {
+  read_smtp_response_line(stream).await
 }
 
 async fn smtp_send(addr: std::net::SocketAddr, from: &str, to: &str, subject: &str, body: &str) {
@@ -349,6 +458,189 @@ async fn smtp_auth_plain_inline() {
 }
 
 #[tokio::test]
+async fn smtp_ehlo_omits_starttls_when_tls_not_configured() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _) = mpsc::channel(256);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let banner = read_banner(&mut stream).await;
+  assert!(banner.starts_with("220"));
+
+  let ehlo = read_ehlo_response(&mut stream).await;
+  assert!(!ehlo.contains("STARTTLS"));
+  assert!(ehlo.contains("AUTH PLAIN LOGIN"));
+}
+
+#[tokio::test]
+async fn smtp_ehlo_advertises_starttls_when_tls_configured() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _) = mpsc::channel(256);
+  spawn_smtp_with_real_session_and_tls(listener, tx, Some(load_test_tls_config()));
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let banner = read_banner(&mut stream).await;
+  assert!(banner.starts_with("220"));
+
+  let ehlo = read_ehlo_response(&mut stream).await;
+  assert!(ehlo.contains("STARTTLS"));
+  assert!(ehlo.contains("AUTH PLAIN LOGIN"));
+  assert!(ehlo.contains("PIPELINING"));
+}
+
+#[tokio::test]
+async fn smtp_starttls_upgrades_connection_and_accepts_message() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, mut rx) = mpsc::channel(256);
+  spawn_smtp_with_real_session_and_tls(listener, tx, Some(load_test_tls_config()));
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let banner = read_banner(&mut stream).await;
+  assert!(banner.starts_with("220"));
+
+  let ehlo = read_ehlo_response(&mut stream).await;
+  assert!(ehlo.contains("STARTTLS"));
+
+  stream.write_all(b"STARTTLS\r\n").await.unwrap();
+  let response = read_smtp_response_line(&mut stream).await;
+  assert_eq!(response, "220 Ready to start TLS\r\n");
+
+  let connector = test_tls_connector();
+  let server_name = ServerName::try_from("localhost").unwrap();
+  let tls_stream = connector
+    .connect(server_name, stream.into_inner())
+    .await
+    .unwrap();
+  let mut tls_stream = BufReader::new(tls_stream);
+
+  let tls_ehlo = read_ehlo_response(&mut tls_stream).await;
+  assert!(!tls_ehlo.contains("STARTTLS"));
+  assert!(tls_ehlo.contains("AUTH PLAIN LOGIN"));
+
+  tls_stream
+    .write_all(b"MAIL FROM:<alice@test.com>\r\n")
+    .await
+    .unwrap();
+  assert_eq!(read_smtp_response_line(&mut tls_stream).await, "250 OK\r\n");
+
+  tls_stream
+    .write_all(b"RCPT TO:<bob@test.com>\r\n")
+    .await
+    .unwrap();
+  assert_eq!(read_smtp_response_line(&mut tls_stream).await, "250 OK\r\n");
+
+  tls_stream.write_all(b"DATA\r\n").await.unwrap();
+  assert!(
+    read_smtp_response_line(&mut tls_stream)
+      .await
+      .starts_with("354 ")
+  );
+
+  tls_stream
+    .write_all(
+      b"From: alice@test.com\r\nTo: bob@test.com\r\nSubject: STARTTLS Test\r\n\r\nHello over TLS\r\n.\r\n",
+    )
+    .await
+    .unwrap();
+  assert_eq!(read_smtp_response_line(&mut tls_stream).await, "250 OK\r\n");
+
+  tls_stream.write_all(b"QUIT\r\n").await.unwrap();
+  assert_eq!(
+    read_smtp_response_line(&mut tls_stream).await,
+    "221 Bye\r\n"
+  );
+
+  let message = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+    .await
+    .unwrap()
+    .unwrap();
+  assert_eq!(message.sender, "alice@test.com");
+  assert_eq!(message.recipients, vec!["bob@test.com"]);
+  assert!(String::from_utf8_lossy(&message.raw).contains("Subject: STARTTLS Test"));
+}
+
+#[tokio::test]
+async fn smtp_starttls_resets_session_state() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _) = mpsc::channel(256);
+  spawn_smtp_with_real_session_and_tls(listener, tx, Some(load_test_tls_config()));
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let _ = read_banner(&mut stream).await;
+  let _ = read_ehlo_response(&mut stream).await;
+
+  stream
+    .write_all(b"MAIL FROM:<before@test.com>\r\n")
+    .await
+    .unwrap();
+  assert_eq!(read_smtp_response_line(&mut stream).await, "250 OK\r\n");
+
+  stream.write_all(b"STARTTLS\r\n").await.unwrap();
+  assert_eq!(
+    read_smtp_response_line(&mut stream).await,
+    "220 Ready to start TLS\r\n"
+  );
+
+  let connector = test_tls_connector();
+  let server_name = ServerName::try_from("localhost").unwrap();
+  let tls_stream = connector
+    .connect(server_name, stream.into_inner())
+    .await
+    .unwrap();
+  let mut tls_stream = BufReader::new(tls_stream);
+
+  tls_stream.write_all(b"DATA\r\n").await.unwrap();
+  assert_eq!(
+    read_smtp_response_line(&mut tls_stream).await,
+    "503 Bad sequence of commands\r\n"
+  );
+}
+
+#[tokio::test]
+async fn smtp_starttls_rejects_second_upgrade() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _) = mpsc::channel(256);
+  spawn_smtp_with_real_session_and_tls(listener, tx, Some(load_test_tls_config()));
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let _ = read_banner(&mut stream).await;
+  let _ = read_ehlo_response(&mut stream).await;
+
+  stream.write_all(b"STARTTLS\r\n").await.unwrap();
+  assert_eq!(
+    read_smtp_response_line(&mut stream).await,
+    "220 Ready to start TLS\r\n"
+  );
+
+  let connector = test_tls_connector();
+  let server_name = ServerName::try_from("localhost").unwrap();
+  let tls_stream = connector
+    .connect(server_name, stream.into_inner())
+    .await
+    .unwrap();
+  let mut tls_stream = BufReader::new(tls_stream);
+
+  let tls_ehlo = read_ehlo_response(&mut tls_stream).await;
+  assert!(!tls_ehlo.contains("STARTTLS"));
+
+  tls_stream.write_all(b"STARTTLS\r\n").await.unwrap();
+  assert_eq!(
+    read_smtp_response_line(&mut tls_stream).await,
+    "503 Bad sequence of commands\r\n"
+  );
+}
+
+#[tokio::test]
 async fn smtp_send_and_receive_via_channel() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
@@ -605,7 +897,7 @@ async fn smtp_rejects_oversized_message() {
 
   tokio::spawn(async move {
     let (stream, peer) = listener.accept().await.unwrap();
-    let mut session = Session::new(stream, peer, tx, small_limit);
+    let mut session = Session::new(stream, peer, tx, small_limit, None);
     let _ = session.handle().await;
   });
 
@@ -682,6 +974,7 @@ async fn smtp_session_limit_rejects_excess() {
     host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
     port: smtp_port,
     max_message_size: MAX_MESSAGE_SIZE,
+    tls: None,
   };
   let server = SmtpServer::new(config, tx);
   tokio::spawn(async move {
@@ -823,4 +1116,51 @@ async fn config_toml_used_when_no_env() {
 
   let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
   wait_for_tcp(addr).await;
+}
+
+#[tokio::test]
+async fn smtp_tls_requires_both_cert_and_key() {
+  let smtp_port = portpicker::pick_unused_port().expect("no free port");
+  let http_port = portpicker::pick_unused_port().expect("no free port");
+  let cert_path = starttls_cert_path();
+  let key_path = starttls_key_path();
+
+  for (cert, key) in [
+    (Some(cert_path.as_path()), None),
+    (None, Some(key_path.as_path())),
+  ] {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"));
+    command
+      .args([
+        "serve",
+        "--smtp-port",
+        &smtp_port.to_string(),
+        "--http-port",
+        &http_port.to_string(),
+        "--ephemeral",
+        "--log-level",
+        "warn",
+      ])
+      .stdout(std::process::Stdio::piped())
+      .stderr(std::process::Stdio::piped());
+
+    if let Some(cert) = cert {
+      command.arg("--smtp-tls-cert").arg(cert);
+    }
+    if let Some(key) = key {
+      command.arg("--smtp-tls-key").arg(key);
+    }
+
+    let output = command
+      .output()
+      .await
+      .expect("failed to run rustmail serve");
+    assert!(!output.status.success(), "expected startup failure");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+      stderr.contains("SMTP TLS configuration requires both --smtp-tls-cert and --smtp-tls-key"),
+      "unexpected stderr: {stderr}"
+    );
+  }
 }

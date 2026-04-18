@@ -196,20 +196,14 @@ impl App {
   async fn handle_list_key(&mut self, key: KeyEvent) {
     match key.code {
       KeyCode::Char('q') => self.running = false,
-      KeyCode::Char('j') | KeyCode::Down => {
-        if self.select_next() {
-          self.load_preview().await;
-        }
+      KeyCode::Char('j') | KeyCode::Down if self.select_next() => {
+        self.load_preview().await;
       }
-      KeyCode::Char('k') | KeyCode::Up => {
-        if self.select_prev() {
-          self.load_preview().await;
-        }
+      KeyCode::Char('k') | KeyCode::Up if self.select_prev() => {
+        self.load_preview().await;
       }
-      KeyCode::Char('g') => {
-        if self.select_message(0) {
-          self.load_preview().await;
-        }
+      KeyCode::Char('g') if self.select_message(0) => {
+        self.load_preview().await;
       }
       KeyCode::Char('G') => {
         let last = self.messages.len().saturating_sub(1);

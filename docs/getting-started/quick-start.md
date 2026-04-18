@@ -32,6 +32,12 @@ Configure your application to send mail to `localhost:1025`. To verify the SMTP 
 swaks --to test@example.com --server localhost --port 1025
 ```
 
+If you enabled SMTP `STARTTLS`, use explicit upgrade on the same port:
+
+```sh
+swaks --to test@example.com --server localhost --port 1025 --tls
+```
+
 ### Using nc
 
 ```sh
