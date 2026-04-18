@@ -13,11 +13,15 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--retention` | `RUSTMAIL_RETENTION` | `0` | Auto-delete messages after N hours. `0` = keep forever. |
 | `--max-messages` | `RUSTMAIL_MAX_MESSAGES` | `0` | Maximum messages to retain. Oldest are purged when exceeded. `0` = unlimited. |
 | `--max-message-size` | `RUSTMAIL_MAX_MESSAGE_SIZE` | `10485760` | Maximum accepted message size in bytes (default: 10 MB). |
+| `--smtp-tls-cert` | `RUSTMAIL_SMTP_TLS_CERT` | — | Path to a PEM certificate used to enable optional SMTP STARTTLS. Must be set together with `--smtp-tls-key`. |
+| `--smtp-tls-key` | `RUSTMAIL_SMTP_TLS_KEY` | — | Path to a PEM private key used to enable optional SMTP STARTTLS. Must be set together with `--smtp-tls-cert`. |
 | `--ephemeral` | `RUSTMAIL_EPHEMERAL` | `false` | Use in-memory SQLite. No data is written to disk. |
 | `--webhook-url` | `RUSTMAIL_WEBHOOK_URL` | — | HTTP endpoint to POST to on every new message. |
 | `--log-level` | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`. |
 | `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
 | `--config` | — | — | Path to an optional TOML configuration file. |
+
+`STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured. After the client upgrades the connection, it must send `EHLO` again before continuing the session.
 
 ## Examples
 
@@ -30,6 +34,9 @@ rustmail serve --retention 24 --max-messages 1000
 
 # Enable webhook notifications
 rustmail serve --webhook-url https://hooks.example.com/email
+
+# Enable optional SMTP STARTTLS on the existing SMTP port
+rustmail serve --smtp-tls-cert ./certs/localhost.pem --smtp-tls-key ./certs/localhost-key.pem
 
 # Allow releasing emails to a specific SMTP server
 rustmail serve --release-host smtp.mailgun.org:587

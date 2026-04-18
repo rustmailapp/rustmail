@@ -64,6 +64,8 @@ All configuration is done via `RUSTMAIL_*` environment variables:
 | `RUSTMAIL_RETENTION` | `0` | Auto-delete messages after N hours (`0` = keep forever) |
 | `RUSTMAIL_MAX_MESSAGES` | `0` | Max messages to retain (`0` = unlimited) |
 | `RUSTMAIL_MAX_MESSAGE_SIZE` | `10485760` | Max accepted message size in bytes (10 MB) |
+| `RUSTMAIL_SMTP_TLS_CERT` | — | Path to a PEM certificate for optional SMTP STARTTLS |
+| `RUSTMAIL_SMTP_TLS_KEY` | — | Path to a PEM private key for optional SMTP STARTTLS |
 | `RUSTMAIL_EPHEMERAL` | `false` | Use in-memory SQLite (no data written to disk) |
 | `RUSTMAIL_WEBHOOK_URL` | — | URL to POST on every new message |
 | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
@@ -75,6 +77,23 @@ All configuration is done via `RUSTMAIL_*` environment variables:
 |---|---|---|
 | `1025` | TCP | SMTP server |
 | `8025` | TCP | HTTP API, WebSocket, and Web UI |
+
+`STARTTLS` uses the normal SMTP port and is advertised only when both `RUSTMAIL_SMTP_TLS_CERT` and `RUSTMAIL_SMTP_TLS_KEY` are set.
+
+## Optional STARTTLS
+
+Mount your TLS files read-only and set both environment variables:
+
+```sh
+docker run \
+  -p 1025:1025 -p 8025:8025 \
+  -v "$PWD/certs:/certs:ro" \
+  -e RUSTMAIL_SMTP_TLS_CERT=/certs/smtp-cert.pem \
+  -e RUSTMAIL_SMTP_TLS_KEY=/certs/smtp-key.pem \
+  smyile/rustmail:latest
+```
+
+Clients must issue `EHLO`, then `STARTTLS`, and then `EHLO` again after the TLS handshake completes.
 
 ## Features
 
