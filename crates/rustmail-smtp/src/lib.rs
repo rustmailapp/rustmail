@@ -38,6 +38,6 @@ mod server;
 mod session;
 
 pub use message::ReceivedMessage;
-pub use server::{SmtpServer, SmtpServerConfig};
+pub use server::{SmtpServer, SmtpServerConfig, TlsConfig};
 #[cfg(feature = "test-util")]
 pub use session::{Session, SessionError};
