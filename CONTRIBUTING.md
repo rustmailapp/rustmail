@@ -94,6 +94,17 @@ docs: add reverse proxy deployment guide
 - No unrelated formatting or refactoring changes
 - Clear description of *why* the change is needed
 
+### Adding a User-Facing Feature
+
+When a PR introduces a new user-visible feature (CLI flag, API endpoint, UI capability), tick each item that applies:
+
+- [ ] Row added to the features table in `README.md`
+- [ ] Feature page under `docs/features/` (or relevant subsection)
+- [ ] `docs/api.yaml` updated if the feature exposes an HTTP endpoint
+- [ ] `docs/configuration/cli-flags.md` updated if a CLI flag changed
+- [ ] Feature card added to `rustmailapp/rustmail-www` (homepage grid) if it's a headline capability
+- [ ] Commit message uses the `feat:` Conventional Commit prefix so it shows up in the release changelog
+
 ## Architecture
 
 See the [Architecture](https://docs.rustmail.app/architecture) page for crate layout, data flow, and design decisions.
