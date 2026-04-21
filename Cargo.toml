@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rustmailapp/rustmail"
@@ -42,10 +42,10 @@ rustls = "0.23"
 tokio-rustls = "0.26"
 rustls-pemfile = "2.2"
 
-rustmail-smtp = { path = "crates/rustmail-smtp", version = "0.2.2" }
-rustmail-storage = { path = "crates/rustmail-storage", version = "0.2.2" }
-rustmail-api = { path = "crates/rustmail-api", version = "0.2.2" }
-rustmail-tui = { path = "crates/rustmail-tui", version = "0.2.2" }
+rustmail-smtp = { path = "crates/rustmail-smtp", version = "0.3.0" }
+rustmail-storage = { path = "crates/rustmail-storage", version = "0.3.0" }
+rustmail-api = { path = "crates/rustmail-api", version = "0.3.0" }
+rustmail-tui = { path = "crates/rustmail-tui", version = "0.3.0" }
 
 [workspace.metadata.release]
 shared-version = "workspace"
