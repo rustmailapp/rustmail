@@ -76,7 +76,7 @@ Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases
 
 ## Features
 
-| | |
+| Feature | Description |
 |---|---|
 | **Persistent storage** | SQLite-backed, emails survive restarts. `--ephemeral` for CI. |
 | **Full-text search** | FTS5 across subject, body, sender, and recipients. |
