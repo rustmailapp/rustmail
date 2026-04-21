@@ -718,8 +718,9 @@ mod retention_tests {
   fn drain_delete_events(rx: &mut broadcast::Receiver<WsEvent>) -> Vec<String> {
     let mut ids = Vec::new();
     while let Ok(event) = rx.try_recv() {
-      if let WsEvent::MessageDelete { id } = event {
-        ids.push(id);
+      match event {
+        WsEvent::MessageDelete { id } => ids.push(id),
+        other => panic!("unexpected WebSocket event from retention tick: {other:?}"),
       }
     }
     ids
@@ -771,45 +772,50 @@ mod retention_tests {
     let mut ids = Vec::new();
     for i in 0..5 {
       ids.push(insert_sample(&repo, &format!("msg-{i}")).await);
-      // Keep ULIDs strictly monotonic so the two newest-by-id are deterministic.
-      tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
+
+    // Storage orders `trim_to_max` by ULID DESC, so derive survivors/deleted
+    // from the sorted ids instead of assuming insertion order equals ULID order.
+    let mut newest_first = ids.clone();
+    newest_first.sort_by(|a, b| b.cmp(a));
+    let expected_survivors: Vec<String> = newest_first.iter().take(2).cloned().collect();
+    let expected_deleted: Vec<String> = newest_first.iter().skip(2).cloned().collect();
 
     run_retention_tick(&repo, &state, 0, 2, OffsetDateTime::now_utc()).await;
 
     assert_eq!(repo.count().await.unwrap(), 2);
     let events = drain_delete_events(&mut rx);
-    let expected_deleted: Vec<String> = ids.iter().take(3).cloned().collect();
     let mut got = events.clone();
     got.sort();
     let mut want = expected_deleted.clone();
     want.sort();
     assert_eq!(got, want, "emitted delete events must match deleted ids");
 
-    // The two newest ids survive.
-    for surviving in ids.iter().skip(3) {
+    for surviving in &expected_survivors {
       assert_eq!(repo.get(surviving).await.unwrap().id, *surviving);
     }
   }
 
   #[tokio::test]
-  async fn tick_emits_events_for_combined_purge_and_trim() {
+  async fn tick_emits_events_when_both_policies_enabled() {
     let (repo, state, mut rx) = build_state().await;
 
     let mut ids = Vec::new();
     for i in 0..4 {
       ids.push(insert_sample(&repo, &format!("m-{i}")).await);
-      tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
 
-    // Cutoff keeps all four rows; trim drops the oldest two, so exactly two
-    // delete events should fire and match the two oldest ids.
+    // Cutoff keeps all four rows; trim drops the oldest two by ULID, so
+    // exactly two delete events should fire and match those ids.
     run_retention_tick(&repo, &state, 24, 2, OffsetDateTime::now_utc()).await;
 
     assert_eq!(repo.count().await.unwrap(), 2);
     let mut got = drain_delete_events(&mut rx);
     got.sort();
-    let mut want: Vec<String> = ids.iter().take(2).cloned().collect();
+
+    let mut newest_first = ids.clone();
+    newest_first.sort_by(|a, b| b.cmp(a));
+    let mut want: Vec<String> = newest_first.into_iter().skip(2).collect();
     want.sort();
     assert_eq!(got, want);
   }
