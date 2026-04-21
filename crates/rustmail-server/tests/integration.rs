@@ -1165,9 +1165,7 @@ async fn smtp_tls_requires_both_cert_and_key() {
   }
 }
 
-async fn connect_smtp_and_greet(
-  addr: std::net::SocketAddr,
-) -> BufReader<TcpStream> {
+async fn connect_smtp_and_greet(addr: std::net::SocketAddr) -> BufReader<TcpStream> {
   let stream = TcpStream::connect(addr).await.unwrap();
   let mut stream = BufReader::new(stream);
   let _banner = read_banner(&mut stream).await;

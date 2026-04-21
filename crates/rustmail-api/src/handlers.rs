@@ -678,8 +678,7 @@ mod auth_parser_tests {
 
   #[test]
   fn auth_results_header_parses_all_three_methods() {
-    let value =
-      "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=a@ex.com; dmarc=pass action=none";
+    let value = "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=a@ex.com; dmarc=pass action=none";
     let mut dkim = Vec::new();
     let mut spf = Vec::new();
     let mut dmarc = Vec::new();

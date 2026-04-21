@@ -1027,7 +1027,11 @@ mod tests {
     }
     ids.sort();
     ids.dedup();
-    assert_eq!(ids.len(), 32, "ULIDs must be unique under concurrent inserts");
+    assert_eq!(
+      ids.len(),
+      32,
+      "ULIDs must be unique under concurrent inserts"
+    );
     assert_eq!(repo.count().await.unwrap(), 32);
   }
 
