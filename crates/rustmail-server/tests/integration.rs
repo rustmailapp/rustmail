@@ -1164,3 +1164,119 @@ async fn smtp_tls_requires_both_cert_and_key() {
     );
   }
 }
+
+async fn connect_smtp_and_greet(
+  addr: std::net::SocketAddr,
+) -> BufReader<TcpStream> {
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  let _banner = read_banner(&mut stream).await;
+  stream
+}
+
+async fn send_line<S>(stream: &mut BufReader<S>, line: &str) -> String
+where
+  S: AsyncRead + AsyncWrite + Unpin,
+{
+  stream.write_all(line.as_bytes()).await.unwrap();
+  stream.write_all(b"\r\n").await.unwrap();
+  read_smtp_response_line(stream).await
+}
+
+#[tokio::test]
+async fn smtp_rejects_mail_from_before_ehlo() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let resp = send_line(&mut stream, "MAIL FROM:<alice@test.com>").await;
+  assert_eq!(resp, "503 Bad sequence of commands\r\n");
+}
+
+#[tokio::test]
+async fn smtp_rejects_rcpt_to_before_mail_from() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let resp = send_line(&mut stream, "RCPT TO:<bob@test.com>").await;
+  assert_eq!(resp, "503 Bad sequence of commands\r\n");
+}
+
+#[tokio::test]
+async fn smtp_rejects_data_before_mail_from() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let resp = send_line(&mut stream, "DATA").await;
+  assert_eq!(resp, "503 Bad sequence of commands\r\n");
+}
+
+#[tokio::test]
+async fn smtp_rejects_data_without_recipients() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let mail = send_line(&mut stream, "MAIL FROM:<alice@test.com>").await;
+  assert_eq!(mail, "250 OK\r\n");
+  let resp = send_line(&mut stream, "DATA").await;
+  assert_eq!(resp, "503 Bad sequence of commands\r\n");
+}
+
+#[tokio::test]
+async fn smtp_rejects_excess_recipients() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let mail = send_line(&mut stream, "MAIL FROM:<alice@test.com>").await;
+  assert_eq!(mail, "250 OK\r\n");
+
+  for i in 0..100 {
+    let resp = send_line(&mut stream, &format!("RCPT TO:<r{i}@test.com>")).await;
+    assert_eq!(resp, "250 OK\r\n", "recipient {i} should be accepted");
+  }
+
+  let overflow = send_line(&mut stream, "RCPT TO:<overflow@test.com>").await;
+  assert_eq!(overflow, "452 Too many recipients\r\n");
+}
+
+#[tokio::test]
+async fn smtp_unknown_command_returns_500() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let resp = send_line(&mut stream, "WAT").await;
+  assert_eq!(resp, "500 Unknown command\r\n");
+}
+
+#[tokio::test]
+async fn smtp_noop_allowed_before_ehlo() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let resp = send_line(&mut stream, "NOOP").await;
+  assert_eq!(resp, "250 OK\r\n");
+}
