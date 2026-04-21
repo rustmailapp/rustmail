@@ -2,7 +2,7 @@
 
 Tracks gaps between what RustMail claims and what is verified. Work through tier by tier.
 
-Last audited: 2026-03-24
+Last audited: 2026-04-21
 
 ---
 
@@ -12,7 +12,7 @@ Claims that are false or unverified. Fix before any public release.
 
 ### False Claims
 
-- [x] **STARTTLS**: RUSTMAIL.md comparison table said "Yes" — zero implementation exists. **Fixed**: changed to "Planned" in comparison table, §7, and §8. (2026-03-24)
+- [x] **STARTTLS**: originally marked "Yes" in RUSTMAIL.md with no implementation, then downgraded to "Planned" (2026-03-24). **Shipped in v0.3.0** via PR #22 (2026-04-18): full RFC 3207 upgrade with state reset, both-or-neither config validation, 6 integration tests. (2026-04-21)
 - [x] **CSV export**: Phase 4 in RUSTMAIL.md §11 listed CSV — never implemented. **Fixed**: removed CSV from §8 table and Phase 4 list. (2026-03-24)
 
 ### Untested Endpoints
@@ -32,7 +32,7 @@ Things that work but lack automated verification.
 
 - [x] **SMTP oversized message rejection**: `smtp_rejects_oversized_message` — sets 256-byte limit, sends 512-byte body, asserts 552 rejection. Also verifies EHLO SIZE reflects the configured limit. (2026-03-24)
 - [x] **Config precedence**: 2 tests — `config_env_overrides_toml` (writes TOML with port A, sets env to port B, asserts server binds to B) and `config_toml_used_when_no_env` (TOML only, asserts server uses TOML port). (2026-03-24)
-- [ ] **Retention background task**: `repo.trim_to_max()` and `repo.delete_older_than()` are tested, but the `select!` loop in `main.rs:465` (scheduling, interval, `pending().await` fallback) is not. Hard to test in isolation — non-deterministic timing.
+- [x] **Retention background task**: extracted `run_retention_tick` from the scheduler loop (PR #23, 2026-04-18) with `now` injection for deterministic tests. 5 tests cover no-op gating, purge, preserve, trim, and combined-policy emission. (2026-04-21)
 - [ ] **Embedded UI serving**: `rust-embed` integration + SPA fallback routing. Requires a built UI (`make build`) to test meaningfully — the test binary doesn't embed assets.
 - [x] **SMTP concurrent session limit**: `smtp_session_limit_rejects_excess` — holds 100 TCP connections open via `SmtpServer::run()`, verifies 101st is silently dropped (no banner, connection closed or times out). (2026-03-24)
 - [x] **WebSocket connection limit**: `ws_connection_limit_returns_503` — opens 50 WebSocket connections via `tokio-tungstenite`, verifies 51st fails to upgrade. (2026-03-24)
@@ -75,7 +75,7 @@ All doc-vs-code inconsistencies have been fixed.
 
 ### README.md
 
-- [ ] Comparison table doesn't mention STARTTLS — not urgent since it's absent from the code too, but should be added once implemented
+- [x] Comparison table now includes STARTTLS row (README.md:89). (2026-04-21)
 
 ### OpenAPI spec (docs/api.yaml)
 
@@ -96,4 +96,3 @@ These are in the spec as "Planned" and don't need action now. Listed for complet
 - Multi-instance sync (SQLite replication)
 - Plugin system (WASM-based)
 - CSV export format
-- STARTTLS support
