@@ -23,3 +23,6 @@ RUSTMAIL.md
 # Docs
 docs/.vitepress/dist
 docs/.vitepress/cache
+
+.hermes
+.serena
