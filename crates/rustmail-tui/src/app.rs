@@ -740,3 +740,130 @@ async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> 
 
   Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn sample_summary(id: &str, is_read: bool) -> MessageSummary {
+    MessageSummary {
+      id: id.to_string(),
+      sender: "a@test.com".to_string(),
+      recipients: vec!["b@test.com".to_string()],
+      subject: Some("s".to_string()),
+      size: 10,
+      has_attachments: false,
+      is_read,
+      is_starred: false,
+      tags: vec![],
+      created_at: "2026-04-21T00:00:00Z".to_string(),
+    }
+  }
+
+  fn app_with_messages(count: usize) -> App {
+    let mut app = App::new("http://127.0.0.1:1".into(), "ws://127.0.0.1:1/ws".into());
+    app.messages = (0..count)
+      .map(|i| sample_summary(&format!("id-{i}"), i % 2 == 0))
+      .collect();
+    app.total = count as i64;
+    app.sync_list_state();
+    app
+  }
+
+  #[test]
+  fn select_next_on_empty_list_is_noop() {
+    let mut app = app_with_messages(0);
+    assert!(!app.select_next());
+    assert_eq!(app.selected, 0);
+  }
+
+  #[test]
+  fn select_next_clamps_at_last_index() {
+    let mut app = app_with_messages(3);
+    app.selected = 2;
+    assert!(!app.select_next(), "already at last, should return false");
+    assert_eq!(app.selected, 2);
+  }
+
+  #[test]
+  fn select_next_advances_from_middle() {
+    let mut app = app_with_messages(5);
+    app.selected = 1;
+    assert!(app.select_next());
+    assert_eq!(app.selected, 2);
+  }
+
+  #[test]
+  fn select_prev_at_zero_stays_at_zero() {
+    let mut app = app_with_messages(3);
+    app.selected = 0;
+    assert!(!app.select_prev());
+    assert_eq!(app.selected, 0);
+  }
+
+  #[test]
+  fn select_prev_on_empty_list_is_noop() {
+    let mut app = app_with_messages(0);
+    assert!(!app.select_prev());
+    assert_eq!(app.selected, 0);
+  }
+
+  #[test]
+  fn select_message_rejects_same_index() {
+    let mut app = app_with_messages(3);
+    app.selected = 1;
+    assert!(!app.select_message(1));
+  }
+
+  #[test]
+  fn select_message_rejects_out_of_bounds() {
+    let mut app = app_with_messages(2);
+    assert!(!app.select_message(99));
+    assert_eq!(app.selected, 0);
+  }
+
+  #[test]
+  fn switch_preview_tab_changes_tab() {
+    let mut app = app_with_messages(1);
+    assert_eq!(app.preview_tab, PreviewTab::Text);
+    app.switch_preview_tab(PreviewTab::Headers);
+    assert_eq!(app.preview_tab, PreviewTab::Headers);
+    app.switch_preview_tab(PreviewTab::Raw);
+    assert_eq!(app.preview_tab, PreviewTab::Raw);
+  }
+
+  #[test]
+  fn unread_count_matches_messages() {
+    // app_with_messages marks even indices as is_read=true, odd as unread.
+    let app = app_with_messages(6);
+    assert_eq!(app.unread_count(), 3);
+  }
+
+  #[test]
+  fn current_page_reflects_offset_and_page_size() {
+    let mut app = app_with_messages(0);
+    app.page_size = 50;
+    app.offset = 0;
+    assert_eq!(app.current_page(), 1);
+    app.offset = 50;
+    assert_eq!(app.current_page(), 2);
+    app.offset = 100;
+    assert_eq!(app.current_page(), 3);
+  }
+
+  #[test]
+  fn total_pages_rounds_up() {
+    let mut app = app_with_messages(0);
+    app.page_size = 50;
+    app.total = 0;
+    assert_eq!(app.total_pages(), 0);
+    app.total = 1;
+    assert_eq!(app.total_pages(), 1);
+    app.total = 50;
+    assert_eq!(app.total_pages(), 1);
+    app.total = 51;
+    assert_eq!(app.total_pages(), 2);
+    app.total = 125;
+    assert_eq!(app.total_pages(), 3);
+  }
+}

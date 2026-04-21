@@ -975,4 +975,166 @@ mod tests {
     let parsed: Vec<String> = serde_json::from_str(&s.recipients).unwrap();
     assert_eq!(parsed, recipients);
   }
+
+  async fn shared_repo() -> (MessageRepository, std::path::PathBuf) {
+    // File-backed temp DB so multiple pooled connections hit the same store.
+    // Mirrors production (WAL + file) far better than shared-cache in-memory,
+    // where FTS5 hits SQLITE_LOCKED under concurrent writes.
+    let dir = std::env::temp_dir().join(format!("rustmail-test-{}", Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("test.db");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(8)
+      .connect(&url)
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    (MessageRepository::new(pool), dir)
+  }
+
+  struct TempDir(std::path::PathBuf);
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  #[tokio::test]
+  async fn concurrent_inserts_all_persisted_with_unique_ids() {
+    let (repo, dir) = shared_repo().await;
+    let _guard = TempDir(dir);
+
+    let mut handles = Vec::new();
+    for i in 0..32 {
+      let repo = repo.clone();
+      handles.push(tokio::spawn(async move {
+        repo
+          .insert(
+            "a@t.com",
+            &["b@t.com".into()],
+            &raw_email(&format!("concurrent-{i}"), "a@t.com", "b@t.com"),
+          )
+          .await
+          .unwrap()
+          .id
+      }));
+    }
+
+    let mut ids = Vec::new();
+    for h in handles {
+      ids.push(h.await.unwrap());
+    }
+    ids.sort();
+    ids.dedup();
+    assert_eq!(
+      ids.len(),
+      32,
+      "ULIDs must be unique under concurrent inserts"
+    );
+    assert_eq!(repo.count().await.unwrap(), 32);
+  }
+
+  #[tokio::test]
+  async fn concurrent_search_during_inserts_returns_consistent_results() {
+    let (repo, dir) = shared_repo().await;
+    let _guard = TempDir(dir);
+
+    let writer_repo = repo.clone();
+    let writer = tokio::spawn(async move {
+      for i in 0..20 {
+        writer_repo
+          .insert(
+            "w@t.com",
+            &["r@t.com".into()],
+            &raw_email(&format!("writer-{i}"), "w@t.com", "r@t.com"),
+          )
+          .await
+          .unwrap();
+      }
+    });
+
+    // Poll search while writer is running. Must never panic or error.
+    let reader_repo = repo.clone();
+    let reader = tokio::spawn(async move {
+      let mut observations = Vec::new();
+      for _ in 0..20 {
+        let results = reader_repo.search("writer", 50, 0).await.unwrap();
+        observations.push(results.len());
+      }
+      observations
+    });
+
+    writer.await.unwrap();
+    let observed = reader.await.unwrap();
+    assert!(observed.iter().all(|n| *n <= 20));
+
+    // Final state matches writer output.
+    let final_results = repo.search("writer", 50, 0).await.unwrap();
+    assert_eq!(final_results.len(), 20);
+  }
+
+  #[tokio::test]
+  async fn concurrent_insert_and_delete_all_leaves_no_fts_orphans() {
+    let (repo, dir) = shared_repo().await;
+    let _guard = TempDir(dir);
+
+    // Seed some rows so delete_all has something to remove.
+    for i in 0..10 {
+      repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(&format!("seed-{i}"), "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+    }
+
+    let writer_repo = repo.clone();
+    let writer = tokio::spawn(async move {
+      for i in 0..10 {
+        writer_repo
+          .insert(
+            "a@t.com",
+            &["b@t.com".into()],
+            &raw_email(&format!("writer-{i}"), "a@t.com", "b@t.com"),
+          )
+          .await
+          .unwrap();
+      }
+    });
+
+    let deleter_repo = repo.clone();
+    let deleter = tokio::spawn(async move {
+      // Let a few writes land, then wipe.
+      tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+      deleter_repo.delete_all().await.unwrap()
+    });
+
+    writer.await.unwrap();
+    let _deleted = deleter.await.unwrap();
+
+    // delete_all racing with inserts must not deadlock, error, or leave
+    // counts impossible. Final row count must be in [0, writes_from_writer]
+    // because deleter wipes everything then the tail of the writer's batch
+    // may or may not have landed afterwards — both outcomes are legal.
+    let remaining = repo.count().await.unwrap();
+    assert!(
+      (0..=10).contains(&remaining),
+      "row count out of expected range after delete_all race: {remaining}"
+    );
+
+    // Every row that is still in messages must also be findable via FTS5 —
+    // INNER JOIN in search() naturally filters orphan FTS rows, so if any
+    // row lacked an FTS entry the hits count would be strictly less than
+    // the row count.
+    let writer_hits = repo.search("writer", 100, 0).await.unwrap();
+    let seed_hits = repo.search("seed", 100, 0).await.unwrap();
+    let total_hits = (writer_hits.len() + seed_hits.len()) as i64;
+    assert!(
+      total_hits >= remaining,
+      "every stored row must be FTS-searchable ({total_hits} hits, {remaining} rows)"
+    );
+  }
 }

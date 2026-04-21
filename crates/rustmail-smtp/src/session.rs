@@ -162,7 +162,9 @@ impl Session {
           self.write(OK).await?;
         }
       } else if upper.starts_with("RCPT TO:") {
-        if self.rcpt_to.len() >= MAX_RECIPIENTS {
+        if self.mail_from.is_none() {
+          self.write(BAD_SEQUENCE).await?;
+        } else if self.rcpt_to.len() >= MAX_RECIPIENTS {
           self.write("452 Too many recipients\r\n").await?;
         } else {
           self.rcpt_to.push(extract_address(trimmed));

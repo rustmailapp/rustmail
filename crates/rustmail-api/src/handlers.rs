@@ -649,3 +649,110 @@ impl IntoResponse for AppError {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
   }
 }
+
+#[cfg(test)]
+mod auth_parser_tests {
+  use super::*;
+
+  #[test]
+  fn auth_results_header_missing_semicolon_is_noop() {
+    let mut dkim = Vec::new();
+    let mut spf = Vec::new();
+    let mut dmarc = Vec::new();
+    parse_auth_results_header("mx.google.com", &mut dkim, &mut spf, &mut dmarc);
+    assert!(dkim.is_empty());
+    assert!(spf.is_empty());
+    assert!(dmarc.is_empty());
+  }
+
+  #[test]
+  fn auth_results_header_empty_input_is_noop() {
+    let mut dkim = Vec::new();
+    let mut spf = Vec::new();
+    let mut dmarc = Vec::new();
+    parse_auth_results_header("", &mut dkim, &mut spf, &mut dmarc);
+    assert!(dkim.is_empty());
+    assert!(spf.is_empty());
+    assert!(dmarc.is_empty());
+  }
+
+  #[test]
+  fn auth_results_header_parses_all_three_methods() {
+    let value = "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=a@ex.com; dmarc=pass action=none";
+    let mut dkim = Vec::new();
+    let mut spf = Vec::new();
+    let mut dmarc = Vec::new();
+    parse_auth_results_header(value, &mut dkim, &mut spf, &mut dmarc);
+    assert_eq!(dkim.len(), 1);
+    assert_eq!(spf.len(), 1);
+    assert_eq!(dmarc.len(), 1);
+    assert_eq!(dkim[0].status, "pass");
+    assert_eq!(spf[0].status, "pass");
+    assert_eq!(dmarc[0].status, "pass");
+  }
+
+  #[test]
+  fn auth_results_header_ignores_empty_segments() {
+    let value = "mx.example.com; ;; dkim=fail";
+    let mut dkim = Vec::new();
+    let mut spf = Vec::new();
+    let mut dmarc = Vec::new();
+    parse_auth_results_header(value, &mut dkim, &mut spf, &mut dmarc);
+    assert_eq!(dkim.len(), 1);
+    assert_eq!(dkim[0].status, "fail");
+  }
+
+  #[test]
+  fn auth_results_header_ignores_unknown_methods() {
+    let value = "mx.example.com; custom=weird; dkim=pass";
+    let mut dkim = Vec::new();
+    let mut spf = Vec::new();
+    let mut dmarc = Vec::new();
+    parse_auth_results_header(value, &mut dkim, &mut spf, &mut dmarc);
+    assert_eq!(dkim.len(), 1);
+    assert!(spf.is_empty());
+    assert!(dmarc.is_empty());
+  }
+
+  #[test]
+  fn dkim_signature_missing_all_tags_produces_empty_details() {
+    let check = parse_dkim_signature("junk");
+    assert_eq!(check.status, "info");
+    assert_eq!(check.details, "d= s= a=");
+  }
+
+  #[test]
+  fn dkim_signature_extracts_domain_selector_algorithm() {
+    let check = parse_dkim_signature(
+      "v=1; a=rsa-sha256; d=example.com; s=selector1; h=from:to; bh=abc; b=xyz",
+    );
+    assert_eq!(check.details, "d=example.com s=selector1 a=rsa-sha256");
+  }
+
+  #[test]
+  fn dkim_signature_tolerates_extra_whitespace_between_tags() {
+    let check = parse_dkim_signature("  d = example.com ;  s = sel ; a = rsa-sha256 ");
+    assert_eq!(check.details, "d=example.com s=sel a=rsa-sha256");
+  }
+
+  #[test]
+  fn received_spf_empty_yields_unknown() {
+    let check = parse_received_spf("");
+    assert_eq!(check.status, "unknown");
+    assert_eq!(check.details, "");
+  }
+
+  #[test]
+  fn received_spf_extracts_status_token_lowercase() {
+    let check = parse_received_spf("PASS (google.com: domain of a@b.com designates ...)");
+    assert_eq!(check.status, "pass");
+  }
+
+  #[test]
+  fn method_result_handles_segment_without_equals() {
+    let (method, status, details) = parse_method_result("broken");
+    assert_eq!(method, "");
+    assert_eq!(status, "broken");
+    assert_eq!(details, "broken");
+  }
+}
