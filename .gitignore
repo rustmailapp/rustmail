@@ -26,3 +26,4 @@ docs/.vitepress/cache
 
 .hermes
 .serena
+.playwright-mcp/
