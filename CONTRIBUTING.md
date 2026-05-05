@@ -105,6 +105,37 @@ When a PR introduces a new user-visible feature (CLI flag, API endpoint, UI capa
 - [ ] Feature card added to `rustmailapp/rustmail-www` (homepage grid) if it's a headline capability
 - [ ] Commit message uses the `feat:` Conventional Commit prefix so it shows up in the release changelog
 
+## Releasing
+
+Releases use [`cargo-release`](https://crates.io/crates/cargo-release). Workspace config lives in `Cargo.toml` under `[workspace.metadata.release]`.
+
+`master` is protected (required status checks) and cannot be pushed to directly, so the flow is:
+
+```bash
+# 1. From a clean master, run the version bump.
+#    Bumps workspace version, refreshes Cargo.lock, commits as "chore: Release",
+#    creates tag v<new>, attempts to push (which will be rejected by branch protection).
+cargo release patch --execute --no-confirm
+
+# 2. Move the local commit onto a branch and reset master.
+git branch chore/bump-<new>
+git tag -d v<new>
+git reset --hard origin/master
+git push -u origin chore/bump-<new>
+
+# 3. Open a PR, wait for CI, merge.
+gh pr create --base master --head chore/bump-<new> --title "chore: bump version to <new>"
+
+# 4. After merge, tag the merge commit and push the tag.
+git fetch
+git tag v<new> origin/master
+git push origin v<new>
+```
+
+The tag push triggers `.github/workflows/release.yml`, which builds multi-platform binaries, Docker images, and a GitHub Release with a changelog auto-generated from conventional commits since the previous tag.
+
+Use `cargo release minor` or `cargo release major` for non-patch bumps. All workspace crates have `publish = false`; cargo-release skips crates.io automatically.
+
 ## Architecture
 
 See the [Architecture](https://docs.rustmail.app/architecture) page for crate layout, data flow, and design decisions.
