@@ -94,7 +94,7 @@ pub fn router(state: AppState) -> Router {
     .layer(SetResponseHeaderLayer::if_not_present(
       axum::http::header::CONTENT_SECURITY_POLICY,
       HeaderValue::from_static(
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss:; frame-src 'self'",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'",
       ),
     ))
     .layer(SetResponseHeaderLayer::if_not_present(
