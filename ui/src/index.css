@@ -12,6 +12,11 @@
   font-family: var(--font-brand);
 }
 
+.theme-switching,
+.theme-switching * {
+  transition: none !important;
+}
+
 .mesh-glow {
   position: fixed;
   top: 0;
