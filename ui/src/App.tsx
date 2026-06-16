@@ -112,8 +112,12 @@ export default function App() {
     }
   }
 
-  onMount(() => {
-    fetchMessages();
+  onMount(async () => {
+    await fetchMessages();
+    if (!selectedId()) {
+      const first = filteredMessages()[0];
+      if (first) setSelectedId(first.id);
+    }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);
   });
