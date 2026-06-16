@@ -244,7 +244,11 @@ impl Session {
   }
 
   async fn upgrade_to_tls(&mut self) -> Result<(), SessionError> {
-    let buffered = self.stream.as_ref().ok_or(SessionError::StreamClosed)?.buffer();
+    let buffered = self
+      .stream
+      .as_ref()
+      .ok_or(SessionError::StreamClosed)?
+      .buffer();
     if !buffered.is_empty() {
       warn!(peer = %self.peer, buffered = buffered.len(), "Closing session during STARTTLS because buffered plaintext bytes remain");
       return Err(SessionError::TlsUpgrade(
