@@ -1,9 +1,9 @@
-use std::io::BufReader as StdBufReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustls::pki_types::{CertificateDer, ServerName};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, mpsc};
@@ -39,12 +39,10 @@ fn load_test_tls_config() -> TlsConfig {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
   }
 
-  let certs = rustls_pemfile::certs(&mut StdBufReader::new(cert_file))
+  let certs = CertificateDer::pem_reader_iter(cert_file)
     .collect::<Result<Vec<_>, _>>()
     .unwrap();
-  let key = rustls_pemfile::private_key(&mut StdBufReader::new(key_file))
-    .unwrap()
-    .unwrap();
+  let key = PrivateKeyDer::from_pem_reader(key_file).unwrap();
 
   let server_config = rustls::ServerConfig::builder()
     .with_no_client_auth()
@@ -58,7 +56,7 @@ fn load_test_tls_config() -> TlsConfig {
 
 fn load_test_cert_der() -> CertificateDer<'static> {
   let cert_file = std::fs::File::open(starttls_cert_path()).unwrap();
-  rustls_pemfile::certs(&mut StdBufReader::new(cert_file))
+  CertificateDer::pem_reader_iter(cert_file)
     .next()
     .unwrap()
     .unwrap()
