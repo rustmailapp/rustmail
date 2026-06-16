@@ -87,7 +87,7 @@ function AppearanceTab() {
       <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2 block">
         Theme
       </label>
-      <div class="grid grid-cols-2 gap-2">
+      <div class="grid grid-cols-3 gap-2">
         <button
           onClick={() => setTheme("dark")}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
@@ -133,6 +133,29 @@ function AppearanceTab() {
             />
           </svg>
           Light
+        </button>
+        <button
+          onClick={() => setTheme("system")}
+          class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
+            theme() === "system"
+              ? "border-orange-500 bg-orange-500/10 text-orange-500"
+              : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
+          }`}
+        >
+          <svg
+            class="size-4"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25A2.25 2.25 0 015.25 3h13.5A2.25 2.25 0 0121 5.25z"
+            />
+          </svg>
+          System
         </button>
       </div>
     </div>
