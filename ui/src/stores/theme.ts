@@ -21,7 +21,11 @@ function resolve(t: Theme): "dark" | "light" {
 }
 
 function applyTheme(t: Theme) {
-  document.documentElement.classList.toggle("dark", resolve(t) === "dark");
+  const root = document.documentElement;
+  root.classList.add("theme-switching");
+  root.classList.toggle("dark", resolve(t) === "dark");
+  void root.offsetHeight;
+  root.classList.remove("theme-switching");
 }
 
 applyTheme(theme());

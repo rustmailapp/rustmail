@@ -15,6 +15,8 @@ import {
   total,
 } from "../stores/messages";
 
+const TAG_SEARCH_THRESHOLD = 8;
+
 function Chip(props: {
   label: string;
   active: boolean;
@@ -42,8 +44,15 @@ function Chip(props: {
 function TagDropdown() {
   const [open, setOpen] = createSignal(false);
   const [pos, setPos] = createSignal({ top: 0, left: 0 });
+  const [tagQuery, setTagQuery] = createSignal("");
   let triggerRef: HTMLButtonElement | undefined;
   let dropdownRef: HTMLDivElement | undefined;
+
+  const visibleTags = () => {
+    const q = tagQuery().trim().toLowerCase();
+    const tags = allTags();
+    return q ? tags.filter((t) => t.toLowerCase().includes(q)) : tags;
+  };
 
   function updatePosition() {
     if (!triggerRef) return;
@@ -74,6 +83,7 @@ function TagDropdown() {
       open,
       (isOpen) => {
         if (isOpen) {
+          setTagQuery("");
           updatePosition();
           window.addEventListener("scroll", updatePosition, true);
           window.addEventListener("resize", updatePosition);
@@ -157,51 +167,72 @@ function TagDropdown() {
                 </div>
               }
             >
+              <Show when={allTags().length > TAG_SEARCH_THRESHOLD}>
+                <div class="border-b border-zinc-100 dark:border-zinc-800 p-1.5">
+                  <input
+                    type="text"
+                    ref={(el) => queueMicrotask(() => el.focus())}
+                    value={tagQuery()}
+                    onInput={(e) => setTagQuery(e.currentTarget.value)}
+                    placeholder="Filter tags..."
+                    class="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-400 dark:placeholder-zinc-500 outline-none focus:border-zinc-400 dark:focus:border-zinc-600"
+                  />
+                </div>
+              </Show>
               <div class="py-1">
-                <For each={allTags()}>
-                  {(tag) => {
-                    const isSelected = () => filters().tags.includes(tag);
-                    return (
-                      <button
-                        onClick={() => toggleTagFilter(tag)}
-                        class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-                      >
-                        <div
-                          class={`size-3.5 rounded border flex items-center justify-center transition-colors ${
-                            isSelected()
-                              ? "bg-orange-500 border-orange-500"
-                              : "border-zinc-300 dark:border-zinc-600"
-                          }`}
+                <Show
+                  when={visibleTags().length > 0}
+                  fallback={
+                    <div class="px-3 py-3 text-xs text-zinc-400 dark:text-zinc-500 text-center">
+                      No matching tags
+                    </div>
+                  }
+                >
+                  <For each={visibleTags()}>
+                    {(tag) => {
+                      const isSelected = () => filters().tags.includes(tag);
+                      return (
+                        <button
+                          onClick={() => toggleTagFilter(tag)}
+                          class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
                         >
-                          <Show when={isSelected()}>
-                            <svg
-                              class="size-2.5 text-white"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              stroke-width="3"
-                            >
-                              <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                d="M4.5 12.75l6 6 9-13.5"
-                              />
-                            </svg>
-                          </Show>
-                        </div>
-                        <span
-                          class={
-                            isSelected()
-                              ? "text-zinc-900 dark:text-zinc-100"
-                              : "text-zinc-600 dark:text-zinc-400"
-                          }
-                        >
-                          {tag}
-                        </span>
-                      </button>
-                    );
-                  }}
-                </For>
+                          <div
+                            class={`size-3.5 rounded border flex items-center justify-center transition-colors ${
+                              isSelected()
+                                ? "bg-orange-500 border-orange-500"
+                                : "border-zinc-300 dark:border-zinc-600"
+                            }`}
+                          >
+                            <Show when={isSelected()}>
+                              <svg
+                                class="size-2.5 text-white"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="3"
+                              >
+                                <path
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  d="M4.5 12.75l6 6 9-13.5"
+                                />
+                              </svg>
+                            </Show>
+                          </div>
+                          <span
+                            class={
+                              isSelected()
+                                ? "text-zinc-900 dark:text-zinc-100"
+                                : "text-zinc-600 dark:text-zinc-400"
+                            }
+                          >
+                            {tag}
+                          </span>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </Show>
               </div>
               <Show when={filters().tags.length > 0}>
                 <div class="border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5">
