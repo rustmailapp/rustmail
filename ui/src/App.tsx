@@ -59,20 +59,19 @@ export default function App() {
       case "d": {
         const id = selectedId();
         if (id) {
-          confirm({
-            title: "Delete message",
-            message: "This message will be permanently deleted.",
-            confirmLabel: "Delete",
-          }).then(async (ok) => {
-            if (ok) {
-              try {
-                await api.deleteMessage(id);
-                setSelectedId(null);
-              } catch {
-                console.error("Failed to delete message");
-              }
-            }
-          });
+          const next =
+            currentIdx === -1
+              ? null
+              : (msgs[currentIdx + 1] ?? msgs[currentIdx - 1] ?? null);
+          if (next) {
+            setSelectedId(next.id);
+            if (!next.is_read) api.markRead(next.id, true).catch(() => {});
+          } else {
+            setSelectedId(null);
+          }
+          api
+            .deleteMessage(id)
+            .catch(() => console.error("Failed to delete message"));
         }
         break;
       }
@@ -122,8 +121,12 @@ export default function App() {
     }
   }
 
-  onMount(() => {
-    fetchMessages();
+  onMount(async () => {
+    await fetchMessages();
+    if (!selectedId()) {
+      const first = filteredMessages()[0];
+      if (first) setSelectedId(first.id);
+    }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);
   });

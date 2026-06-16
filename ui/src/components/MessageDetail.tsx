@@ -2,8 +2,6 @@ import {
   createSignal,
   createResource,
   createMemo,
-  createEffect,
-  on,
   Show,
   For,
   Switch,
@@ -11,7 +9,6 @@ import {
 } from "solid-js";
 import { selectedId, setSelectedId, messages } from "../stores/messages";
 import * as api from "../lib/api";
-import { confirm } from "./ConfirmDialog";
 import { formatDate, formatSize } from "../lib/format";
 import type { Attachment, AuthCheck, AuthResults } from "../lib/types";
 
@@ -167,15 +164,8 @@ export default function MessageDetail() {
                     </a>
                     <button
                       onClick={async () => {
-                        const ok = await confirm({
-                          title: "Delete message",
-                          message: "This message will be permanently deleted.",
-                          confirmLabel: "Delete",
-                        });
-                        if (ok) {
-                          await api.deleteMessage(msg().id);
-                          setSelectedId(null);
-                        }
+                        await api.deleteMessage(msg().id);
+                        setSelectedId(null);
                       }}
                       class="btn-destructive rounded-md border p-1.5 transition cursor-pointer"
                       title="Delete"
@@ -321,20 +311,9 @@ function rewriteToAbsoluteUrls(html: string): string {
   return result;
 }
 
-function cspMeta(allowRemoteImages: boolean): string {
+function cspMeta(): string {
   const origin = location.origin;
-  const imgSrc = allowRemoteImages
-    ? `${origin} data: http: https:`
-    : `${origin} data:`;
-  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${imgSrc}; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">`;
-}
-
-function hasRemoteImages(html: string): boolean {
-  return (
-    /<[a-z][^>]*\b(?:src|background|srcset|poster)\s*=\s*["']https?:\/\//i.test(
-      html,
-    ) || /url\(\s*["']?https?:\/\//i.test(html)
-  );
+  return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${origin} data: http: https:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">`;
 }
 
 function HtmlPreview(props: {
@@ -342,31 +321,14 @@ function HtmlPreview(props: {
   text: string | null;
   messageId: string;
 }) {
-  const [loaded, setLoaded] = createSignal(false);
-
-  createEffect(
-    on(
-      () => props.messageId,
-      () => setLoaded(false),
-      { defer: true },
-    ),
-  );
-
   const rewritten = createMemo(() =>
     props.html ? rewriteCidUrls(props.html, props.messageId) : null,
   );
 
-  const remoteDetected = createMemo(() => {
-    const r = rewritten();
-    return r !== null && hasRemoteImages(r);
-  });
-
-  const showBanner = () => remoteDetected() && !loaded();
-
   const srcdoc = createMemo(() => {
     const r = rewritten();
     if (r === null) return null;
-    return cspMeta(loaded()) + rewriteToAbsoluteUrls(r);
+    return cspMeta() + rewriteToAbsoluteUrls(r);
   });
 
   return (
@@ -379,28 +341,12 @@ function HtmlPreview(props: {
       }
     >
       {(html) => (
-        <div class="flex flex-col h-full">
-          <Show when={showBanner()}>
-            <div class="bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 px-4 py-2 flex items-center justify-between gap-3">
-              <span class="text-xs text-amber-800 dark:text-amber-200">
-                Remote images blocked. Senders may track when this email is
-                opened.
-              </span>
-              <button
-                onClick={() => setLoaded(true)}
-                class="text-xs font-medium px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-700 cursor-pointer flex-shrink-0"
-              >
-                Load images
-              </button>
-            </div>
-          </Show>
-          <iframe
-            sandbox=""
-            srcdoc={html()}
-            class="w-full flex-1 border-0 bg-white"
-            title="Email HTML preview"
-          />
-        </div>
+        <iframe
+          sandbox=""
+          srcdoc={html()}
+          class="w-full h-full border-0 bg-white"
+          title="Email HTML preview"
+        />
       )}
     </Show>
   );

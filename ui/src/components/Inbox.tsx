@@ -1,10 +1,12 @@
-import { For, Show } from "solid-js";
+import { For, Show, onMount, onCleanup, createEffect, on } from "solid-js";
 import {
   filteredMessages,
   messages,
   selectedId,
   setSelectedId,
   loading,
+  loadingMore,
+  loadMore,
   hasActiveFilters,
   clearFilters,
   search,
@@ -13,8 +15,32 @@ import { formatDate, formatSize } from "../lib/format";
 import * as api from "../lib/api";
 
 export default function Inbox() {
+  let scroller: HTMLDivElement | undefined;
+  let sentinel: HTMLDivElement | undefined;
+
+  onMount(() => {
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { root: scroller, rootMargin: "300px" },
+    );
+    observer.observe(sentinel);
+    onCleanup(() => observer.disconnect());
+  });
+
+  createEffect(
+    on(selectedId, (id) => {
+      if (!id || !scroller) return;
+      scroller
+        .querySelector<HTMLElement>(`[data-id="${id}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    }),
+  );
+
   return (
-    <div class="flex flex-col overflow-y-auto h-full">
+    <div ref={scroller} class="flex flex-col overflow-y-auto h-full">
       <Show when={!loading() && filteredMessages().length === 0}>
         <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-500">
           <Show
@@ -76,6 +102,7 @@ export default function Inbox() {
             <div
               role="button"
               tabIndex={0}
+              data-id={msg.id}
               onClick={async () => {
                 setSelectedId(msg.id);
                 if (!msg.is_read) {
@@ -186,6 +213,13 @@ export default function Inbox() {
           );
         }}
       </For>
+
+      <div ref={sentinel} aria-hidden="true" />
+      <Show when={loadingMore()}>
+        <div class="py-3 text-center text-xs text-zinc-400 dark:text-zinc-600">
+          Loading…
+        </div>
+      </Show>
     </div>
   );
 }

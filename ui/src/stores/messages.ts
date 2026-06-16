@@ -2,10 +2,13 @@ import { createSignal, createMemo } from "solid-js";
 import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
 import * as api from "../lib/api";
 
+const PAGE_SIZE = 100;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
 const [total, setTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
 const [loading, setLoading] = createSignal(false);
+const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
 
 const defaultFilters: FilterState = {
@@ -67,15 +70,33 @@ const allTags = createMemo(() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
 });
 
+const hasMore = createMemo(() => messages().length < total());
+
 async function fetchMessages() {
   setLoading(true);
   try {
     const q = search() || undefined;
-    const res = await api.listMessages(200, 0, q);
+    const res = await api.listMessages(PAGE_SIZE, 0, q);
     setMessages(res.messages);
     setTotal(res.total);
   } finally {
     setLoading(false);
+  }
+}
+
+async function loadMore() {
+  if (loading() || loadingMore() || !hasMore()) return;
+  setLoadingMore(true);
+  try {
+    const q = search() || undefined;
+    const res = await api.listMessages(PAGE_SIZE, messages().length, q);
+    setMessages((prev) => {
+      const seen = new Set(prev.map((m) => m.id));
+      return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
+    });
+    setTotal(res.total);
+  } finally {
+    setLoadingMore(false);
   }
 }
 
@@ -178,6 +199,9 @@ export {
   selectedId,
   setSelectedId,
   loading,
+  loadingMore,
+  hasMore,
+  loadMore,
   search,
   setSearch,
   filters,
