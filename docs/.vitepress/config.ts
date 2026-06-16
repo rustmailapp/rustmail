@@ -54,6 +54,7 @@ const reference: DefaultTheme.SidebarItem[] = [
     text: "Features",
     collapsed: false,
     items: [
+      { text: "HTML Preview", link: "/features/html-preview" },
       { text: "Webhooks", link: "/features/webhooks" },
       { text: "Email Release", link: "/features/release" },
       { text: "Export", link: "/features/export" },
