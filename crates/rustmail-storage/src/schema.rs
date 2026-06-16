@@ -70,6 +70,15 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
 
   sqlx::query(
     r#"
+        CREATE INDEX IF NOT EXISTS idx_messages_created_at
+        ON messages(created_at)
+        "#,
+  )
+  .execute(pool)
+  .await?;
+
+  sqlx::query(
+    r#"
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             subject,
             text_body,

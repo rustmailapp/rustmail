@@ -37,7 +37,8 @@ RustMail applies the following security practices:
 - **Dependency pinning:** Workspace-level dependency management with locked versions
 - **Input validation:** Bounded SMTP reads, FTS5 query sanitization, filename sanitization
 - **Network security:** Default bind to `127.0.0.1`, configurable via `--bind`
-- **CORS:** Origin-mirroring policy (not permissive)
+- **CORS:** No CORS headers are sent — browsers block all cross-origin access to the API; the UI is served same-origin
+- **Connection timeouts:** Per-operation idle timeout (60s) and overall session cap (5 min) on SMTP connections
 - **Rate limiting:** Semaphore-based limits on SMTP sessions (100) and WebSocket connections (50)
 - **Release safeguards:** Email release requires explicit `--release-host` flag with port allowlist
 - **Security headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` on all responses

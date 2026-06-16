@@ -312,20 +312,32 @@ pub async fn export_message(
     }
     "json" => {
       let msg = state.repo.get(&id).await?;
-      Ok(
-        (
-          StatusCode::OK,
-          [
-            (header::CONTENT_TYPE, "application/json".to_string()),
+      match serde_json::to_vec(&msg) {
+        Ok(body) => Ok(
+          (
+            StatusCode::OK,
+            [
+              (header::CONTENT_TYPE, "application/json".to_string()),
+              (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}.json\"", sanitize_filename(&id)),
+              ),
+            ],
+            body,
+          )
+            .into_response(),
+        ),
+        Err(e) => {
+          tracing::error!(error = %e, message_id = %id, "Failed to serialize message for JSON export");
+          Ok(
             (
-              header::CONTENT_DISPOSITION,
-              format!("attachment; filename=\"{}.json\"", sanitize_filename(&id)),
-            ),
-          ],
-          serde_json::to_vec(&msg).unwrap_or_default(),
-        )
-          .into_response(),
-      )
+              StatusCode::INTERNAL_SERVER_ERROR,
+              Json(serde_json::json!({ "error": "Internal server error" })),
+            )
+              .into_response(),
+          )
+        }
+      }
     }
     _ => Ok(
       (

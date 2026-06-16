@@ -4,11 +4,13 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use rustls::ServerConfig as RustlsServerConfig;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
+use tokio::time::timeout;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 use tracing::{debug, warn};
@@ -26,6 +28,7 @@ const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
 const MAX_LINE_LENGTH: usize = 4096;
 const MAX_RECIPIENTS: usize = 100;
 const MAX_COMMANDS: usize = 1000;
+const IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 enum SmtpStream {
   Plain(TcpStream),
@@ -78,6 +81,10 @@ pub enum SessionError {
   LineTooLong,
   #[error("TLS upgrade failed: {0}")]
   TlsUpgrade(String),
+  #[error("connection timed out")]
+  Timeout,
+  #[error("SMTP stream unavailable")]
+  StreamClosed,
 }
 
 pub struct Session {
@@ -231,13 +238,17 @@ impl Session {
 
   fn tls_active(&self) -> bool {
     matches!(
-      self.stream.as_ref().expect("SMTP stream missing").get_ref(),
-      SmtpStream::Tls(_)
+      self.stream.as_ref().map(|s| s.get_ref()),
+      Some(SmtpStream::Tls(_))
     )
   }
 
   async fn upgrade_to_tls(&mut self) -> Result<(), SessionError> {
-    let buffered = self.stream.as_ref().expect("SMTP stream missing").buffer();
+    let buffered = self
+      .stream
+      .as_ref()
+      .ok_or(SessionError::StreamClosed)?
+      .buffer();
     if !buffered.is_empty() {
       warn!(peer = %self.peer, buffered = buffered.len(), "Closing session during STARTTLS because buffered plaintext bytes remain");
       return Err(SessionError::TlsUpgrade(
@@ -249,7 +260,7 @@ impl Session {
       return Err(SessionError::TlsUpgrade("TLS not configured".to_string()));
     };
 
-    let stream = self.stream.take().expect("SMTP stream missing");
+    let stream = self.stream.take().ok_or(SessionError::StreamClosed)?;
     let plain_stream = match stream.into_inner() {
       SmtpStream::Plain(stream) => stream,
       SmtpStream::Tls(_) => {
@@ -260,10 +271,13 @@ impl Session {
     };
 
     let acceptor = TlsAcceptor::from(server_config);
-    let tls_stream = acceptor.accept(plain_stream).await.map_err(|error| {
-      warn!(peer = %self.peer, %error, "SMTP STARTTLS handshake failed");
-      SessionError::TlsUpgrade(error.to_string())
-    })?;
+    let tls_stream = timeout(IO_TIMEOUT, acceptor.accept(plain_stream))
+      .await
+      .map_err(|_| SessionError::Timeout)?
+      .map_err(|error| {
+        warn!(peer = %self.peer, %error, "SMTP STARTTLS handshake failed");
+        SessionError::TlsUpgrade(error.to_string())
+      })?;
 
     self.stream = Some(BufReader::new(SmtpStream::Tls(Box::new(tls_stream))));
     self.reset_after_starttls();
@@ -372,14 +386,15 @@ impl Session {
     }
   }
 
+  fn stream_mut(&mut self) -> Result<&mut BufReader<SmtpStream>, SessionError> {
+    self.stream.as_mut().ok_or(SessionError::StreamClosed)
+  }
+
   async fn read_bounded_line_raw(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
     loop {
-      let available = self
-        .stream
-        .as_mut()
-        .expect("SMTP stream missing")
-        .fill_buf()
-        .await?;
+      let available = timeout(IO_TIMEOUT, self.stream_mut()?.fill_buf())
+        .await
+        .map_err(|_| SessionError::Timeout)??;
       if available.is_empty() {
         if buf.is_empty() {
           return Ok(0);
@@ -389,20 +404,12 @@ impl Session {
       if let Some(pos) = available.iter().position(|&b| b == b'\n') {
         buf.extend_from_slice(&available[..=pos]);
         let consumed = pos + 1;
-        self
-          .stream
-          .as_mut()
-          .expect("SMTP stream missing")
-          .consume(consumed);
+        self.stream_mut()?.consume(consumed);
         break;
       } else {
         buf.extend_from_slice(available);
         let len = available.len();
-        self
-          .stream
-          .as_mut()
-          .expect("SMTP stream missing")
-          .consume(len);
+        self.stream_mut()?.consume(len);
       }
       if buf.len() > MAX_LINE_LENGTH {
         return Err(SessionError::LineTooLong);
@@ -424,13 +431,12 @@ impl Session {
   }
 
   async fn write(&mut self, response: &str) -> Result<(), SessionError> {
-    self
-      .stream
-      .as_mut()
-      .expect("SMTP stream missing")
-      .get_mut()
-      .write_all(response.as_bytes())
-      .await?;
+    timeout(
+      IO_TIMEOUT,
+      self.stream_mut()?.get_mut().write_all(response.as_bytes()),
+    )
+    .await
+    .map_err(|_| SessionError::Timeout)??;
     Ok(())
   }
 }
@@ -446,6 +452,7 @@ fn redact_auth(cmd: &str) -> Cow<'_, str> {
 fn extract_address(line: &str) -> String {
   if let Some(start) = line.find('<')
     && let Some(end) = line.find('>')
+    && start < end
   {
     return line[start + 1..end].to_string();
   }
@@ -479,5 +486,11 @@ mod tests {
       extract_address("MAIL FROM: user@example.com"),
       "user@example.com"
     );
+  }
+
+  #[test]
+  fn reversed_brackets_fall_back_without_panicking() {
+    assert_eq!(extract_address("MAIL FROM:>x<"), ">x<");
+    assert_eq!(extract_address("RCPT TO:><"), "><");
   }
 }

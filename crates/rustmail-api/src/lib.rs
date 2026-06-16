@@ -7,7 +7,8 @@
 //! - **WebSocket** — Real-time push for new messages, deletions, and read-state changes
 //! - **Embedded UI** — SolidJS frontend served as static files via [`rust_embed`]
 //!
-//! Security layers include CORS (mirrors request origin, no credentials),
+//! No CORS headers are sent, so browsers block all cross-origin access to the API;
+//! the bundled UI is served same-origin. Security layers include
 //! `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 //! `Referrer-Policy: no-referrer`, and semaphore-based WebSocket connection limits.
 //!
@@ -40,12 +41,11 @@ use axum::Router;
 use axum::http::HeaderValue;
 use axum::routing::{delete, get, patch, post};
 use tower_http::compression::CompressionLayer;
-use tower_http::cors::CorsLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 /// Builds the complete axum router with all API routes, static file serving,
-/// CORS, tracing, and security headers.
+/// compression, tracing, and security headers.
 pub fn router(state: AppState) -> Router {
   let api = Router::new()
     .route("/messages", get(handlers::list_messages))
@@ -72,15 +72,9 @@ pub fn router(state: AppState) -> Router {
     .route("/assert/count", get(handlers::assert_count))
     .route("/ws", get(ws::ws_handler));
 
-  let cors = CorsLayer::new()
-    .allow_origin(tower_http::cors::Any)
-    .allow_methods(tower_http::cors::Any)
-    .allow_headers(tower_http::cors::Any);
-
   Router::new()
     .nest("/api/v1", api)
     .fallback(static_files::static_handler)
-    .layer(cors)
     .layer(CompressionLayer::new())
     .layer(TraceLayer::new_for_http())
     .layer(SetResponseHeaderLayer::if_not_present(
