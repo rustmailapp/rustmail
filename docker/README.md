@@ -39,7 +39,7 @@ volumes:
 | `linux/arm64` | `latest` |
 | `linux/arm/v7` | `latest` |
 
-Multi-arch manifest — Docker automatically pulls the correct image for your platform.
+Multi-arch manifest: Docker automatically pulls the correct image for your platform.
 
 ## Persistence
 
@@ -78,9 +78,9 @@ All configuration is done via `RUSTMAIL_*` environment variables:
 | `1025` | TCP | SMTP server |
 | `8025` | TCP | HTTP API, WebSocket, and Web UI |
 
-`STARTTLS` uses the normal SMTP port and is advertised only when both `RUSTMAIL_SMTP_TLS_CERT` and `RUSTMAIL_SMTP_TLS_KEY` are set.
-
 ## Optional STARTTLS
+
+STARTTLS uses the normal SMTP port via explicit upgrade. Both `RUSTMAIL_SMTP_TLS_CERT` and `RUSTMAIL_SMTP_TLS_KEY` are required; setting only one fails startup, and `STARTTLS` is advertised only when both are set.
 
 Mount your TLS files read-only and set both environment variables:
 
@@ -97,16 +97,16 @@ Clients must issue `EHLO`, then `STARTTLS`, and then `EHLO` again after the TLS 
 
 ## Features
 
-- **Persistent storage** — SQLite-backed, emails survive restarts
-- **Full-text search** — FTS5 across subject, body, sender, and recipients
-- **Real-time updates** — WebSocket pushes new emails to the UI instantly
-- **Modern UI** — dark-mode-first, looks and feels like a real email client
-- **DKIM/SPF/DMARC/ARC display** — parses authentication headers with color-coded badges
-- **REST assertion endpoints** — `GET /api/v1/assert/count?min=1&subject=Welcome`
-- **Webhook notifications** — fire-and-forget POST on new email
-- **Email release** — forward captured emails to a real SMTP server
-- **Export** — download as EML or JSON
-- **Retention policies** — auto-purge by age or count
+- **Persistent storage**: SQLite-backed, emails survive restarts
+- **Full-text search**: FTS5 across subject, body, sender, and recipients
+- **Real-time updates**: WebSocket pushes new emails to the UI instantly
+- **Modern UI**: dark-mode-first, looks and feels like a real email client
+- **DKIM/SPF/DMARC/ARC display**: parses authentication headers with color-coded badges
+- **REST assertion endpoints**: `GET /api/v1/assert/count?min=1&subject=Welcome`
+- **Webhook notifications**: fire-and-forget POST on new email
+- **Email release**: forward captured emails to a real SMTP server
+- **Export**: download as EML or JSON
+- **Retention policies**: auto-purge by age or count
 
 ## Image Details
 

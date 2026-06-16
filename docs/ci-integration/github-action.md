@@ -21,8 +21,8 @@ RustMail provides a GitHub Action for email assertion in CI pipelines.
 
 The action has two modes:
 
-1. **`start`** (default) — Downloads the RustMail binary, starts an ephemeral SMTP server in the background, and waits until it's ready.
-2. **`assert`** — Checks captured emails against your filters using the REST assertion API.
+1. **`start`** (default): Downloads the RustMail binary, starts an ephemeral SMTP server in the background, and waits until it's ready.
+2. **`assert`**: Checks captured emails against your filters using the REST assertion API.
 
 ## Inputs
 
@@ -30,7 +30,7 @@ The action has two modes:
 
 | Input | Default | Description |
 |-------|---------|-------------|
-| `mode` | `start` | Set to `start` (or omit — it's the default) |
+| `mode` | `start` | Set to `start` (or omit, it's the default) |
 | `smtp-port` | `1025` | SMTP port to listen on |
 | `http-port` | `8025` | HTTP/API port |
 | `version` | `latest` | RustMail version (e.g., `v0.1.0`) |

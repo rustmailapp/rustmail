@@ -1,6 +1,6 @@
 # REST Assertions
 
-RustMail exposes a purpose-built assertion endpoint for CI pipelines. It returns `200 OK` when conditions are met and `417 Expectation Failed` otherwise — designed for `curl -f`.
+RustMail exposes a purpose-built assertion endpoint for CI pipelines. It returns `200 OK` when conditions are met and `417 Expectation Failed` otherwise. Designed for `curl -f`.
 
 ## Endpoint
 
@@ -37,10 +37,10 @@ curl -f "localhost:8025/api/v1/assert/count?min=1&recipient=admin@example.com"
 ## Response
 
 ```json
-// 200 OK — assertion passed
+// 200 OK: assertion passed
 { "ok": true, "count": 2 }
 
-// 417 Expectation Failed — assertion failed
+// 417 Expectation Failed: assertion failed
 { "ok": false, "count": 0, "expected_min": 1, "expected_max": null }
 ```
 

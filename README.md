@@ -72,7 +72,7 @@ cd rustmail && make build
 
 ### Pre-built Binaries
 
-Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest) — Linux (x86_64, aarch64, armv7 — glibc + musl), macOS (Intel + Apple Silicon), and multi-arch Docker images.
+Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest): Linux x86_64/aarch64/armv7 (glibc and musl builds), macOS (Intel + Apple Silicon), and multi-arch Docker images.
 
 ## Features
 
@@ -80,7 +80,7 @@ Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases
 |---|---|
 | **Persistent storage** | SQLite-backed, emails survive restarts. `--ephemeral` for CI. |
 | **Full-text search** | FTS5 across subject, body, sender, and recipients. |
-| **Real-time UI** | WebSocket push — new email appears instantly. Dark/light mode, keyboard shortcuts. |
+| **Real-time UI** | WebSocket push: new email appears instantly. Dark/light mode, keyboard shortcuts. |
 | **CI-native** | REST assertion endpoints, CLI assert mode, and a first-party GitHub Action. |
 | **Single binary** | Frontend embedded at compile time. ~7 MB, zero runtime dependencies. |
 | **Auth header display** | Parses DKIM, SPF, DMARC, and ARC headers with color-coded status badges. |
@@ -107,7 +107,7 @@ Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases
 
 ## CLI Assert Mode
 
-Run as an ephemeral mail catcher that exits with a status code — for CI without the GitHub Action:
+Run as an ephemeral mail catcher that exits with a status code, for CI without the GitHub Action:
 
 ```sh
 rustmail assert --min-count=2 --subject="Welcome" --timeout=30s
@@ -124,7 +124,7 @@ rustmail serve --webhook-url https://hooks.example.com/email
 rustmail serve --smtp-tls-cert ./certs/localhost.pem --smtp-tls-key ./certs/localhost-key.pem
 ```
 
-STARTTLS is optional and uses the same SMTP port via explicit upgrade. RustMail advertises `STARTTLS` only when both the certificate and private key are configured.
+STARTTLS uses the same SMTP port via explicit upgrade. Both `--smtp-tls-cert` and `--smtp-tls-key` are required; setting only one fails startup, and `STARTTLS` is advertised only when both are set.
 
 See the full [configuration reference](https://docs.rustmail.app/configuration/cli-flags).
 

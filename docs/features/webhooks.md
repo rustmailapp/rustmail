@@ -41,7 +41,7 @@ Each webhook is an HTTP POST with `Content-Type: application/json`. The body is 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | ULID — use this to fetch the full message via the REST API |
+| `id` | string | ULID: use this to fetch the full message via the REST API |
 | `sender` | string | Envelope sender address |
 | `recipients` | string | JSON-encoded array of recipient addresses |
 | `subject` | string \| null | Parsed subject line |
@@ -54,10 +54,10 @@ Each webhook is an HTTP POST with `Content-Type: application/json`. The body is 
 
 ## Behavior
 
-- **Fire-and-forget** — the webhook is dispatched in a background task and does not block message processing.
-- **5-second timeout** — if the endpoint doesn't respond within 5 seconds, the request is abandoned.
-- **No retries** — failed deliveries are logged as warnings and not retried.
-- **No queue** — webhooks are sent in real time as messages arrive. If the endpoint is down, those notifications are lost.
+- **Fire-and-forget**: the webhook is dispatched in a background task and does not block message processing.
+- **5-second timeout**: if the endpoint doesn't respond within 5 seconds, the request is abandoned.
+- **No retries**: failed deliveries are logged as warnings and not retried.
+- **No queue**: webhooks are sent in real time as messages arrive. If the endpoint is down, those notifications are lost.
 
 ## Example: Slack Notification
 

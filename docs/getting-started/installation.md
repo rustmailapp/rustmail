@@ -24,7 +24,7 @@ Or with any AUR helper (`paru -S rustmail-bin`, `pacman -S rustmail-bin` via cha
 
 ## Pre-built Binaries
 
-Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest) — Linux (x86_64, aarch64, armv7 — glibc + musl), macOS (Intel + Apple Silicon).
+Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest): Linux x86_64/aarch64/armv7 (glibc and musl builds), macOS (Intel + Apple Silicon).
 
 ## From Source
 
