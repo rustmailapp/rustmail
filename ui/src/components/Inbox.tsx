@@ -1,4 +1,4 @@
-import { For, Show, onMount, onCleanup } from "solid-js";
+import { For, Show, onMount, onCleanup, createEffect, on } from "solid-js";
 import {
   filteredMessages,
   messages,
@@ -29,6 +29,15 @@ export default function Inbox() {
     observer.observe(sentinel);
     onCleanup(() => observer.disconnect());
   });
+
+  createEffect(
+    on(selectedId, (id) => {
+      if (!id || !scroller) return;
+      scroller
+        .querySelector<HTMLElement>(`[data-id="${id}"]`)
+        ?.scrollIntoView({ block: "nearest" });
+    }),
+  );
 
   return (
     <div ref={scroller} class="flex flex-col overflow-y-auto h-full">
@@ -93,6 +102,7 @@ export default function Inbox() {
             <div
               role="button"
               tabIndex={0}
+              data-id={msg.id}
               onClick={async () => {
                 setSelectedId(msg.id);
                 if (!msg.is_read) {
