@@ -1,9 +1,10 @@
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
@@ -351,18 +352,20 @@ fn load_smtp_tls_config(cert_path: &Path, key_path: &Path) -> Result<TlsConfig> 
     )
   })?;
 
-  let cert_chain = rustls_pemfile::certs(&mut BufReader::new(cert_file))
+  let cert_chain = CertificateDer::pem_reader_iter(cert_file)
     .collect::<Result<Vec<_>, _>>()
     .context("failed to parse SMTP TLS certificate PEM")?;
   if cert_chain.is_empty() {
     anyhow::bail!("SMTP TLS certificate file did not contain any certificates");
   }
 
-  let mut keys = rustls_pemfile::private_key(&mut BufReader::new(key_file))
-    .context("failed to parse SMTP TLS private key PEM")?;
-  let private_key = keys.take().ok_or_else(|| {
-    anyhow::anyhow!("SMTP TLS private key file did not contain a supported private key")
-  })?;
+  let private_key = match PrivateKeyDer::from_pem_reader(key_file) {
+    Ok(key) => key,
+    Err(rustls::pki_types::pem::Error::NoItemsFound) => {
+      anyhow::bail!("SMTP TLS private key file did not contain a supported private key")
+    }
+    Err(err) => return Err(err).context("failed to parse SMTP TLS private key PEM"),
+  };
 
   let server_config = rustls::ServerConfig::builder()
     .with_no_client_auth()

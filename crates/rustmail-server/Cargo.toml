@@ -33,7 +33,6 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 time = { workspace = true }
 rustls = { workspace = true }
-rustls-pemfile = { workspace = true }
 dirs = { workspace = true }
 
 rustmail-smtp = { workspace = true }
