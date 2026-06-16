@@ -18,6 +18,7 @@ RustMail is a self-hosted SMTP mail catcher built in Rust. It captures outbound 
 │   ├── rustmail-smtp/       # SMTP server (tokio TCP + mail-parser)
 │   ├── rustmail-storage/    # SQLite storage (sqlx + FTS5)
 │   ├── rustmail-api/        # Axum HTTP + WebSocket API
+│   ├── rustmail-tui/        # Terminal UI (optional feature)
 │   └── rustmail-server/     # Binary entry point (clap CLI, rust-embed)
 ├── ui/                      # SolidJS frontend (Vite)
 ├── docker/                  # Dockerfile + docker-compose.yml
@@ -38,7 +39,7 @@ cargo build --workspace
 cargo build -p rustmail-server
 
 # Build the frontend (required before embedding in binary)
-cd ui && npm install && npm run build
+cd ui && pnpm install --frozen-lockfile && pnpm build
 ```
 
 ## Testing
@@ -63,7 +64,7 @@ cargo clippy --workspace -- -D warnings
 For the frontend:
 
 ```bash
-cd ui && npx tsc -b
+cd ui && pnpm exec tsc -b
 ```
 
 ## Coding Conventions
@@ -78,7 +79,7 @@ cd ui && npx tsc -b
 
 ### Code Style
 
-- No comments unless non-obvious logic requires explanation
+- No comments in the code body; docstrings and public-API docs only. WHY goes in commits/docs.
 - No TODOs in committed code
 - Descriptive variable/function names over comments
 - Small, focused functions
@@ -113,14 +114,13 @@ Pull requests trigger:
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace -- -D warnings`
 - `cargo test --workspace`
-- `cd ui && npx tsc -b && npm run build`
+- `cd ui && pnpm exec tsc -b && pnpm build`
 - `cargo audit`
 
 ## Cross-References
 
-- **Full Spec**: `RUSTMAIL.md`
 - **API Reference**: `docs/api.yaml`
-- **Contributing**: `README.md`
+- **Contributing**: `CONTRIBUTING.md`
 
 ---
 
