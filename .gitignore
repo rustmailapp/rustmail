@@ -27,3 +27,5 @@ docs/.vitepress/cache
 .hermes
 .serena
 .playwright-mcp/
+.claude/.mastersoft-lints-ack
+.claude/.mastersoft-lints-suppress
