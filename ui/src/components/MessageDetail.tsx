@@ -11,7 +11,6 @@ import {
 } from "solid-js";
 import { selectedId, setSelectedId, messages } from "../stores/messages";
 import * as api from "../lib/api";
-import { confirm } from "./ConfirmDialog";
 import { formatDate, formatSize } from "../lib/format";
 import type { Attachment, AuthCheck, AuthResults } from "../lib/types";
 
@@ -167,15 +166,8 @@ export default function MessageDetail() {
                     </a>
                     <button
                       onClick={async () => {
-                        const ok = await confirm({
-                          title: "Delete message",
-                          message: "This message will be permanently deleted.",
-                          confirmLabel: "Delete",
-                        });
-                        if (ok) {
-                          await api.deleteMessage(msg().id);
-                          setSelectedId(null);
-                        }
+                        await api.deleteMessage(msg().id);
+                        setSelectedId(null);
                       }}
                       class="btn-destructive rounded-md border p-1.5 transition cursor-pointer"
                       title="Delete"

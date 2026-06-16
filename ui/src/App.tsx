@@ -59,20 +59,10 @@ export default function App() {
       case "d": {
         const id = selectedId();
         if (id) {
-          confirm({
-            title: "Delete message",
-            message: "This message will be permanently deleted.",
-            confirmLabel: "Delete",
-          }).then(async (ok) => {
-            if (ok) {
-              try {
-                await api.deleteMessage(id);
-                setSelectedId(null);
-              } catch {
-                console.error("Failed to delete message");
-              }
-            }
-          });
+          api
+            .deleteMessage(id)
+            .then(() => setSelectedId(null))
+            .catch(() => console.error("Failed to delete message"));
         }
         break;
       }
