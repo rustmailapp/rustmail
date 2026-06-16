@@ -59,9 +59,18 @@ export default function App() {
       case "d": {
         const id = selectedId();
         if (id) {
+          const next =
+            currentIdx === -1
+              ? null
+              : (msgs[currentIdx + 1] ?? msgs[currentIdx - 1] ?? null);
+          if (next) {
+            setSelectedId(next.id);
+            if (!next.is_read) api.markRead(next.id, true).catch(() => {});
+          } else {
+            setSelectedId(null);
+          }
           api
             .deleteMessage(id)
-            .then(() => setSelectedId(null))
             .catch(() => console.error("Failed to delete message"));
         }
         break;
