@@ -13,7 +13,9 @@ export default {
       spec,
       config: {
         schemaDefaultView: "schema",
-        showTryButton: false,
+        operation: {
+          hiddenSlots: ["playground"],
+        },
       },
     });
     theme.enhanceApp({ app });
