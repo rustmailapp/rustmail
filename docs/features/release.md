@@ -16,7 +16,7 @@ Or via environment variable:
 RUSTMAIL_RELEASE_HOST=smtp.example.com:587 rustmail serve
 ```
 
-The `--release-host` value is an allowlist — only this exact host (and port, if specified) can be used as a release target. This prevents SSRF.
+The `--release-host` value is an allowlist: only this exact host (and port, if specified) can be used as a release target. This prevents SSRF.
 
 ## Endpoint
 
@@ -45,11 +45,11 @@ Success response:
 
 Release is locked down to prevent misuse:
 
-1. **Disabled unless configured** — returns `403` if `--release-host` is not set.
-2. **Host allowlist** — the `host` in the request body must exactly match the configured `--release-host` host. Mismatches return `403`.
-3. **Port allowlist** — only standard SMTP ports are accepted: `25`, `465`, `587`, `2525`. Other ports return `400`.
-4. **Port pinning** — if `--release-host` includes a port (e.g., `smtp.example.com:587`), the request must use that exact port. Mismatches return `403`.
-5. **TLS required** — connections use `lettre::relay()` with certificate verification. TLS failures return `502`.
+1. **Disabled unless configured**: returns `403` if `--release-host` is not set.
+2. **Host allowlist**: the `host` in the request body must exactly match the configured `--release-host` host. Mismatches return `403`.
+3. **Port allowlist**: only standard SMTP ports are accepted: `25`, `465`, `587`, `2525`. Other ports return `400`.
+4. **Port pinning**: if `--release-host` includes a port (e.g., `smtp.example.com:587`), the request must use that exact port. Mismatches return `403`.
+5. **TLS required**: connections use `lettre::relay()` with certificate verification. TLS failures return `502`.
 
 ## Errors
 

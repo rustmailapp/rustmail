@@ -1,6 +1,6 @@
 # Contributing to RustMail
 
-Thank you for your interest in contributing to RustMail! This document provides guidelines and instructions for contributing.
+Thank you for your interest in contributing to RustMail!
 
 ## Getting Started
 
@@ -40,16 +40,16 @@ make dev
 
 ## Reporting Bugs
 
-Before filing a bug report, please check [existing issues](https://github.com/rustmailapp/rustmail/issues). Then use the [Bug Report](https://github.com/rustmailapp/rustmail/issues/new?template=bug_report.yml) template — it will guide you through the required information.
+Before filing a bug report, please check [existing issues](https://github.com/rustmailapp/rustmail/issues). Then use the [Bug Report](https://github.com/rustmailapp/rustmail/issues/new?template=bug_report.yml) template: it will guide you through the required information.
 
 ## Submitting Changes
 
 ### Branch Naming
 
-- `feat/short-description` — New features
-- `fix/short-description` — Bug fixes
-- `refactor/short-description` — Code restructuring
-- `docs/short-description` — Documentation changes
+- `feat/short-description`: New features
+- `fix/short-description`: Bug fixes
+- `refactor/short-description`: Code restructuring
+- `docs/short-description`: Documentation changes
 
 ### Code Style
 
@@ -59,7 +59,7 @@ Before filing a bug report, please check [existing issues](https://github.com/ru
 - No `unwrap()` in library crates (`crates/rustmail-smtp`, `crates/rustmail-storage`, `crates/rustmail-api`)
 - `unwrap()` is acceptable in tests and `rustmail-server` (the binary)
 - Error handling: `thiserror` in libraries, `anyhow` in the binary
-- Async everywhere — no blocking calls on the tokio runtime
+- Async everywhere: no blocking calls on the tokio runtime
 
 **TypeScript (UI):**
 - Run `pnpm exec prettier --write .` before committing

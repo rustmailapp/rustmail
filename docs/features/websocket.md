@@ -1,6 +1,6 @@
 # WebSocket
 
-RustMail pushes real-time events over a WebSocket connection. The UI uses this for live inbox updates — you can use the same endpoint for custom integrations.
+RustMail pushes real-time events over a WebSocket connection. The UI uses this for live inbox updates. You can use the same endpoint for custom integrations.
 
 ## Endpoint
 
@@ -8,7 +8,7 @@ RustMail pushes real-time events over a WebSocket connection. The UI uses this f
 ws://localhost:8025/api/v1/ws
 ```
 
-The connection is **one-way push** — the server sends events to the client. Messages sent by the client are ignored.
+The connection is **one-way push**: the server sends events to the client. Messages sent by the client are ignored.
 
 ## Events
 

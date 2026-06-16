@@ -36,8 +36,8 @@ rustmail assert --sender=notifications@example.com --min-count=1
 
 | Code | Meaning |
 |------|---------|
-| `0` | Assertion passed — required emails were received |
-| `1` | Assertion failed — timeout or criteria not met |
+| `0` | Assertion passed: required emails were received |
+| `1` | Assertion failed: timeout or criteria not met |
 
 ## How It Works
 

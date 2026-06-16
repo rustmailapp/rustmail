@@ -21,7 +21,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
 | `--config` | — | — | Path to an optional TOML configuration file. |
 
-`STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured. After the client upgrades the connection, it must send `EHLO` again before continuing the session.
+`STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured; setting only one fails startup. After the client upgrades the connection, it must send `EHLO` again before continuing the session.
 
 ## Examples
 

@@ -11,10 +11,10 @@ docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ### Binary
 
 ```sh
-# Default — SMTP on 1025, UI on 8025, SQLite at ./rustmail.db
+# Default: SMTP on 1025, UI on 8025, SQLite at ./rustmail.db
 rustmail
 
-# Ephemeral mode for CI — in-memory, nothing written to disk
+# Ephemeral mode for CI: in-memory, nothing written to disk
 rustmail serve --ephemeral --smtp-port 1025 --http-port 8025
 ```
 
@@ -44,7 +44,7 @@ swaks --to test@example.com --server localhost --port 1025 --tls
 printf "EHLO test\r\nMAIL FROM:<sender@example.com>\r\nRCPT TO:<test@example.com>\r\nDATA\r\nSubject: Hello\r\n\r\nTest body\r\n.\r\nQUIT\r\n" | nc localhost 1025
 ```
 
-The email appears in the UI in real time via WebSocket push — no page refresh needed.
+The email appears in the UI in real time via WebSocket push, no page refresh needed.
 
 ## What's Next?
 

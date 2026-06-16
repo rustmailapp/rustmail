@@ -12,7 +12,7 @@ GET /api/v1/messages/{id}/export?format=eml|json
 
 ### EML (default)
 
-Returns the raw RFC 822 message — the original bytes as received by the SMTP server.
+Returns the raw RFC 822 message: the original bytes as received by the SMTP server.
 
 ```sh
 curl -O -J "localhost:8025/api/v1/messages/01ARZ3NDEKTSV4RRFFQ69G5FAV/export"

@@ -82,7 +82,7 @@ Reference: https://docs.brew.sh/Acceptable-Formulae
 
 ## Future Channels (not planned yet)
 
-- **AUR** (Arch Linux) — PKGBUILD, straightforward for Rust binaries
-- **Nix** — nixpkgs PR, similar community process to Homebrew
-- **Scoop** (Windows) — JSON manifest in a bucket repo
-- **Snap / Flatpak** — lower priority, Docker covers Linux well
+- **AUR** (Arch Linux): PKGBUILD, straightforward for Rust binaries
+- **Nix**: nixpkgs PR, similar community process to Homebrew
+- **Scoop** (Windows): JSON manifest in a bucket repo
+- **Snap / Flatpak**: lower priority, Docker covers Linux well
