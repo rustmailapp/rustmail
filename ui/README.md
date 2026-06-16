@@ -1,28 +1,42 @@
-## Usage
+# RustMail UI
 
-```bash
-$ npm install # or pnpm install or yarn install
+The RustMail web client: SolidJS + TypeScript + Tailwind CSS, built with Vite.
+
+This UI is not deployed standalone. `make build` compiles it to `ui/dist`, which the `rustmail-api` crate embeds into the Rust binary via `rust-embed` and serves at the HTTP port.
+
+## Package Manager
+
+pnpm only (`pnpm-lock.yaml` is the sole lockfile).
+
+```sh
+pnpm install
 ```
 
-### Learn more on the [Solid Website](https://solidjs.com) and come chat with us on our [Discord](https://discord.com/invite/solidjs)
+## Development
 
-## Available Scripts
+Run the Vite dev server together with the Rust backend from the repository root:
 
-In the project directory, you can run:
+```sh
+make dev        # UI dev server + backend concurrently
+make dev-ui     # UI dev server only (pnpm dev)
+```
 
-### `npm run dev`
+The dev server listens on `http://localhost:3000` and proxies `/api` and the `/api/v1/ws` WebSocket to the backend on `http://localhost:8025`, so a backend must be running for data to load.
 
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+## Scripts
 
-### `npm run build`
+```sh
+pnpm dev        # Vite dev server on :3000
+pnpm build      # type-check (tsc -b) then build to ui/dist
+pnpm preview    # preview the production build
+```
 
-Builds the app for production to the `dist` folder.<br>
-It correctly bundles Solid in production mode and optimizes the build for the best performance.
+## Production Build
 
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+From the repository root:
 
-## Deployment
+```sh
+make build
+```
 
-Learn more about deploying your application with the [documentations](https://vite.dev/guide/static-deploy.html)
+This runs `pnpm build` to produce `ui/dist`, then compiles the Rust binary with those assets embedded.
