@@ -53,6 +53,9 @@ tag-name = "v{{version}}"
 consolidate-commits = true
 dependent-version = "upgrade"
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 strip = true
 lto = "fat"
