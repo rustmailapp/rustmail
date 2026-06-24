@@ -28,7 +28,7 @@ export default function Modal(props: ModalProps) {
           onClick={() => props.onClose()}
         />
         <div
-          class={`relative w-full ${props.maxWidth ?? "max-w-lg"} bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl animate-scale-in overflow-hidden`}
+          class={`relative w-full ${props.maxWidth ?? "max-w-lg"} bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-2xl animate-pop-in overflow-hidden`}
         >
           {props.children}
         </div>
