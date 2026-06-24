@@ -316,6 +316,8 @@ function cspMeta(): string {
   return `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src ${origin} data: http: https:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';">`;
 }
 
+const LINK_TARGET_BLANK = '<base target="_blank">';
+
 function HtmlPreview(props: {
   html: string | null;
   text: string | null;
@@ -328,7 +330,7 @@ function HtmlPreview(props: {
   const srcdoc = createMemo(() => {
     const r = rewritten();
     if (r === null) return null;
-    return cspMeta() + rewriteToAbsoluteUrls(r);
+    return cspMeta() + LINK_TARGET_BLANK + rewriteToAbsoluteUrls(r);
   });
 
   return (
@@ -342,7 +344,7 @@ function HtmlPreview(props: {
     >
       {(html) => (
         <iframe
-          sandbox=""
+          sandbox="allow-popups allow-popups-to-escape-sandbox"
           srcdoc={html()}
           class="w-full h-full border-0 bg-white"
           title="Email HTML preview"
