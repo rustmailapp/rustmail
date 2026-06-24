@@ -1,5 +1,6 @@
 import { Show, For } from "solid-js";
 import { theme, setTheme } from "../stores/theme";
+import { rusted, setRusted } from "../stores/rusted";
 import {
   settingsOpen,
   setSettingsOpen,
@@ -158,6 +159,26 @@ function AppearanceTab() {
           System
         </button>
       </div>
+
+      <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block">
+        Easter egg
+      </label>
+      <button
+        onClick={() => setRusted(!rusted())}
+        class={`w-full rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-between gap-2 ${
+          rusted()
+            ? "border-orange-500 bg-orange-500/10 text-orange-500"
+            : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
+        }`}
+      >
+        <span>Rusted</span>
+        <span class="text-[10px] uppercase tracking-wide opacity-70">
+          {rusted() ? "On" : "Off"}
+        </span>
+      </button>
+      <p class="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+        Let the app oxidize.
+      </p>
     </div>
   );
 }

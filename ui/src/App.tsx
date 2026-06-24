@@ -19,6 +19,7 @@ import {
 import * as api from "./lib/api";
 import { settingsOpen } from "./stores/settings";
 import "./stores/theme";
+import "./stores/rusted";
 
 export default function App() {
   function handleKeydown(e: KeyboardEvent) {
