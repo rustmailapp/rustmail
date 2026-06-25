@@ -2376,7 +2376,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-api"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "axum",
  "lettre",
@@ -2396,7 +2396,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-server"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2424,7 +2424,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-smtp"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "mail-parser",
  "rustls",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-storage"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "mail-parser",
  "serde",
@@ -2453,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "rustmail-tui"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "crossterm",
