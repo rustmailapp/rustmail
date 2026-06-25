@@ -21,7 +21,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/public/screenshot-web.png" alt="RustMail Web UI" width="720" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/public/screenshot-web-dark.png" />
+    <img src="docs/public/screenshot-web.png" alt="RustMail Web UI" width="720" />
+  </picture>
 </p>
 
 ## Quick Start
