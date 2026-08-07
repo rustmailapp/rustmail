@@ -1122,3 +1122,67 @@ async fn headers_endpoint_unknown_message_returns_404() {
 
   assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+async fn cache_control_of(app: axum::Router, uri: String) -> String {
+  let response = app
+    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  response
+    .headers()
+    .get(axum::http::header::CACHE_CONTROL)
+    .map(|v| v.to_str().unwrap().to_string())
+    .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn message_derived_resources_are_cacheable() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Cacheable", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  for suffix in ["/raw", "/headers", "/auth"] {
+    let value = cache_control_of(
+      app.clone(),
+      format!("/api/v1/messages/{}{}", summary.id, suffix),
+    )
+    .await;
+    assert!(
+      value.contains("immutable") && value.contains("private"),
+      "{suffix} should be privately cacheable forever, got {value:?}"
+    );
+  }
+}
+
+#[tokio::test]
+async fn mutable_message_metadata_is_not_cached() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Mutable", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  // is_read, is_starred and tags change over the message's life, so the
+  // single-message and list endpoints must never be served from cache.
+  for uri in [
+    format!("/api/v1/messages/{}", summary.id),
+    "/api/v1/messages".to_string(),
+  ] {
+    let value = cache_control_of(app.clone(), uri.clone()).await;
+    assert!(
+      !value.contains("immutable"),
+      "{uri} must not be marked immutable, got {value:?}"
+    );
+  }
+}

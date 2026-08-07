@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use crate::state::{AppState, WsEvent};
 use rustmail_storage::StorageError;
 
+/// Captured mail is immutable once stored, so anything derived from a
+/// message's bytes can be cached indefinitely. `private` keeps shared caches
+/// out of captured mail when rustmail is bound to a non-loopback address.
+const IMMUTABLE_MESSAGE_CACHE: &str = "private, max-age=31536000, immutable";
+
 #[derive(Deserialize)]
 pub struct ListParams {
   pub q: Option<String>,
@@ -163,6 +168,7 @@ pub async fn get_attachment(
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}\"", filename),
       ),
+      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
       (
         header::HeaderName::from_static("x-content-type-options"),
         "nosniff".to_string(),
@@ -202,10 +208,7 @@ pub async fn get_inline_attachment(
     StatusCode::OK,
     [
       (header::CONTENT_TYPE, content_type),
-      (
-        header::CACHE_CONTROL,
-        "public, max-age=31536000, immutable".to_string(),
-      ),
+      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
       (
         header::HeaderName::from_static("x-content-type-options"),
         "nosniff".to_string(),
@@ -226,7 +229,10 @@ pub async fn get_raw_message(
   let raw = state.repo.get_raw(&id).await?;
   Ok((
     StatusCode::OK,
-    [(header::CONTENT_TYPE, "message/rfc822".to_string())],
+    [
+      (header::CONTENT_TYPE, "message/rfc822".to_string()),
+      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
+    ],
     raw,
   ))
 }
@@ -261,7 +267,11 @@ pub async fn get_headers(
     })
     .collect();
 
-  Ok(Json(headers))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(headers),
+  ))
 }
 
 fn unfold_header_value(value: &[u8]) -> String {
@@ -582,12 +592,16 @@ pub async fn get_auth_results(
     }
   }
 
-  Ok(Json(AuthResults {
-    dkim,
-    spf,
-    dmarc,
-    arc,
-  }))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(AuthResults {
+      dkim,
+      spf,
+      dmarc,
+      arc,
+    }),
+  ))
 }
 
 fn parse_auth_results_header(
