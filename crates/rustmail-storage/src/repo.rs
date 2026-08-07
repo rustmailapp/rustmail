@@ -230,7 +230,9 @@ impl MessageRepository {
     Some(format!("\"{}\"", sanitized))
   }
 
-  /// Fetches a single message by ID, including bodies and raw bytes.
+  /// Fetches a single message by ID, including its parsed bodies.
+  ///
+  /// The raw RFC 5322 bytes are not read; use [`Self::get_raw`] for those.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
     let message = sqlx::query_as::<_, Message>(
       "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
