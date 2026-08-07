@@ -35,7 +35,9 @@ export default function MessageDetail() {
     return api.listAttachments(id);
   });
 
-  const [rawSource] = createResource(selectedId, async (id) => {
+  const rawTarget = () =>
+    tab() === "raw" || tab() === "headers" ? selectedId() : null;
+  const [rawSource] = createResource(rawTarget, async (id) => {
     if (!id) return null;
     return api.getRawMessage(id);
   });
@@ -262,7 +264,7 @@ export default function MessageDetail() {
                     <AuthView results={authResults()} />
                   </Match>
                   <Match when={tab() === "raw"}>
-                    <RawView raw={rawSource()} />
+                    <RawView raw={rawSource()} messageId={msg().id} />
                   </Match>
                 </Switch>
               </div>
@@ -610,17 +612,40 @@ function TagEditor(props: { messageId: string }) {
   );
 }
 
-function RawView(props: { raw: string | null | undefined }) {
+const RAW_PREVIEW_LIMIT = 128 * 1024;
+
+function RawView(props: { raw: string | null | undefined; messageId: string }) {
   return (
     <Show
       when={props.raw}
       fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
     >
-      {(raw) => (
-        <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
-          {raw()}
-        </pre>
-      )}
+      {(raw) => {
+        const truncated = () => raw().length > RAW_PREVIEW_LIMIT;
+        const shown = () =>
+          truncated() ? raw().slice(0, RAW_PREVIEW_LIMIT) : raw();
+
+        return (
+          <>
+            <Show when={truncated()}>
+              <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+                Showing the first {formatSize(RAW_PREVIEW_LIMIT)} of{" "}
+                {formatSize(raw().length)}.{" "}
+                <a
+                  href={api.exportUrl(props.messageId, "eml")}
+                  download={`${props.messageId}.eml`}
+                  class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+                >
+                  Download the full source
+                </a>
+              </div>
+            </Show>
+            <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
+              {shown()}
+            </pre>
+          </>
+        );
+      }}
     </Show>
   );
 }
