@@ -237,10 +237,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
     "Assert mode: waiting for matching emails"
   );
 
-  let pool = sqlx::sqlite::SqlitePoolOptions::new()
-    .max_connections(2)
-    .connect("sqlite::memory:")
-    .await?;
+  let pool = connect_pool(IN_MEMORY_DB_URL, true).await?;
   initialize_database(&pool).await?;
 
   let repo = MessageRepository::new(pool);
@@ -328,6 +325,34 @@ fn default_db_path() -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("."))
     .join("rustmail")
     .join("rustmail.db")
+}
+
+const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
+const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+
+/// Opens a SQLite connection pool for `db_url`.
+///
+/// In-memory pools are pinned to a single permanent connection. SQLite drops
+/// an in-memory database once its last connection closes, and the pool would
+/// otherwise reap every idle connection after ten minutes, silently discarding
+/// all captured mail. A single connection also keeps concurrent writers off
+/// shared-cache locking, which reports `SQLITE_LOCKED` instead of the
+/// `SQLITE_BUSY` that `busy_timeout` retries.
+async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool> {
+  let options = if in_memory {
+    sqlx::sqlite::SqlitePoolOptions::new()
+      .min_connections(1)
+      .max_connections(1)
+      .idle_timeout(None)
+      .max_lifetime(None)
+  } else {
+    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_MAX_CONNECTIONS)
+  };
+
+  options
+    .connect(db_url)
+    .await
+    .with_context(|| format!("failed to open database: {db_url}"))
 }
 
 fn install_rustls_crypto_provider() {
@@ -529,7 +554,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let db_url = if args.ephemeral {
     info!("Running in ephemeral mode (in-memory database)");
-    "sqlite::memory:".to_string()
+    IN_MEMORY_DB_URL.to_string()
   } else {
     let db_path = args.db_path.unwrap_or_else(default_db_path);
     if let Some(parent) = db_path.parent() {
@@ -539,10 +564,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 
-  let pool = sqlx::sqlite::SqlitePoolOptions::new()
-    .max_connections(5)
-    .connect(&db_url)
-    .await?;
+  let pool = connect_pool(&db_url, args.ephemeral).await?;
 
   initialize_database(&pool).await?;
 
@@ -681,6 +703,62 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod pool_tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn ephemeral_pool_never_drops_its_only_connection() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+
+    let options = pool.options();
+    assert_eq!(
+      options.get_min_connections(),
+      1,
+      "an in-memory database is destroyed once its last connection closes"
+    );
+    assert_eq!(options.get_idle_timeout(), None);
+    assert_eq!(options.get_max_lifetime(), None);
+  }
+
+  #[tokio::test]
+  async fn ephemeral_pool_retains_stored_messages() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+
+    repo
+      .insert(
+        "a@test.com",
+        &["b@test.com".into()],
+        b"From: a@test.com\r\nSubject: kept\r\n\r\nbody",
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert!(pool.size() >= 1);
+  }
+
+  #[tokio::test]
+  async fn file_pool_allows_concurrent_connections() {
+    let dir = std::env::temp_dir().join(format!("rustmail-pool-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db_path = dir.join("pool.db");
+    let pool = connect_pool(&format!("sqlite:{}?mode=rwc", db_path.display()), false)
+      .await
+      .unwrap();
+
+    assert_eq!(
+      pool.options().get_max_connections(),
+      FILE_DB_MAX_CONNECTIONS
+    );
+
+    pool.close().await;
+    let _ = std::fs::remove_dir_all(&dir);
+  }
 }
 
 #[cfg(test)]
