@@ -100,10 +100,12 @@ async function loadMore() {
   }
 }
 
-let reconnectDelay = 2000;
+const RECONNECT_BASE_DELAY = 2000;
 const MAX_RECONNECT_DELAY = 30000;
+let reconnectDelay = RECONNECT_BASE_DELAY;
 let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let hasConnected = false;
 
 function connectWebSocket() {
   disconnectWebSocket();
@@ -113,7 +115,13 @@ function connectWebSocket() {
   currentWs = ws;
 
   ws.onopen = () => {
-    reconnectDelay = 2000;
+    reconnectDelay = RECONNECT_BASE_DELAY;
+    if (hasConnected) {
+      fetchMessages().catch(() =>
+        console.error("Failed to resync inbox after reconnect"),
+      );
+    }
+    hasConnected = true;
   };
 
   ws.onmessage = (e) => {
