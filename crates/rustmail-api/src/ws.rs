@@ -33,10 +33,10 @@ pub async fn ws_handler(
 
 /// Streams [`WsEvent`](crate::WsEvent)s to one client until it goes away.
 ///
-/// A ping every [`WS_PING_INTERVAL`] keeps a quiet-but-live connection open:
-/// browsers answer with a pong, which refreshes the idle deadline. Reaching
-/// [`WS_IDLE_TIMEOUT`] therefore means the peer stopped answering, not merely
-/// that no mail arrived.
+/// A ping on connect and then every [`WS_PING_INTERVAL`] keeps a quiet-but-live
+/// connection open: browsers answer with a pong, which refreshes the idle
+/// deadline. Reaching [`WS_IDLE_TIMEOUT`] therefore means the peer stopped
+/// answering, not merely that no mail arrived.
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
   let mut rx = state.ws_tx.subscribe();
   debug!("WebSocket client connected");
@@ -91,4 +91,19 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
   }
 
   debug!("WebSocket client disconnected");
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{WS_IDLE_TIMEOUT, WS_PING_INTERVAL};
+
+  #[test]
+  fn a_responsive_peer_always_beats_the_idle_deadline() {
+    assert!(
+      WS_PING_INTERVAL < WS_IDLE_TIMEOUT,
+      "pings must be more frequent than the idle deadline, otherwise a live \
+       client is closed before it can answer: ping={WS_PING_INTERVAL:?} \
+       idle={WS_IDLE_TIMEOUT:?}"
+    );
+  }
 }

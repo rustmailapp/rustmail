@@ -1186,3 +1186,49 @@ async fn mutable_message_metadata_is_not_cached() {
     );
   }
 }
+
+fn email_with_latin1_subject() -> Vec<u8> {
+  // Raw 8-bit bytes in a header, i.e. not MIME-encoded: 0xE8 is `è` in Latin-1
+  // and is not valid UTF-8. Real senders emit these.
+  let mut raw = b"From: sender@example.com\r\nSubject: caff".to_vec();
+  raw.push(0xE8);
+  raw.extend_from_slice(b" ricevuto\r\nTo: rcpt@example.com\r\n\r\nbody\r\n");
+  raw
+}
+
+#[tokio::test]
+async fn headers_endpoint_survives_non_utf8_header_bytes() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_latin1_subject(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let subject = headers
+    .iter()
+    .find(|h| h["name"] == "Subject")
+    .expect("Subject must still be listed");
+  let value = subject["value"].as_str().unwrap();
+  assert!(
+    value.starts_with("caff") && value.ends_with("ricevuto"),
+    "undecodable bytes must be replaced, not truncate the value: {value:?}"
+  );
+}

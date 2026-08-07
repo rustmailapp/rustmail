@@ -1013,7 +1013,7 @@ async fn smtp_session_limit_rejects_excess() {
 const WS_PING_OPCODE: u8 = 0x9;
 
 #[tokio::test]
-async fn ws_server_pings_clients_that_send_nothing() {
+async fn ws_server_pings_a_client_as_soon_as_it_connects() {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .connect("sqlite::memory:")
     .await
@@ -1051,6 +1051,8 @@ async fn ws_server_pings_clients_that_send_nothing() {
   }
 
   // The client never speaks, so only a server-side heartbeat can arrive here.
+  // This covers the ping sent on connect; that pings keep coming is enforced by
+  // the WS_PING_INTERVAL < WS_IDLE_TIMEOUT invariant asserted in rustmail-api.
   let mut frame_header = [0u8; 1];
   tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut frame_header))
     .await

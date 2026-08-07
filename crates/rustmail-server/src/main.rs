@@ -745,14 +745,67 @@ mod pool_tests {
     assert!(pool.size() >= 1);
   }
 
+  struct TempDir(PathBuf);
+  impl Drop for TempDir {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  const CONCURRENT_WORKERS: usize = 16;
+  const CONCURRENCY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn single_connection_pool_serializes_without_deadlocking() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+
+    // Ephemeral mode funnels SMTP inserts, retention and every HTTP request
+    // through one connection. A repository method that acquired a second
+    // connection while holding one would deadlock here rather than hang the
+    // whole server in production.
+    let mut handles = Vec::new();
+    for i in 0..CONCURRENT_WORKERS {
+      let repo = repo.clone();
+      handles.push(tokio::spawn(async move {
+        repo
+          .insert(
+            "a@test.com",
+            &["b@test.com".into()],
+            format!("From: a@test.com\r\nSubject: worker{i}\r\n\r\nbody").as_bytes(),
+          )
+          .await
+          .unwrap();
+        repo.count().await.unwrap();
+        repo.search(&format!("worker{i}"), 10, 0).await.unwrap();
+        repo.list(10, 0).await.unwrap();
+      }));
+    }
+
+    tokio::time::timeout(CONCURRENCY_DEADLINE, async {
+      for handle in handles {
+        handle.await.unwrap();
+      }
+    })
+    .await
+    .expect("single-connection pool deadlocked");
+
+    assert_eq!(repo.count().await.unwrap(), CONCURRENT_WORKERS as i64);
+  }
+
   #[tokio::test]
   async fn file_pool_allows_concurrent_connections() {
     let dir = std::env::temp_dir().join(format!("rustmail-pool-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let db_path = dir.join("pool.db");
-    let pool = connect_pool(&format!("sqlite:{}?mode=rwc", db_path.display()), false)
-      .await
-      .unwrap();
+    let _guard = TempDir(dir.clone());
+
+    let pool = connect_pool(
+      &format!("sqlite:{}?mode=rwc", dir.join("pool.db").display()),
+      false,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
       pool.options().get_max_connections(),
@@ -760,7 +813,6 @@ mod pool_tests {
     );
 
     pool.close().await;
-    let _ = std::fs::remove_dir_all(&dir);
   }
 }
 
