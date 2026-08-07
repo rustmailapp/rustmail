@@ -1180,9 +1180,9 @@ async fn mutable_message_metadata_is_not_cached() {
     "/api/v1/messages".to_string(),
   ] {
     let value = cache_control_of(app.clone(), uri.clone()).await;
-    assert!(
-      !value.contains("immutable"),
-      "{uri} must not be marked immutable, got {value:?}"
+    assert_eq!(
+      value, "no-store",
+      "{uri} must explicitly refuse caching, got {value:?}"
     );
   }
 }

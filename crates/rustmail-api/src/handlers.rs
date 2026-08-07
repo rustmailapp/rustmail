@@ -10,7 +10,16 @@ use rustmail_storage::StorageError;
 /// Captured mail is immutable once stored, so anything derived from a
 /// message's bytes can be cached indefinitely. `private` keeps shared caches
 /// out of captured mail when rustmail is bound to a non-loopback address.
+///
+/// A deleted message can therefore still be served from a client's cache if
+/// its URL is requested again. ULIDs are never reused, so this can only ever
+/// resurface the message that URL already named, and the UI drops the row on
+/// `message:delete` rather than re-requesting it.
 const IMMUTABLE_MESSAGE_CACHE: &str = "private, max-age=31536000, immutable";
+
+/// Read state, stars and tags change over a message's life, so these
+/// responses must not be served from a cache.
+const MUTABLE_MESSAGE_CACHE: &str = "no-store";
 
 #[derive(Deserialize)]
 pub struct ListParams {
@@ -43,10 +52,14 @@ pub async fn list_messages(
     (msgs, total)
   };
 
-  Ok(Json(serde_json::json!({
-      "messages": messages,
-      "total": count,
-  })))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string())],
+    Json(serde_json::json!({
+        "messages": messages,
+        "total": count,
+    })),
+  ))
 }
 
 pub async fn get_message(
@@ -54,7 +67,11 @@ pub async fn get_message(
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
   let message = state.repo.get(&id).await?;
-  Ok(Json(message))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string())],
+    Json(message),
+  ))
 }
 
 const MAX_TAGS: usize = 20;
