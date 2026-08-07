@@ -274,7 +274,11 @@ export default function MessageDetail() {
                     <AuthView results={authResults()} />
                   </Match>
                   <Match when={tab() === "raw"}>
-                    <RawView raw={rawSource()} messageId={msg().id} />
+                    <RawView
+                      raw={rawSource()}
+                      messageId={msg().id}
+                      size={msg().size}
+                    />
                   </Match>
                 </Switch>
               </div>
@@ -596,25 +600,29 @@ function TagEditor(props: { messageId: string }) {
   );
 }
 
-const RAW_PREVIEW_LIMIT = 128 * 1024;
+const RAW_PREVIEW_LIMIT_CHARS = 128 * 1024;
 
-function RawView(props: { raw: string | null | undefined; messageId: string }) {
+function RawView(props: {
+  raw: string | null | undefined;
+  messageId: string;
+  size: number;
+}) {
   return (
     <Show
       when={props.raw}
       fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
     >
       {(raw) => {
-        const truncated = () => raw().length > RAW_PREVIEW_LIMIT;
+        const truncated = () => raw().length > RAW_PREVIEW_LIMIT_CHARS;
         const shown = () =>
-          truncated() ? raw().slice(0, RAW_PREVIEW_LIMIT) : raw();
+          truncated() ? raw().slice(0, RAW_PREVIEW_LIMIT_CHARS) : raw();
 
         return (
           <>
             <Show when={truncated()}>
               <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
-                Showing the first {formatSize(RAW_PREVIEW_LIMIT)} of{" "}
-                {formatSize(raw().length)}.{" "}
+                Showing the first {RAW_PREVIEW_LIMIT_CHARS / 1024} K characters
+                of {formatSize(props.size)}.{" "}
                 <a
                   href={api.exportUrl(props.messageId, "eml")}
                   download={`${props.messageId}.eml`}
