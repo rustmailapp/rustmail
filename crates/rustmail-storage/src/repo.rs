@@ -316,13 +316,19 @@ impl MessageRepository {
   }
 
   /// Deletes all messages and clears the FTS5 index atomically. Returns the count of deleted messages.
+  ///
+  /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
+  /// An external-content index reads the content row to work out which tokens
+  /// to remove, so a plain `DELETE` issued after the source rows are gone is a
+  /// silent no-op that leaves the whole index behind.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
     let mut txn = self.pool.begin().await?;
 
-    let result = sqlx::query("DELETE FROM messages")
+    sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
       .execute(&mut *txn)
       .await?;
-    sqlx::query("DELETE FROM messages_fts")
+
+    let result = sqlx::query("DELETE FROM messages")
       .execute(&mut *txn)
       .await?;
 
@@ -862,6 +868,43 @@ mod tests {
 
     let results = repo.search("abc", 50, 0).await.unwrap();
     assert_eq!(results.len(), 0);
+  }
+
+  #[tokio::test]
+  async fn repeated_delete_all_does_not_grow_the_fts_index() {
+    let repo = test_repo().await;
+
+    async fn index_rows(repo: &MessageRepository) -> i64 {
+      sqlx::query_scalar("SELECT count(*) FROM messages_fts_data")
+        .fetch_one(&repo.pool)
+        .await
+        .unwrap()
+    }
+
+    let mut sizes = Vec::new();
+    for round in 0..3 {
+      for i in 0..5 {
+        repo
+          .insert(
+            "a@t.com",
+            &["b@t.com".into()],
+            &raw_email(&format!("round{round}msg{i}"), "a@t.com", "b@t.com"),
+          )
+          .await
+          .unwrap();
+      }
+      repo.delete_all().await.unwrap();
+      sizes.push(index_rows(&repo).await);
+    }
+
+    assert_eq!(
+      sizes[0], sizes[2],
+      "index kept growing across delete_all cycles: {sizes:?}"
+    );
+    assert!(
+      repo.search("round0msg0", 50, 0).await.unwrap().is_empty(),
+      "deleted terms must not stay in the index"
+    );
   }
 
   #[tokio::test]
