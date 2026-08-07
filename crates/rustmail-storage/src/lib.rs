@@ -11,11 +11,11 @@
 //! # Example
 //!
 //! ```no_run
-//! use rustmail_storage::{MessageRepository, initialize_database};
+//! use rustmail_storage::{MessageRepository, connect_options, initialize_database};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let pool = sqlx::sqlite::SqlitePoolOptions::new()
-//!     .connect("sqlite::memory:")
+//!     .connect_with(connect_options("sqlite::memory:")?)
 //!     .await?;
 //! initialize_database(&pool).await?;
 //!
@@ -33,4 +33,4 @@ mod schema;
 pub use error::StorageError;
 pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
 pub use repo::{MessageRepository, format_iso8601};
-pub use schema::initialize_database;
+pub use schema::{connect_options, initialize_database};

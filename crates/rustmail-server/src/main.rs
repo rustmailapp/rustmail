@@ -339,7 +339,7 @@ const FILE_DB_MAX_CONNECTIONS: u32 = 5;
 /// shared-cache locking, which reports `SQLITE_LOCKED` instead of the
 /// `SQLITE_BUSY` that `busy_timeout` retries.
 async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool> {
-  let options = if in_memory {
+  let pool_options = if in_memory {
     sqlx::sqlite::SqlitePoolOptions::new()
       .min_connections(1)
       .max_connections(1)
@@ -349,8 +349,11 @@ async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool>
     sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_MAX_CONNECTIONS)
   };
 
-  options
-    .connect(db_url)
+  let connect_options = rustmail_storage::connect_options(db_url)
+    .with_context(|| format!("invalid database URL: {db_url}"))?;
+
+  pool_options
+    .connect_with(connect_options)
     .await
     .with_context(|| format!("failed to open database: {db_url}"))
 }
