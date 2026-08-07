@@ -1010,6 +1010,61 @@ async fn smtp_session_limit_rejects_excess() {
   drop(held_connections);
 }
 
+const WS_PING_OPCODE: u8 = 0x9;
+
+#[tokio::test]
+async fn ws_server_pings_clients_that_send_nothing() {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let repo = MessageRepository::new(pool);
+  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let app = router(AppState::new(repo, ws_tx, None, None));
+
+  let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let http_addr = http_listener.local_addr().unwrap();
+  tokio::spawn(async move {
+    axum::serve(http_listener, app).await.unwrap();
+  });
+
+  let mut stream = TcpStream::connect(http_addr).await.unwrap();
+  stream
+    .write_all(
+      format!(
+        "GET /api/v1/ws HTTP/1.1\r\nHost: {http_addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+      )
+      .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+  let mut reader = BufReader::new(stream);
+  loop {
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(!line.is_empty(), "connection closed during WS handshake");
+    if line == "\r\n" {
+      break;
+    }
+  }
+
+  // The client never speaks, so only a server-side heartbeat can arrive here.
+  let mut frame_header = [0u8; 1];
+  tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut frame_header))
+    .await
+    .expect("server sent no frame within 5s; heartbeat is missing")
+    .unwrap();
+
+  assert_eq!(
+    frame_header[0] & 0x0f,
+    WS_PING_OPCODE,
+    "expected a ping frame, got opcode {:#x}",
+    frame_header[0] & 0x0f
+  );
+}
+
 #[tokio::test]
 async fn ws_connection_limit_returns_503() {
   let (app, _, _) = {
