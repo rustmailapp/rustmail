@@ -538,7 +538,7 @@ pub async fn get_auth_results(
 ) -> Result<impl IntoResponse, AppError> {
   let raw = state.repo.get_raw(&id).await?;
 
-  let parsed = mail_parser::MessageParser::default().parse(&raw);
+  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
   let headers = parsed
     .as_ref()
     .and_then(|msg| msg.parts.first())
