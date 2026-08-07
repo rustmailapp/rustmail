@@ -232,11 +232,13 @@ impl MessageRepository {
 
   /// Fetches a single message by ID, including bodies and raw bytes.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
-    let message = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?1")
-      .bind(id)
-      .fetch_optional(&self.pool)
-      .await?
-      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    let message = sqlx::query_as::<_, Message>(
+      "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&self.pool)
+    .await?
+    .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
 
     Ok(message)
   }
@@ -566,7 +568,7 @@ mod tests {
     let msg = repo.get(&summary.id).await.unwrap();
     assert_eq!(msg.id, summary.id);
     assert_eq!(msg.text_body.as_deref(), Some("Hello world"));
-    assert_eq!(msg.raw, raw);
+    assert_eq!(repo.get_raw(&summary.id).await.unwrap(), raw);
   }
 
   #[tokio::test]

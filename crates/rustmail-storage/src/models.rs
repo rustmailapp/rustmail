@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize, Serializer};
 
-/// A fully-loaded email message including parsed bodies and raw bytes.
+/// An email message with its parsed bodies.
+///
+/// The raw RFC 5322 bytes are deliberately absent: they are never part of a
+/// JSON response, and loading the blob for every message view meant reading
+/// megabytes out of SQLite only to discard them. Use
+/// [`MessageRepository::get_raw`](crate::MessageRepository::get_raw) when the
+/// original bytes are needed.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Message {
   /// ULID identifier (time-sortable).
@@ -16,9 +22,6 @@ pub struct Message {
   pub text_body: Option<String>,
   /// Extracted HTML body, if present.
   pub html_body: Option<String>,
-  /// Raw RFC 5322 bytes (excluded from JSON serialization).
-  #[serde(skip_serializing)]
-  pub raw: Vec<u8>,
   /// Size of the raw message in bytes.
   pub size: i64,
   /// Whether the message contains attachments.
