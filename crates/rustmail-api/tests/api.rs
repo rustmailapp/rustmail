@@ -972,3 +972,153 @@ async fn tags_update_ws_event() {
     _ => panic!("Expected MessageTags event, got {event:?}"),
   }
 }
+
+fn email_with_folded_and_repeated_headers() -> Vec<u8> {
+  concat!(
+    "Received: from a.example.com by b.example.com;\r\n",
+    " Tue, 1 Jul 2025 10:00:00 +0000\r\n",
+    "Received: from c.example.com by d.example.com;\r\n",
+    " Tue, 1 Jul 2025 10:00:01 +0000\r\n",
+    "From: sender@example.com\r\n",
+    "To: rcpt@example.com\r\n",
+    "Subject: Folded header test\r\n",
+    "X-Long: first part\r\n\tsecond part\r\n",
+    "Content-Type: text/plain\r\n",
+    "\r\n",
+    "Body that must never reach the headers endpoint.\r\n",
+  )
+  .as_bytes()
+  .to_vec()
+}
+
+#[tokio::test]
+async fn headers_endpoint_returns_fields_in_wire_order() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let names: Vec<&str> = headers
+    .iter()
+    .map(|h| h["name"].as_str().unwrap())
+    .collect();
+  assert_eq!(
+    names,
+    vec![
+      "Received",
+      "Received",
+      "From",
+      "To",
+      "Subject",
+      "X-Long",
+      "Content-Type"
+    ],
+    "duplicates must be preserved and order must match the wire"
+  );
+
+  let subject = headers.iter().find(|h| h["name"] == "Subject").unwrap();
+  assert_eq!(subject["value"], "Folded header test");
+}
+
+#[tokio::test]
+async fn headers_endpoint_unfolds_continuation_lines() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let long = headers.iter().find(|h| h["name"] == "X-Long").unwrap();
+  assert_eq!(long["value"], "first part second part");
+
+  let first_received = headers.iter().find(|h| h["name"] == "Received").unwrap();
+  assert_eq!(
+    first_received["value"],
+    "from a.example.com by b.example.com; Tue, 1 Jul 2025 10:00:00 +0000"
+  );
+}
+
+#[tokio::test]
+async fn headers_endpoint_omits_the_body() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  let bytes = axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024)
+    .await
+    .unwrap();
+  let text = std::str::from_utf8(&bytes).unwrap();
+  assert!(
+    !text.contains("must never reach"),
+    "the body leaked into the headers response"
+  );
+}
+
+#[tokio::test]
+async fn headers_endpoint_unknown_message_returns_404() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/messages/nonexistent/headers")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}

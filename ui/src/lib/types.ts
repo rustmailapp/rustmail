@@ -30,6 +30,11 @@ export interface ListResponse {
   total: number;
 }
 
+export interface MessageHeader {
+  name: string;
+  value: string;
+}
+
 export interface AuthCheck {
   status: string;
   details: string;

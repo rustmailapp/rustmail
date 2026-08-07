@@ -1,4 +1,10 @@
-import type { Attachment, AuthResults, ListResponse, Message } from "./types";
+import type {
+  Attachment,
+  AuthResults,
+  ListResponse,
+  Message,
+  MessageHeader,
+} from "./types";
 
 const BASE = "/api/v1";
 
@@ -81,6 +87,10 @@ export async function listAttachments(
 
 export async function getAuthResults(id: string): Promise<AuthResults> {
   return fetchJson(`${BASE}/messages/${enc(id)}/auth`);
+}
+
+export async function getHeaders(id: string): Promise<MessageHeader[]> {
+  return fetchJson(`${BASE}/messages/${enc(id)}/headers`);
 }
 
 export async function getRawMessage(id: string): Promise<string> {

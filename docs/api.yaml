@@ -158,6 +158,37 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  /api/v1/messages/{id}/headers:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: getMessageHeaders
+      summary: List the message header fields
+      description: >
+        Returns the header section only, in wire order, with duplicates
+        preserved and folded lines joined by a single space. Cheaper than
+        fetching the raw source when only the headers are needed.
+      tags: [Messages]
+      responses:
+        '200':
+          description: Header fields in wire order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageHeader'
+              example:
+                - name: Received
+                  value: "from a.example.com by b.example.com; Tue, 1 Jul 2025 10:00:00 +0000"
+                - name: From
+                  value: "sender@example.com"
+                - name: Subject
+                  value: "Welcome aboard"
+        '404':
+          $ref: '#/components/responses/NotFound'
+
   /api/v1/messages/{id}/attachments:
     parameters:
       - $ref: '#/components/parameters/MessageId'
@@ -648,6 +679,19 @@ components:
           type: integer
           description: Number of messages that matched the given filters
           example: 2
+
+    MessageHeader:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+          description: Header field name as it appears on the wire
+          example: Subject
+        value:
+          type: string
+          description: Field value with folded continuation lines joined by a space
+          example: "Welcome aboard"
 
     AuthCheck:
       type: object

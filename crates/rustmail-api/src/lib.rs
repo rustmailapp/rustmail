@@ -54,6 +54,7 @@ pub fn router(state: AppState) -> Router {
     .route("/messages/{id}", patch(handlers::update_message))
     .route("/messages/{id}", delete(handlers::delete_message))
     .route("/messages/{id}/raw", get(handlers::get_raw_message))
+    .route("/messages/{id}/headers", get(handlers::get_headers))
     .route(
       "/messages/{id}/attachments",
       get(handlers::list_attachments),

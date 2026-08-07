@@ -231,6 +231,48 @@ pub async fn get_raw_message(
   ))
 }
 
+/// One header field as it appears on the wire, with folded lines joined.
+#[derive(Debug, Serialize)]
+pub struct MessageHeader {
+  pub name: String,
+  pub value: String,
+}
+
+pub async fn get_headers(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+  let raw = state.repo.get_raw(&id).await?;
+
+  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
+  let headers: Vec<MessageHeader> = parsed
+    .as_ref()
+    .and_then(|msg| msg.parts.first())
+    .map(|root| root.headers.as_slice())
+    .unwrap_or_default()
+    .iter()
+    .map(|h| MessageHeader {
+      name: h.name.as_str().to_string(),
+      value: unfold_header_value(
+        raw
+          .get(h.offset_start as usize..h.offset_end as usize)
+          .unwrap_or_default(),
+      ),
+    })
+    .collect();
+
+  Ok(Json(headers))
+}
+
+fn unfold_header_value(value: &[u8]) -> String {
+  String::from_utf8_lossy(value)
+    .split(['\r', '\n'])
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
 #[derive(Deserialize)]
 pub struct AssertParams {
   pub min: Option<i64>,
