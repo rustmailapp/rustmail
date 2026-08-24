@@ -27,8 +27,21 @@ const BAD_SEQUENCE: &str = "503 Bad sequence of commands\r\n";
 const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
 const MAX_LINE_LENGTH: usize = 4096;
 const MAX_RECIPIENTS: usize = 100;
-const MAX_COMMANDS: usize = 1000;
+/// Commands a client may issue without ever completing a mail transaction.
+///
+/// The cap exists to cut off a peer that chatters without delivering
+/// anything, so it counts only unproductive commands: a successful `DATA`
+/// resets it. Counting every command instead would disconnect the well
+/// behaved clients that reuse one connection for a bulk send, which is
+/// exactly the traffic a mail catcher exists to receive.
+const MAX_COMMANDS_PER_TRANSACTION: usize = 1000;
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
+/// Deadline for one whole DATA phase, from `354` to the terminating dot.
+///
+/// Bounds the transfer as a unit instead of per read, which keeps a stalled
+/// peer from holding a session open while still allowing a large message to
+/// arrive over a slow link.
+const DATA_PHASE_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum SmtpStream {
   Plain(TcpStream),
@@ -133,7 +146,7 @@ impl Session {
       }
 
       command_count += 1;
-      if command_count > MAX_COMMANDS {
+      if command_count > MAX_COMMANDS_PER_TRANSACTION {
         self.write("421 Too many commands\r\n").await?;
         return Ok(());
       }
@@ -182,12 +195,13 @@ impl Session {
           self.write(BAD_SEQUENCE).await?;
         } else {
           self.write(DATA_START).await?;
-          match self.receive_data().await {
-            Ok(()) => {}
-            Err(SessionError::MessageTooLarge) => {
+          match timeout(DATA_PHASE_TIMEOUT, self.receive_data()).await {
+            Ok(Ok(())) => command_count = 0,
+            Ok(Err(SessionError::MessageTooLarge)) => {
               self.write("552 Message exceeds maximum size\r\n").await?;
             }
-            Err(e) => return Err(e),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(SessionError::Timeout),
           }
         }
       } else if upper == "QUIT" {

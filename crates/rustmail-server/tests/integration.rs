@@ -1010,8 +1010,128 @@ async fn smtp_session_limit_rejects_excess() {
   drop(held_connections);
 }
 
-const WS_PING_OPCODE: u8 = 0x9;
+async fn spawn_smtp_only(tx: mpsc::Sender<ReceivedMessage>) -> std::net::SocketAddr {
+  let smtp_port = portpicker::pick_unused_port().expect("no free port");
+  let config = SmtpServerConfig {
+    host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+    port: smtp_port,
+    max_message_size: MAX_MESSAGE_SIZE,
+    tls: None,
+  };
+  let server = SmtpServer::new(config, tx);
+  tokio::spawn(async move {
+    server.run().await.unwrap();
+  });
 
+  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
+  wait_for_tcp(addr).await;
+  addr
+}
+
+/// A bulk sender reuses one connection for far more than the unproductive
+/// command cap, so completing a transaction has to clear the counter.
+const BULK_MESSAGES_ON_ONE_CONNECTION: usize = 400;
+
+#[tokio::test]
+async fn smtp_accepts_a_long_bulk_send_over_one_connection() {
+  let (tx, mut rx) = mpsc::channel::<ReceivedMessage>(1024);
+  // Stops at the expected count: the listener holds a sender for as long as it
+  // runs, so the channel never closes on its own.
+  let drain = tokio::spawn(async move {
+    let mut seen = 0usize;
+    while seen < BULK_MESSAGES_ON_ONE_CONNECTION {
+      if rx.recv().await.is_none() {
+        break;
+      }
+      seen += 1;
+    }
+    seen
+  });
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+  read_ehlo_response(&mut stream).await;
+
+  for i in 0..BULK_MESSAGES_ON_ONE_CONNECTION {
+    stream
+      .write_all(b"MAIL FROM:<bulk@test.com>\r\n")
+      .await
+      .unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("250")
+    );
+
+    stream
+      .write_all(b"RCPT TO:<sink@test.com>\r\n")
+      .await
+      .unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("250")
+    );
+
+    stream.write_all(b"DATA\r\n").await.unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("354")
+    );
+
+    stream
+      .write_all(format!("Subject: bulk-{i}\r\n\r\nbody\r\n.\r\n").as_bytes())
+      .await
+      .unwrap();
+    let reply = read_smtp_response_line(&mut stream).await;
+    assert!(
+      reply.starts_with("250"),
+      "message {i} of {BULK_MESSAGES_ON_ONE_CONNECTION} was refused: {reply}"
+    );
+  }
+
+  stream.write_all(b"QUIT\r\n").await.unwrap();
+  drop(stream);
+
+  let delivered = tokio::time::timeout(Duration::from_secs(30), drain)
+    .await
+    .expect("timed out waiting for the sent messages to reach the channel")
+    .unwrap();
+  assert_eq!(
+    delivered, BULK_MESSAGES_ON_ONE_CONNECTION,
+    "every message sent on the reused connection must reach the channel"
+  );
+}
+
+#[tokio::test]
+async fn smtp_still_cuts_off_a_client_that_never_delivers() {
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+  read_ehlo_response(&mut stream).await;
+
+  for issued in 0..2000 {
+    stream.write_all(b"NOOP\r\n").await.unwrap();
+    let reply = read_smtp_response_line(&mut stream).await;
+    if reply.starts_with("421") {
+      return;
+    }
+    assert!(
+      reply.starts_with("250"),
+      "unexpected reply to NOOP {issued}: {reply}"
+    );
+  }
+
+  panic!("a client issuing only unproductive commands was never cut off");
+}
+
+const WS_PING_OPCODE: u8 = 0x9;
 #[tokio::test]
 async fn ws_server_pings_a_client_as_soon_as_it_connects() {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
