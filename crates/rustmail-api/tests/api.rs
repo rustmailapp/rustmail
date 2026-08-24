@@ -1292,6 +1292,27 @@ async fn raw_message_rejects_a_non_positive_limit() {
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn unknown_api_path_is_a_json_404_not_the_spa_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/there-is-no-such-endpoint")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let body = json_body(response).await;
+  assert!(
+    body.get("error").is_some(),
+    "an API 404 must carry a JSON error, got: {body}"
+  );
+}
 
 #[tokio::test]
 async fn header_endpoint_reads_headers_longer_than_the_prefix_window() {

@@ -16,6 +16,8 @@ const HASHED_ASSET_PREFIX: &str = "assets/";
 const IMMUTABLE_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 const REVALIDATE_CACHE_CONTROL: &str = "no-cache";
 const HTML_CONTENT_TYPE: &str = "text/html; charset=utf-8";
+/// Requests under this prefix are API calls, never client-side routes.
+const API_PREFIX: &str = "api/";
 
 fn body_of(data: Cow<'static, [u8]>) -> Bytes {
   match data {
@@ -24,8 +26,22 @@ fn body_of(data: Cow<'static, [u8]>) -> Bytes {
   }
 }
 
+/// Serves the embedded UI, falling back to `index.html` so the client-side
+/// router owns unknown paths.
+///
+/// Unmatched API paths are excluded from that fallback: answering them with
+/// the SPA shell hands an API client a `200` full of HTML, which it cannot
+/// tell apart from a real response.
 pub async fn static_handler(uri: Uri) -> Response {
   let path = uri.path().trim_start_matches('/');
+
+  if path.starts_with(API_PREFIX) {
+    return (
+      StatusCode::NOT_FOUND,
+      axum::Json(serde_json::json!({ "error": "Unknown API endpoint" })),
+    )
+      .into_response();
+  }
 
   if let Some(file) = Assets::get(path) {
     let mime = mime_guess::from_path(path).first_or_octet_stream();
