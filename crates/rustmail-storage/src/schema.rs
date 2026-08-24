@@ -9,6 +9,15 @@ use crate::StorageError;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_SIZE_KIB: &str = "-64000";
 const MMAP_SIZE_BYTES: &str = "268435456";
+/// WAL pages that may accumulate before a commit also checkpoints.
+///
+/// SQLite's default is 1000 pages, roughly 4 MiB. A captured message writes
+/// its raw bytes plus every decoded attachment, so a single mail with
+/// attachments can fill that on its own and make almost every commit pay for
+/// a checkpoint: two `fsync` calls and a copy of the WAL back into the
+/// database, on the same connection that is trying to store the next message.
+/// Raising the threshold batches that work into rarer, larger checkpoints.
+const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 
 /// Builds connection options for `db_url` with RustMail's SQLite tuning.
 ///
@@ -32,7 +41,8 @@ pub fn connect_options(db_url: &str) -> Result<SqliteConnectOptions, StorageErro
       .pragma("synchronous", "NORMAL")
       .pragma("cache_size", CACHE_SIZE_KIB)
       .pragma("mmap_size", MMAP_SIZE_BYTES)
-      .pragma("temp_store", "MEMORY"),
+      .pragma("temp_store", "MEMORY")
+      .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES),
   )
 }
 
@@ -218,6 +228,48 @@ mod tests {
         foreign_keys, FOREIGN_KEYS_ON,
         "connection {index} did not get foreign_keys=ON"
       );
+
+      let cache_size: i64 = sqlx::query_scalar("PRAGMA cache_size")
+        .fetch_one(&mut **conn)
+        .await
+        .unwrap();
+      assert_eq!(
+        cache_size.to_string(),
+        CACHE_SIZE_KIB,
+        "connection {index} did not get the tuned cache_size"
+      );
+
+      let mmap_size: i64 = sqlx::query_scalar("PRAGMA mmap_size")
+        .fetch_one(&mut **conn)
+        .await
+        .unwrap();
+      assert_eq!(
+        mmap_size.to_string(),
+        MMAP_SIZE_BYTES,
+        "connection {index} did not get the tuned mmap_size"
+      );
+
+      let autocheckpoint: i64 = sqlx::query_scalar("PRAGMA wal_autocheckpoint")
+        .fetch_one(&mut **conn)
+        .await
+        .unwrap();
+      assert_eq!(
+        autocheckpoint.to_string(),
+        WAL_AUTOCHECKPOINT_PAGES,
+        "connection {index} fell back to SQLite's default checkpoint threshold, \
+         which makes almost every large-message commit checkpoint the WAL"
+      );
+
+      let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&mut **conn)
+        .await
+        .unwrap();
+      assert_eq!(
+        busy_timeout as u128,
+        BUSY_TIMEOUT.as_millis(),
+        "connection {index} did not get the configured busy_timeout"
+      );
     }
   }
+
 }
