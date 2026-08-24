@@ -37,6 +37,11 @@ pub async fn ws_handler(
 /// connection open: browsers answer with a pong, which refreshes the idle
 /// deadline. Reaching [`WS_IDLE_TIMEOUT`] therefore means the peer stopped
 /// answering, not merely that no mail arrived.
+///
+/// A client too slow to keep up with the broadcast channel is disconnected
+/// rather than served the surviving events. Its incremental view of the inbox
+/// is already wrong at that point, and only a full refetch can repair it, so
+/// closing hands the job to the reconnect path that already resyncs.
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
   let mut rx = state.ws_tx.subscribe();
   debug!("WebSocket client connected");
@@ -67,8 +72,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     }
                 }
                 Err(RecvError::Lagged(n)) => {
-                    warn!(missed = n, "WebSocket client lagged, skipping missed events");
-                    continue;
+                    warn!(missed = n, "WebSocket client fell behind, closing so it resyncs");
+                    let _ = socket.send(Message::Close(None)).await;
+                    break;
                 }
                 Err(RecvError::Closed) => break,
             }

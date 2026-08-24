@@ -1132,6 +1132,115 @@ async fn smtp_still_cuts_off_a_client_that_never_delivers() {
 }
 
 const WS_PING_OPCODE: u8 = 0x9;
+const WS_TEXT_OPCODE: u8 = 0x1;
+const WS_CLOSE_OPCODE: u8 = 0x8;
+const WS_EXTENDED_LENGTH_MARKER: u8 = 126;
+
+async fn ws_handshake(http_addr: std::net::SocketAddr) -> BufReader<TcpStream> {
+  let mut stream = TcpStream::connect(http_addr).await.unwrap();
+  stream
+    .write_all(
+      format!(
+        "GET /api/v1/ws HTTP/1.1\r\nHost: {http_addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+      )
+      .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+  let mut reader = BufReader::new(stream);
+  loop {
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(!line.is_empty(), "connection closed during WS handshake");
+    if line == "\r\n" {
+      return reader;
+    }
+  }
+}
+
+/// Reads one unmasked server frame, returning its opcode.
+async fn read_ws_opcode(reader: &mut BufReader<TcpStream>) -> u8 {
+  let mut header = [0u8; 2];
+  reader.read_exact(&mut header).await.unwrap();
+  let opcode = header[0] & 0x0f;
+
+  let len = match header[1] & 0x7f {
+    WS_EXTENDED_LENGTH_MARKER => {
+      let mut extended = [0u8; 2];
+      reader.read_exact(&mut extended).await.unwrap();
+      u16::from_be_bytes(extended) as usize
+    }
+    len => len as usize,
+  };
+
+  let mut payload = vec![0u8; len];
+  reader.read_exact(&mut payload).await.unwrap();
+  opcode
+}
+
+/// Small enough that a handful of events overruns it deterministically.
+const TINY_BROADCAST_CAPACITY: usize = 4;
+const EVENTS_OVERRUNNING_CAPACITY: usize = 200;
+
+#[tokio::test]
+async fn ws_closes_a_client_that_falls_behind_instead_of_dropping_events() {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let repo = MessageRepository::new(pool);
+  let (ws_tx, _) = broadcast::channel::<WsEvent>(TINY_BROADCAST_CAPACITY);
+  let state = AppState::new(repo, ws_tx.clone(), None, None);
+  let app = router(state);
+
+  let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let http_addr = http_listener.local_addr().unwrap();
+  tokio::spawn(async move {
+    axum::serve(http_listener, app).await.unwrap();
+  });
+
+  let mut reader = ws_handshake(http_addr).await;
+
+  // The ping on connect proves the handler is subscribed, so the burst below
+  // lands in its receiver rather than before it existed.
+  assert_eq!(read_ws_opcode(&mut reader).await, WS_PING_OPCODE);
+
+  // No await inside the loop, so on a current-thread runtime the handler
+  // cannot drain between sends and is guaranteed to fall behind.
+  for i in 0..EVENTS_OVERRUNNING_CAPACITY {
+    ws_tx
+      .send(WsEvent::MessageDelete { id: i.to_string() })
+      .unwrap();
+  }
+
+  let mut text_frames = 0;
+  loop {
+    let opcode = tokio::time::timeout(Duration::from_secs(5), read_ws_opcode(&mut reader))
+      .await
+      .expect("server neither closed nor kept streaming after the client fell behind");
+
+    match opcode {
+      WS_CLOSE_OPCODE => break,
+      WS_TEXT_OPCODE => {
+        text_frames += 1;
+        assert!(
+          text_frames < EVENTS_OVERRUNNING_CAPACITY,
+          "server streamed a partial event set instead of closing"
+        );
+      }
+      WS_PING_OPCODE => {}
+      other => panic!("unexpected opcode {other:#x}"),
+    }
+  }
+
+  assert!(
+    text_frames < EVENTS_OVERRUNNING_CAPACITY,
+    "a lagging client must not be served a silently incomplete stream"
+  );
+}
+
 #[tokio::test]
 async fn ws_server_pings_a_client_as_soon_as_it_connects() {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
