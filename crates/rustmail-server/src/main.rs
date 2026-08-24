@@ -745,13 +745,6 @@ mod pool_tests {
     assert!(pool.size() >= 1);
   }
 
-  struct TempDir(PathBuf);
-  impl Drop for TempDir {
-    fn drop(&mut self) {
-      let _ = std::fs::remove_dir_all(&self.0);
-    }
-  }
-
   const CONCURRENT_WORKERS: usize = 16;
   const CONCURRENCY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
 
@@ -796,12 +789,10 @@ mod pool_tests {
 
   #[tokio::test]
   async fn file_pool_allows_concurrent_connections() {
-    let dir = std::env::temp_dir().join(format!("rustmail-pool-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let _guard = TempDir(dir.clone());
+    let dir = tempfile::tempdir().unwrap();
 
     let pool = connect_pool(
-      &format!("sqlite:{}?mode=rwc", dir.join("pool.db").display()),
+      &format!("sqlite:{}?mode=rwc", dir.path().join("pool.db").display()),
       false,
     )
     .await
