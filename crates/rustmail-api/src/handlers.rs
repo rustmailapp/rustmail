@@ -159,7 +159,11 @@ pub async fn list_attachments(
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
   let attachments = state.repo.get_attachments(&id).await?;
-  Ok(Json(attachments))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(attachments),
+  ))
 }
 
 pub async fn get_attachment(
@@ -423,6 +427,7 @@ pub async fn export_message(
               header::CONTENT_DISPOSITION,
               format!("attachment; filename=\"{}.eml\"", sanitize_filename(&id)),
             ),
+            (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
           ],
           raw,
         )
@@ -441,6 +446,7 @@ pub async fn export_message(
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{}.json\"", sanitize_filename(&id)),
               ),
+              (header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string()),
             ],
             body,
           )
