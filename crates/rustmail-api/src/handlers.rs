@@ -261,11 +261,39 @@ pub struct MessageHeader {
   pub value: String,
 }
 
+/// Raw bytes read when only the header section is needed.
+const HEADER_SECTION_PREFIX_BYTES: i64 = 64 * 1024;
+
+fn ends_header_section(raw: &[u8]) -> bool {
+  raw.windows(4).any(|w| w == b"\r\n\r\n") || raw.windows(2).any(|w| w == b"\n\n")
+}
+
+/// Reads enough of a message's source to cover its header section.
+///
+/// Real headers fit in [`HEADER_SECTION_PREFIX_BYTES`] many times over, so the
+/// common case is one short read instead of pulling a whole multi-megabyte
+/// blob out of SQLite. A message whose header section is genuinely longer
+/// falls back to the full source rather than silently losing fields.
+async fn read_header_section(state: &AppState, id: &str) -> Result<Vec<u8>, StorageError> {
+  let prefix = state
+    .repo
+    .get_raw_prefix(id, HEADER_SECTION_PREFIX_BYTES)
+    .await?;
+
+  let complete =
+    (prefix.len() as i64) < HEADER_SECTION_PREFIX_BYTES || ends_header_section(&prefix);
+  if complete {
+    return Ok(prefix);
+  }
+
+  state.repo.get_raw(id).await
+}
+
 pub async fn get_headers(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = state.repo.get_raw(&id).await?;
+  let raw = read_header_section(&state, &id).await?;
 
   let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
   let headers: Vec<MessageHeader> = parsed
@@ -563,7 +591,7 @@ pub async fn get_auth_results(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = state.repo.get_raw(&id).await?;
+  let raw = read_header_section(&state, &id).await?;
 
   let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
   let headers = parsed

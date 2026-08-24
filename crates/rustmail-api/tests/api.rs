@@ -1232,3 +1232,50 @@ async fn headers_endpoint_survives_non_utf8_header_bytes() {
     "undecodable bytes must be replaced, not truncate the value: {value:?}"
   );
 }
+
+
+
+
+#[tokio::test]
+async fn header_endpoint_reads_headers_longer_than_the_prefix_window() {
+  let (app, repo, _) = setup().await;
+
+  // A header section far past the 64 KiB prefix read, so the handler has to
+  // notice the prefix was truncated and fall back to the whole message.
+  let padding: String = (0..4000)
+    .map(|i| format!("X-Pad-{i}: {}\r\n", "y".repeat(64)))
+    .collect();
+  let raw = format!(
+    "From: a@t.com\r\nTo: b@t.com\r\nSubject: Long\r\n{padding}X-Last: sentinel\r\n\r\nbody"
+  )
+  .into_bytes();
+  assert!(raw.len() > 64 * 1024);
+
+  let summary = repo
+    .insert("a@t.com", &["b@t.com".into()], &raw)
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let names: Vec<&str> = body
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|h| h["name"].as_str().unwrap())
+    .collect();
+  assert!(
+    names.contains(&"X-Last"),
+    "a header past the prefix window was dropped"
+  );
+}

@@ -454,6 +454,25 @@ impl MessageRepository {
     Ok(row.0)
   }
 
+  /// Returns at most `max_bytes` from the start of a message's raw bytes.
+  ///
+  /// Callers that only need the header section, or only enough source to fill
+  /// a preview, should use this rather than [`Self::get_raw`]: `substr` keeps
+  /// SQLite from materialising a multi-megabyte blob that is then discarded.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id.
+  pub async fn get_raw_prefix(&self, id: &str, max_bytes: i64) -> Result<Vec<u8>, StorageError> {
+    let row: (Vec<u8>,) = sqlx::query_as("SELECT substr(raw, 1, ?2) FROM messages WHERE id = ?1")
+      .bind(id)
+      .bind(max_bytes)
+      .fetch_optional(&self.pool)
+      .await?
+      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    Ok(row.0)
+  }
+
   /// Deletes messages older than the given ISO 8601 cutoff. Returns IDs of deleted messages.
   pub async fn delete_older_than(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
     let mut txn = self.pool.begin().await?;
@@ -938,6 +957,37 @@ mod tests {
 
     let fetched = repo.get_raw(&s.id).await.unwrap();
     assert_eq!(fetched, raw);
+  }
+
+  #[tokio::test]
+  async fn get_raw_prefix_returns_only_the_requested_bytes() {
+    let repo = test_repo().await;
+    let raw = raw_email("Prefix test", "a@t.com", "b@t.com");
+    let s = repo
+      .insert("a@t.com", &["b@t.com".into()], &raw)
+      .await
+      .unwrap();
+
+    let head = repo.get_raw_prefix(&s.id, 12).await.unwrap();
+    assert_eq!(head, raw[..12]);
+
+    let beyond_end = repo
+      .get_raw_prefix(&s.id, raw.len() as i64 * 2)
+      .await
+      .unwrap();
+    assert_eq!(
+      beyond_end, raw,
+      "asking for more than the message holds must yield the whole message"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_raw_prefix_reports_a_missing_message() {
+    let repo = test_repo().await;
+    assert!(matches!(
+      repo.get_raw_prefix("nope", 16).await,
+      Err(StorageError::NotFound(_))
+    ));
   }
 
   /// Enough messages to land inside one millisecond, which is where ULID
