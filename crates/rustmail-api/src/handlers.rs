@@ -239,19 +239,41 @@ pub async fn get_inline_attachment(
   ))
 }
 
+#[derive(Deserialize)]
+pub struct RawParams {
+  pub limit: Option<i64>,
+}
+
 pub async fn get_raw_message(
   State(state): State<AppState>,
   Path(id): Path<String>,
+  Query(params): Query<RawParams>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = state.repo.get_raw(&id).await?;
-  Ok((
-    StatusCode::OK,
-    [
-      (header::CONTENT_TYPE, "message/rfc822".to_string()),
-      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
-    ],
-    raw,
-  ))
+  let raw = match params.limit {
+    Some(limit) if limit <= 0 => {
+      return Ok(
+        (
+          StatusCode::BAD_REQUEST,
+          Json(serde_json::json!({ "error": "limit must be a positive number of bytes" })),
+        )
+          .into_response(),
+      );
+    }
+    Some(limit) => state.repo.get_raw_prefix(&id, limit).await?,
+    None => state.repo.get_raw(&id).await?,
+  };
+
+  Ok(
+    (
+      StatusCode::OK,
+      [
+        (header::CONTENT_TYPE, "message/rfc822".to_string()),
+        (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
+      ],
+      raw,
+    )
+      .into_response(),
+  )
 }
 
 /// One header field as it appears on the wire, with folded lines joined.

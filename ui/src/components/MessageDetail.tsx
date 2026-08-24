@@ -19,6 +19,14 @@ import type {
 
 type Tab = "html" | "text" | "headers" | "auth" | "raw";
 
+/**
+ * Raw source fetched for the Raw tab.
+ *
+ * Laying out a whole large message is what made the tab freeze, so the server
+ * is asked for a bounded prefix and the rest stays behind the .eml download.
+ */
+const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
+
 const TAB_LABELS: Record<Tab, string> = {
   html: "HTML",
   text: "Text",
@@ -43,7 +51,7 @@ export default function MessageDetail() {
   const rawTarget = () => (tab() === "raw" ? selectedId() : null);
   const [rawSource] = createResource(rawTarget, async (id) => {
     if (!id) return null;
-    return api.getRawMessage(id);
+    return api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES);
   });
 
   const headersTarget = () => (tab() === "headers" ? selectedId() : null);
@@ -600,44 +608,38 @@ function TagEditor(props: { messageId: string }) {
   );
 }
 
-const RAW_PREVIEW_LIMIT_CHARS = 128 * 1024;
-
 function RawView(props: {
   raw: string | null | undefined;
   messageId: string;
   size: number;
 }) {
+  const truncated = () => props.size > RAW_PREVIEW_LIMIT_BYTES;
+
   return (
     <Show
       when={props.raw}
       fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
     >
-      {(raw) => {
-        const truncated = () => raw().length > RAW_PREVIEW_LIMIT_CHARS;
-        const shown = () =>
-          truncated() ? raw().slice(0, RAW_PREVIEW_LIMIT_CHARS) : raw();
-
-        return (
-          <>
-            <Show when={truncated()}>
-              <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
-                Showing the first {RAW_PREVIEW_LIMIT_CHARS / 1024} K characters
-                of {formatSize(props.size)}.{" "}
-                <a
-                  href={api.exportUrl(props.messageId, "eml")}
-                  download={`${props.messageId}.eml`}
-                  class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
-                >
-                  Download the full source
-                </a>
-              </div>
-            </Show>
-            <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
-              {shown()}
-            </pre>
-          </>
-        );
-      }}
+      {(raw) => (
+        <>
+          <Show when={truncated()}>
+            <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+              Showing the first {formatSize(RAW_PREVIEW_LIMIT_BYTES)} of{" "}
+              {formatSize(props.size)}.{" "}
+              <a
+                href={api.exportUrl(props.messageId, "eml")}
+                download={`${props.messageId}.eml`}
+                class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+              >
+                Download the full source
+              </a>
+            </div>
+          </Show>
+          <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
+            {raw()}
+          </pre>
+        </>
+      )}
     </Show>
   );
 }

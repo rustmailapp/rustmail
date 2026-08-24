@@ -1233,7 +1233,64 @@ async fn headers_endpoint_survives_non_utf8_header_bytes() {
   );
 }
 
+/// Preview cap the UI asks for; small here so the test message can exceed it.
+const RAW_PREVIEW_BYTES: usize = 64;
 
+#[tokio::test]
+async fn raw_message_limit_returns_only_the_requested_prefix() {
+  let (app, repo, _) = setup().await;
+  let raw = raw_email(&"A".repeat(512), "a@t.com", "b@t.com");
+  assert!(raw.len() > RAW_PREVIEW_BYTES);
+  let summary = repo
+    .insert("a@t.com", &["b@t.com".into()], &raw)
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!(
+          "/api/v1/messages/{}/raw?limit={RAW_PREVIEW_BYTES}",
+          summary.id
+        ))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024)
+    .await
+    .unwrap();
+  assert_eq!(bytes.len(), RAW_PREVIEW_BYTES);
+  assert_eq!(bytes.as_ref(), &raw[..RAW_PREVIEW_BYTES]);
+}
+
+#[tokio::test]
+async fn raw_message_rejects_a_non_positive_limit() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Limit", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/raw?limit=0", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
 
 
 #[tokio::test]
