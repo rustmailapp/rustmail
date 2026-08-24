@@ -1293,6 +1293,36 @@ async fn raw_message_rejects_a_non_positive_limit() {
 }
 
 #[tokio::test]
+async fn raw_message_rejects_a_malformed_limit_in_the_same_shape() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Limit", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/raw?limit=abc", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  let body = json_body(response).await;
+  assert!(
+    body.get("error").is_some(),
+    "a malformed limit must fail in the same JSON shape as an invalid one, got: {body}"
+  );
+}
+
+#[tokio::test]
 async fn unknown_api_path_is_a_json_404_not_the_spa_shell() {
   let (app, _, _) = setup().await;
 

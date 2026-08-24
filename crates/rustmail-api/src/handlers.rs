@@ -243,26 +243,38 @@ pub async fn get_inline_attachment(
   ))
 }
 
+/// `limit` is taken as text so that a malformed value is rejected by this
+/// handler, in the same JSON shape as an out-of-range one, rather than by the
+/// query extractor in a different shape.
 #[derive(Deserialize)]
 pub struct RawParams {
-  pub limit: Option<i64>,
+  pub limit: Option<String>,
 }
+
+const RAW_LIMIT_ERROR: &str = "limit must be a positive number of bytes";
 
 pub async fn get_raw_message(
   State(state): State<AppState>,
   Path(id): Path<String>,
   Query(params): Query<RawParams>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = match params.limit {
-    Some(limit) if limit <= 0 => {
-      return Ok(
-        (
-          StatusCode::BAD_REQUEST,
-          Json(serde_json::json!({ "error": "limit must be a positive number of bytes" })),
-        )
-          .into_response(),
-      );
-    }
+  let limit = match params.limit.as_deref() {
+    Some(text) => match text.parse::<i64>() {
+      Ok(limit) if limit > 0 => Some(limit),
+      _ => {
+        return Ok(
+          (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": RAW_LIMIT_ERROR })),
+          )
+            .into_response(),
+        );
+      }
+    },
+    None => None,
+  };
+
+  let raw = match limit {
     Some(limit) => state.repo.get_raw_prefix(&id, limit).await?,
     None => state.repo.get_raw(&id).await?,
   };
