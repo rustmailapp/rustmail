@@ -1161,6 +1161,7 @@ const WS_PING_OPCODE: u8 = 0x9;
 const WS_TEXT_OPCODE: u8 = 0x1;
 const WS_CLOSE_OPCODE: u8 = 0x8;
 const WS_EXTENDED_LENGTH_MARKER: u8 = 126;
+const WS_HUGE_LENGTH_MARKER: u8 = 127;
 
 async fn ws_handshake(http_addr: std::net::SocketAddr) -> BufReader<TcpStream> {
   let mut stream = TcpStream::connect(http_addr).await.unwrap();
@@ -1196,6 +1197,11 @@ async fn read_ws_opcode(reader: &mut BufReader<TcpStream>) -> u8 {
       let mut extended = [0u8; 2];
       reader.read_exact(&mut extended).await.unwrap();
       u16::from_be_bytes(extended) as usize
+    }
+    WS_HUGE_LENGTH_MARKER => {
+      let mut extended = [0u8; 8];
+      reader.read_exact(&mut extended).await.unwrap();
+      u64::from_be_bytes(extended) as usize
     }
     len => len as usize,
   };
