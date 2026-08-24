@@ -336,7 +336,7 @@ impl Session {
 
     loop {
       line_buf.clear();
-      let bytes_read = self.read_bounded_line_raw(&mut line_buf).await?;
+      let bytes_read = self.read_line_untimed(&mut line_buf).await?;
       if bytes_read == 0 {
         return Ok(());
       }
@@ -384,7 +384,7 @@ impl Session {
     let mut line = Vec::new();
     loop {
       line.clear();
-      match self.read_bounded_line_raw(&mut line).await {
+      match self.read_line_untimed(&mut line).await {
         Ok(0) => return,
         Ok(_) => {
           let trimmed = line
@@ -405,10 +405,21 @@ impl Session {
   }
 
   async fn read_bounded_line_raw(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
+    timeout(IO_TIMEOUT, self.read_line_untimed(buf))
+      .await
+      .map_err(|_| SessionError::Timeout)?
+  }
+
+  /// Reads one line, arming no timer of its own.
+  ///
+  /// A single large message is tens of thousands of lines, so timing each read
+  /// individually spends most of the read path registering and dropping timers.
+  /// Callers bound the whole phase instead: commands through
+  /// [`Self::read_bounded_line_raw`], message bodies through the one timeout
+  /// around the DATA phase.
+  async fn read_line_untimed(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
     loop {
-      let available = timeout(IO_TIMEOUT, self.stream_mut()?.fill_buf())
-        .await
-        .map_err(|_| SessionError::Timeout)??;
+      let available = self.stream_mut()?.fill_buf().await?;
       if available.is_empty() {
         if buf.is_empty() {
           return Ok(0);
