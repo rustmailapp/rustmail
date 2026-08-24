@@ -1,4 +1,5 @@
-import { For, Show, onMount, onCleanup, createEffect, on } from "solid-js";
+import { For, Show, createEffect, on, untrack, type Accessor } from "solid-js";
+import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
   messages,
@@ -13,29 +14,47 @@ import {
 } from "../stores/messages";
 import { formatDate, formatSize } from "../lib/format";
 import * as api from "../lib/api";
+import type { MessageSummary } from "../lib/types";
+
+/**
+ * Starting guess for a row's height, in pixels.
+ *
+ * Rows are measured once rendered, so this only has to be close enough to size
+ * the scrollbar before anything is on screen.
+ */
+const ROW_ESTIMATE_PX = 85;
+const OVERSCAN_ROWS = 8;
+/** Distance from the end of the loaded list that starts the next page. */
+const LOAD_MORE_ROW_THRESHOLD = 10;
 
 export default function Inbox() {
   let scroller: HTMLDivElement | undefined;
-  let sentinel: HTMLDivElement | undefined;
 
-  onMount(() => {
-    if (!sentinel) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) loadMore();
-      },
-      { root: scroller, rootMargin: "300px" },
-    );
-    observer.observe(sentinel);
-    onCleanup(() => observer.disconnect());
+  const virtualizer = createVirtualizer({
+    get count() {
+      return filteredMessages().length;
+    },
+    getScrollElement: () => scroller ?? null,
+    estimateSize: () => ROW_ESTIMATE_PX,
+    overscan: OVERSCAN_ROWS,
+  });
+
+  createEffect(() => {
+    const items = virtualizer.getVirtualItems();
+    const last = items[items.length - 1];
+    if (!last) return;
+    if (last.index >= filteredMessages().length - LOAD_MORE_ROW_THRESHOLD) {
+      loadMore();
+    }
   });
 
   createEffect(
     on(selectedId, (id) => {
-      if (!id || !scroller) return;
-      scroller
-        .querySelector<HTMLElement>(`[data-id="${id}"]`)
-        ?.scrollIntoView({ block: "nearest" });
+      if (!id) return;
+      const index = untrack(() =>
+        filteredMessages().findIndex((m) => m.id === id),
+      );
+      if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
     }),
   );
 
@@ -93,133 +112,153 @@ export default function Inbox() {
         </div>
       </Show>
 
-      <For each={filteredMessages()}>
-        {(msg) => {
-          const isSelected = () => selectedId() === msg.id;
-          const recipients = () => msg.recipients;
-
-          return (
-            <div
-              role="button"
-              tabIndex={0}
-              data-id={msg.id}
-              onClick={async () => {
-                setSelectedId(msg.id);
-                if (!msg.is_read) {
-                  try {
-                    await api.markRead(msg.id, true);
-                  } catch {
-                    // WS event handles UI sync
-                  }
-                }
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  (e.currentTarget as HTMLElement).click();
-                }
-              }}
-              class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
-                isSelected()
-                  ? "bg-zinc-100 dark:bg-zinc-800/80"
-                  : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
-              }`}
-            >
-              <div class="flex items-start gap-3">
-                <div class="flex-shrink-0 mt-0.5 flex flex-col items-center gap-1">
-                  <div
-                    class={`size-2 rounded-full mt-1.5 ${msg.is_read ? "bg-transparent" : "bg-orange-500"}`}
-                  />
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      api.markStarred(msg.id, !msg.is_starred).catch(() => {});
-                    }}
-                    class="cursor-pointer"
-                    title={msg.is_starred ? "Unstar" : "Star"}
-                  >
-                    <svg
-                      class={`size-3.5 transition ${msg.is_starred ? "text-amber-400 fill-amber-400" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"}`}
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      fill={msg.is_starred ? "currentColor" : "none"}
-                    >
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
-                      />
-                    </svg>
-                  </button>
+      <Show when={filteredMessages().length > 0}>
+        <div
+          class="relative w-full shrink-0"
+          style={{ height: `${virtualizer.getTotalSize()}px` }}
+        >
+          <For each={virtualizer.getVirtualItems()}>
+            {(item) => {
+              const msg = () => filteredMessages()[item.index];
+              return (
+                <div
+                  data-index={item.index}
+                  ref={(el) => virtualizer.measureElement(el)}
+                  class="absolute top-0 left-0 w-full"
+                  style={{ transform: `translateY(${item.start}px)` }}
+                >
+                  <Show when={msg()}>{(m) => <MessageRow msg={m} />}</Show>
                 </div>
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center justify-between gap-2">
-                    <span
-                      class={`text-sm truncate ${msg.is_read ? "text-zinc-400 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100 font-medium"}`}
-                    >
-                      {msg.sender || "(no sender)"}
-                    </span>
-                    <span class="text-xs text-zinc-500 dark:text-zinc-600 flex-shrink-0">
-                      {formatDate(msg.created_at)} · {formatSize(msg.size)}
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-1.5 mt-0.5">
-                    <span
-                      class={`text-sm truncate ${msg.is_read ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-700 dark:text-zinc-200"}`}
-                    >
-                      {msg.subject || "(no subject)"}
-                    </span>
-                    <Show when={msg.has_attachments}>
-                      <svg
-                        class="size-3.5 flex-shrink-0 text-zinc-500 dark:text-zinc-500"
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        stroke-width="2"
-                      >
-                        <path
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
-                        />
-                      </svg>
-                    </Show>
-                  </div>
-                  <div class="flex items-center gap-1.5 mt-0.5">
-                    <p class="text-xs text-zinc-500 dark:text-zinc-600 truncate">
-                      To: {recipients().join(", ")}
-                    </p>
-                    <Show when={msg.tags.length > 0}>
-                      <div class="flex gap-1 flex-shrink-0">
-                        <For each={msg.tags.slice(0, 3)}>
-                          {(tag) => (
-                            <span class="inline-block px-1.5 py-0 rounded text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
-                              {tag}
-                            </span>
-                          )}
-                        </For>
-                        <Show when={msg.tags.length > 3}>
-                          <span class="text-[10px] text-zinc-400">
-                            +{msg.tags.length - 3}
-                          </span>
-                        </Show>
-                      </div>
-                    </Show>
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        }}
-      </For>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
 
-      <div ref={sentinel} aria-hidden="true" />
       <Show when={loadingMore()}>
         <div class="py-3 text-center text-xs text-zinc-400 dark:text-zinc-600">
           Loading…
         </div>
       </Show>
+    </div>
+  );
+}
+
+function MessageRow(props: { msg: Accessor<MessageSummary> }) {
+  const msg = props.msg;
+  const isSelected = () => selectedId() === msg().id;
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      data-id={msg().id}
+      onClick={async () => {
+        setSelectedId(msg().id);
+        if (!msg().is_read) {
+          try {
+            await api.markRead(msg().id, true);
+          } catch {
+            // WS event handles UI sync
+          }
+        }
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          (e.currentTarget as HTMLElement).click();
+        }
+      }}
+      class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
+        isSelected()
+          ? "bg-zinc-100 dark:bg-zinc-800/80"
+          : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
+      }`}
+    >
+      <div class="flex items-start gap-3">
+        <div class="flex-shrink-0 mt-0.5 flex flex-col items-center gap-1">
+          <div
+            class={`size-2 rounded-full mt-1.5 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
+          />
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              api.markStarred(msg().id, !msg().is_starred).catch(() => {});
+            }}
+            class="cursor-pointer"
+            title={msg().is_starred ? "Unstar" : "Star"}
+          >
+            <svg
+              class={`size-3.5 transition ${msg().is_starred ? "text-amber-400 fill-amber-400" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"}`}
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2"
+              fill={msg().is_starred ? "currentColor" : "none"}
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center justify-between gap-2">
+            <span
+              class={`text-sm truncate ${msg().is_read ? "text-zinc-400 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100 font-medium"}`}
+            >
+              {msg().sender || "(no sender)"}
+            </span>
+            <span class="text-xs text-zinc-500 dark:text-zinc-600 flex-shrink-0">
+              {formatDate(msg().created_at)} · {formatSize(msg().size)}
+            </span>
+          </div>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            <span
+              class={`text-sm truncate ${msg().is_read ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-700 dark:text-zinc-200"}`}
+            >
+              {msg().subject || "(no subject)"}
+            </span>
+            <Show when={msg().has_attachments}>
+              <svg
+                class="size-3.5 flex-shrink-0 text-zinc-500 dark:text-zinc-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
+                />
+              </svg>
+            </Show>
+          </div>
+          <div class="flex items-center gap-1.5 mt-0.5">
+            <p class="text-xs text-zinc-500 dark:text-zinc-600 truncate">
+              To: {msg().recipients.join(", ")}
+            </p>
+            <Show when={msg().tags.length > 0}>
+              <div class="flex gap-1 flex-shrink-0">
+                <For each={msg().tags.slice(0, 3)}>
+                  {(tag) => (
+                    <span class="inline-block px-1.5 py-0 rounded text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                      {tag}
+                    </span>
+                  )}
+                </For>
+                <Show when={msg().tags.length > 3}>
+                  <span class="text-[10px] text-zinc-400">
+                    +{msg().tags.length - 3}
+                  </span>
+                </Show>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
