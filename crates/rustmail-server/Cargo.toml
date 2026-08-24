@@ -42,6 +42,7 @@ rustmail-tui = { workspace = true, optional = true }
 
 [dev-dependencies]
 rustmail-smtp = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 reqwest = { workspace = true }
 axum = { workspace = true }
 portpicker = "0.1"

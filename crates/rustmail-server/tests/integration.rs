@@ -1106,6 +1106,32 @@ async fn smtp_accepts_a_long_bulk_send_over_one_connection() {
   );
 }
 
+/// Virtual time, so the per-line I/O deadline fires without the test waiting
+/// out its real duration.
+///
+/// Losing that deadline makes this test hang rather than fail, since there is
+/// then nothing left to wait for. That is inherent to asserting a disconnect
+/// eventually happens; CI catches it on the job timeout.
+#[tokio::test(start_paused = true)]
+async fn smtp_disconnects_a_client_that_goes_silent() {
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+
+  // Sessions carry no blanket duration cap, so the per-line I/O deadline is
+  // the only thing that can reclaim a connection from a peer that says nothing.
+  let mut tail = Vec::new();
+  stream.read_to_end(&mut tail).await.unwrap();
+  assert!(
+    tail.is_empty(),
+    "expected the server to close on the read deadline, got {:?}",
+    String::from_utf8_lossy(&tail)
+  );
+}
+
 #[tokio::test]
 async fn smtp_still_cuts_off_a_client_that_never_delivers() {
   let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
