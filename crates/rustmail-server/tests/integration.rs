@@ -1010,6 +1010,324 @@ async fn smtp_session_limit_rejects_excess() {
   drop(held_connections);
 }
 
+async fn spawn_smtp_only(tx: mpsc::Sender<ReceivedMessage>) -> std::net::SocketAddr {
+  let smtp_port = portpicker::pick_unused_port().expect("no free port");
+  let config = SmtpServerConfig {
+    host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+    port: smtp_port,
+    max_message_size: MAX_MESSAGE_SIZE,
+    tls: None,
+  };
+  let server = SmtpServer::new(config, tx);
+  tokio::spawn(async move {
+    server.run().await.unwrap();
+  });
+
+  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
+  wait_for_tcp(addr).await;
+  addr
+}
+
+/// A bulk sender reuses one connection for far more than the unproductive
+/// command cap, so completing a transaction has to clear the counter.
+const BULK_MESSAGES_ON_ONE_CONNECTION: usize = 400;
+
+#[tokio::test]
+async fn smtp_accepts_a_long_bulk_send_over_one_connection() {
+  let (tx, mut rx) = mpsc::channel::<ReceivedMessage>(1024);
+  // Stops at the expected count: the listener holds a sender for as long as it
+  // runs, so the channel never closes on its own.
+  let drain = tokio::spawn(async move {
+    let mut seen = 0usize;
+    while seen < BULK_MESSAGES_ON_ONE_CONNECTION {
+      if rx.recv().await.is_none() {
+        break;
+      }
+      seen += 1;
+    }
+    seen
+  });
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+  read_ehlo_response(&mut stream).await;
+
+  for i in 0..BULK_MESSAGES_ON_ONE_CONNECTION {
+    stream
+      .write_all(b"MAIL FROM:<bulk@test.com>\r\n")
+      .await
+      .unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("250")
+    );
+
+    stream
+      .write_all(b"RCPT TO:<sink@test.com>\r\n")
+      .await
+      .unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("250")
+    );
+
+    stream.write_all(b"DATA\r\n").await.unwrap();
+    assert!(
+      read_smtp_response_line(&mut stream)
+        .await
+        .starts_with("354")
+    );
+
+    stream
+      .write_all(format!("Subject: bulk-{i}\r\n\r\nbody\r\n.\r\n").as_bytes())
+      .await
+      .unwrap();
+    let reply = read_smtp_response_line(&mut stream).await;
+    assert!(
+      reply.starts_with("250"),
+      "message {i} of {BULK_MESSAGES_ON_ONE_CONNECTION} was refused: {reply}"
+    );
+  }
+
+  stream.write_all(b"QUIT\r\n").await.unwrap();
+  drop(stream);
+
+  let delivered = tokio::time::timeout(Duration::from_secs(30), drain)
+    .await
+    .expect("timed out waiting for the sent messages to reach the channel")
+    .unwrap();
+  assert_eq!(
+    delivered, BULK_MESSAGES_ON_ONE_CONNECTION,
+    "every message sent on the reused connection must reach the channel"
+  );
+}
+
+/// Virtual time, so the per-line I/O deadline fires without the test waiting
+/// out its real duration.
+///
+/// Losing that deadline makes this test hang rather than fail, since there is
+/// then nothing left to wait for. That is inherent to asserting a disconnect
+/// eventually happens; CI catches it on the job timeout.
+#[tokio::test(start_paused = true)]
+async fn smtp_disconnects_a_client_that_goes_silent() {
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+
+  // Sessions carry no blanket duration cap, so the per-line I/O deadline is
+  // the only thing that can reclaim a connection from a peer that says nothing.
+  let mut tail = Vec::new();
+  stream.read_to_end(&mut tail).await.unwrap();
+  assert!(
+    tail.is_empty(),
+    "expected the server to close on the read deadline, got {:?}",
+    String::from_utf8_lossy(&tail)
+  );
+}
+
+#[tokio::test]
+async fn smtp_still_cuts_off_a_client_that_never_delivers() {
+  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let addr = spawn_smtp_only(tx).await;
+
+  let stream = TcpStream::connect(addr).await.unwrap();
+  let mut stream = BufReader::new(stream);
+  read_smtp_response_line(&mut stream).await;
+  read_ehlo_response(&mut stream).await;
+
+  for issued in 0..2000 {
+    stream.write_all(b"NOOP\r\n").await.unwrap();
+    let reply = read_smtp_response_line(&mut stream).await;
+    if reply.starts_with("421") {
+      return;
+    }
+    assert!(
+      reply.starts_with("250"),
+      "unexpected reply to NOOP {issued}: {reply}"
+    );
+  }
+
+  panic!("a client issuing only unproductive commands was never cut off");
+}
+
+const WS_PING_OPCODE: u8 = 0x9;
+const WS_TEXT_OPCODE: u8 = 0x1;
+const WS_CLOSE_OPCODE: u8 = 0x8;
+const WS_EXTENDED_LENGTH_MARKER: u8 = 126;
+const WS_HUGE_LENGTH_MARKER: u8 = 127;
+
+async fn ws_handshake(http_addr: std::net::SocketAddr) -> BufReader<TcpStream> {
+  let mut stream = TcpStream::connect(http_addr).await.unwrap();
+  stream
+    .write_all(
+      format!(
+        "GET /api/v1/ws HTTP/1.1\r\nHost: {http_addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+      )
+      .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+  let mut reader = BufReader::new(stream);
+  loop {
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(!line.is_empty(), "connection closed during WS handshake");
+    if line == "\r\n" {
+      return reader;
+    }
+  }
+}
+
+/// Reads one unmasked server frame, returning its opcode.
+async fn read_ws_opcode(reader: &mut BufReader<TcpStream>) -> u8 {
+  let mut header = [0u8; 2];
+  reader.read_exact(&mut header).await.unwrap();
+  let opcode = header[0] & 0x0f;
+
+  let len = match header[1] & 0x7f {
+    WS_EXTENDED_LENGTH_MARKER => {
+      let mut extended = [0u8; 2];
+      reader.read_exact(&mut extended).await.unwrap();
+      u16::from_be_bytes(extended) as usize
+    }
+    WS_HUGE_LENGTH_MARKER => {
+      let mut extended = [0u8; 8];
+      reader.read_exact(&mut extended).await.unwrap();
+      u64::from_be_bytes(extended) as usize
+    }
+    len => len as usize,
+  };
+
+  let mut payload = vec![0u8; len];
+  reader.read_exact(&mut payload).await.unwrap();
+  opcode
+}
+
+/// Small enough that a handful of events overruns it deterministically.
+const TINY_BROADCAST_CAPACITY: usize = 4;
+const EVENTS_OVERRUNNING_CAPACITY: usize = 200;
+
+#[tokio::test]
+async fn ws_closes_a_client_that_falls_behind_instead_of_dropping_events() {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let repo = MessageRepository::new(pool);
+  let (ws_tx, _) = broadcast::channel::<WsEvent>(TINY_BROADCAST_CAPACITY);
+  let state = AppState::new(repo, ws_tx.clone(), None, None);
+  let app = router(state);
+
+  let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let http_addr = http_listener.local_addr().unwrap();
+  tokio::spawn(async move {
+    axum::serve(http_listener, app).await.unwrap();
+  });
+
+  let mut reader = ws_handshake(http_addr).await;
+
+  // The ping on connect proves the handler is subscribed, so the burst below
+  // lands in its receiver rather than before it existed.
+  assert_eq!(read_ws_opcode(&mut reader).await, WS_PING_OPCODE);
+
+  // No await inside the loop, so on a current-thread runtime the handler
+  // cannot drain between sends and is guaranteed to fall behind.
+  for i in 0..EVENTS_OVERRUNNING_CAPACITY {
+    ws_tx
+      .send(WsEvent::MessageDelete { id: i.to_string() })
+      .unwrap();
+  }
+
+  let mut text_frames = 0;
+  loop {
+    let opcode = tokio::time::timeout(Duration::from_secs(5), read_ws_opcode(&mut reader))
+      .await
+      .expect("server neither closed nor kept streaming after the client fell behind");
+
+    match opcode {
+      WS_CLOSE_OPCODE => break,
+      WS_TEXT_OPCODE => {
+        text_frames += 1;
+        assert!(
+          text_frames < EVENTS_OVERRUNNING_CAPACITY,
+          "server streamed a partial event set instead of closing"
+        );
+      }
+      WS_PING_OPCODE => {}
+      other => panic!("unexpected opcode {other:#x}"),
+    }
+  }
+
+  assert!(
+    text_frames < EVENTS_OVERRUNNING_CAPACITY,
+    "a lagging client must not be served a silently incomplete stream"
+  );
+}
+
+#[tokio::test]
+async fn ws_server_pings_a_client_as_soon_as_it_connects() {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let repo = MessageRepository::new(pool);
+  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let app = router(AppState::new(repo, ws_tx, None, None));
+
+  let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let http_addr = http_listener.local_addr().unwrap();
+  tokio::spawn(async move {
+    axum::serve(http_listener, app).await.unwrap();
+  });
+
+  let mut stream = TcpStream::connect(http_addr).await.unwrap();
+  stream
+    .write_all(
+      format!(
+        "GET /api/v1/ws HTTP/1.1\r\nHost: {http_addr}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+      )
+      .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+  let mut reader = BufReader::new(stream);
+  loop {
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    assert!(!line.is_empty(), "connection closed during WS handshake");
+    if line == "\r\n" {
+      break;
+    }
+  }
+
+  // The client never speaks, so only a server-side heartbeat can arrive here.
+  // This covers the ping sent on connect; that pings keep coming is enforced by
+  // the WS_PING_INTERVAL < WS_IDLE_TIMEOUT invariant asserted in rustmail-api.
+  let mut frame_header = [0u8; 1];
+  tokio::time::timeout(Duration::from_secs(5), reader.read_exact(&mut frame_header))
+    .await
+    .expect("server sent no frame within 5s; heartbeat is missing")
+    .unwrap();
+
+  assert_eq!(
+    frame_header[0] & 0x0f,
+    WS_PING_OPCODE,
+    "expected a ping frame, got opcode {:#x}",
+    frame_header[0] & 0x0f
+  );
+}
+
 #[tokio::test]
 async fn ws_connection_limit_returns_503() {
   let (app, _, _) = {

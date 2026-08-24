@@ -972,3 +972,418 @@ async fn tags_update_ws_event() {
     _ => panic!("Expected MessageTags event, got {event:?}"),
   }
 }
+
+fn email_with_folded_and_repeated_headers() -> Vec<u8> {
+  concat!(
+    "Received: from a.example.com by b.example.com;\r\n",
+    " Tue, 1 Jul 2025 10:00:00 +0000\r\n",
+    "Received: from c.example.com by d.example.com;\r\n",
+    " Tue, 1 Jul 2025 10:00:01 +0000\r\n",
+    "From: sender@example.com\r\n",
+    "To: rcpt@example.com\r\n",
+    "Subject: Folded header test\r\n",
+    "X-Long: first part\r\n\tsecond part\r\n",
+    "Content-Type: text/plain\r\n",
+    "\r\n",
+    "Body that must never reach the headers endpoint.\r\n",
+  )
+  .as_bytes()
+  .to_vec()
+}
+
+#[tokio::test]
+async fn headers_endpoint_returns_fields_in_wire_order() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let names: Vec<&str> = headers
+    .iter()
+    .map(|h| h["name"].as_str().unwrap())
+    .collect();
+  assert_eq!(
+    names,
+    vec![
+      "Received",
+      "Received",
+      "From",
+      "To",
+      "Subject",
+      "X-Long",
+      "Content-Type"
+    ],
+    "duplicates must be preserved and order must match the wire"
+  );
+
+  let subject = headers.iter().find(|h| h["name"] == "Subject").unwrap();
+  assert_eq!(subject["value"], "Folded header test");
+}
+
+#[tokio::test]
+async fn headers_endpoint_unfolds_continuation_lines() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let long = headers.iter().find(|h| h["name"] == "X-Long").unwrap();
+  assert_eq!(long["value"], "first part second part");
+
+  let first_received = headers.iter().find(|h| h["name"] == "Received").unwrap();
+  assert_eq!(
+    first_received["value"],
+    "from a.example.com by b.example.com; Tue, 1 Jul 2025 10:00:00 +0000"
+  );
+}
+
+#[tokio::test]
+async fn headers_endpoint_omits_the_body() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_folded_and_repeated_headers(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  let bytes = axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024)
+    .await
+    .unwrap();
+  let text = std::str::from_utf8(&bytes).unwrap();
+  assert!(
+    !text.contains("must never reach"),
+    "the body leaked into the headers response"
+  );
+}
+
+#[tokio::test]
+async fn headers_endpoint_unknown_message_returns_404() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/messages/nonexistent/headers")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+async fn cache_control_of(app: axum::Router, uri: String) -> String {
+  let response = app
+    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  response
+    .headers()
+    .get(axum::http::header::CACHE_CONTROL)
+    .map(|v| v.to_str().unwrap().to_string())
+    .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn message_derived_resources_are_cacheable() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Cacheable", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  for suffix in ["/raw", "/headers", "/auth"] {
+    let value = cache_control_of(
+      app.clone(),
+      format!("/api/v1/messages/{}{}", summary.id, suffix),
+    )
+    .await;
+    assert!(
+      value.contains("immutable") && value.contains("private"),
+      "{suffix} should be privately cacheable forever, got {value:?}"
+    );
+  }
+}
+
+#[tokio::test]
+async fn mutable_message_metadata_is_not_cached() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Mutable", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  // is_read, is_starred and tags change over the message's life, so the
+  // single-message and list endpoints must never be served from cache.
+  for uri in [
+    format!("/api/v1/messages/{}", summary.id),
+    "/api/v1/messages".to_string(),
+  ] {
+    let value = cache_control_of(app.clone(), uri.clone()).await;
+    assert_eq!(
+      value, "no-store",
+      "{uri} must explicitly refuse caching, got {value:?}"
+    );
+  }
+}
+
+fn email_with_latin1_subject() -> Vec<u8> {
+  // Raw 8-bit bytes in a header, i.e. not MIME-encoded: 0xE8 is `è` in Latin-1
+  // and is not valid UTF-8. Real senders emit these.
+  let mut raw = b"From: sender@example.com\r\nSubject: caff".to_vec();
+  raw.push(0xE8);
+  raw.extend_from_slice(b" ricevuto\r\nTo: rcpt@example.com\r\n\r\nbody\r\n");
+  raw
+}
+
+#[tokio::test]
+async fn headers_endpoint_survives_non_utf8_header_bytes() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "sender@example.com",
+      &["rcpt@example.com".into()],
+      &email_with_latin1_subject(),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let headers = body.as_array().unwrap();
+
+  let subject = headers
+    .iter()
+    .find(|h| h["name"] == "Subject")
+    .expect("Subject must still be listed");
+  let value = subject["value"].as_str().unwrap();
+  assert!(
+    value.starts_with("caff") && value.ends_with("ricevuto"),
+    "undecodable bytes must be replaced, not truncate the value: {value:?}"
+  );
+}
+
+/// Preview cap the UI asks for; small here so the test message can exceed it.
+const RAW_PREVIEW_BYTES: usize = 64;
+
+#[tokio::test]
+async fn raw_message_limit_returns_only_the_requested_prefix() {
+  let (app, repo, _) = setup().await;
+  let raw = raw_email(&"A".repeat(512), "a@t.com", "b@t.com");
+  assert!(raw.len() > RAW_PREVIEW_BYTES);
+  let summary = repo
+    .insert("a@t.com", &["b@t.com".into()], &raw)
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!(
+          "/api/v1/messages/{}/raw?limit={RAW_PREVIEW_BYTES}",
+          summary.id
+        ))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let bytes = axum::body::to_bytes(response.into_body(), 10 * 1024 * 1024)
+    .await
+    .unwrap();
+  assert_eq!(bytes.len(), RAW_PREVIEW_BYTES);
+  assert_eq!(bytes.as_ref(), &raw[..RAW_PREVIEW_BYTES]);
+}
+
+#[tokio::test]
+async fn raw_message_rejects_a_non_positive_limit() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Limit", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/raw?limit=0", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn raw_message_rejects_a_malformed_limit_in_the_same_shape() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &raw_email("Limit", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/raw?limit=abc", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  let body = json_body(response).await;
+  assert!(
+    body.get("error").is_some(),
+    "a malformed limit must fail in the same JSON shape as an invalid one, got: {body}"
+  );
+}
+
+#[tokio::test]
+async fn unknown_api_path_is_a_json_404_not_the_spa_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/there-is-no-such-endpoint")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+  let body = json_body(response).await;
+  assert!(
+    body.get("error").is_some(),
+    "an API 404 must carry a JSON error, got: {body}"
+  );
+}
+
+#[tokio::test]
+async fn header_endpoint_reads_headers_longer_than_the_prefix_window() {
+  let (app, repo, _) = setup().await;
+
+  // A header section far past the 64 KiB prefix read, so the handler has to
+  // notice the prefix was truncated and fall back to the whole message.
+  let padding: String = (0..4000)
+    .map(|i| format!("X-Pad-{i}: {}\r\n", "y".repeat(64)))
+    .collect();
+  let raw = format!(
+    "From: a@t.com\r\nTo: b@t.com\r\nSubject: Long\r\n{padding}X-Last: sentinel\r\n\r\nbody"
+  )
+  .into_bytes();
+  assert!(raw.len() > 64 * 1024);
+
+  let summary = repo
+    .insert("a@t.com", &["b@t.com".into()], &raw)
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri(format!("/api/v1/messages/{}/headers", summary.id))
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  let names: Vec<&str> = body
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|h| h["name"].as_str().unwrap())
+    .collect();
+  assert!(
+    names.contains(&"X-Last"),
+    "a header past the prefix window was dropped"
+  );
+}

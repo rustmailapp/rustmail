@@ -27,8 +27,21 @@ const BAD_SEQUENCE: &str = "503 Bad sequence of commands\r\n";
 const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
 const MAX_LINE_LENGTH: usize = 4096;
 const MAX_RECIPIENTS: usize = 100;
-const MAX_COMMANDS: usize = 1000;
+/// Commands a client may issue without ever completing a mail transaction.
+///
+/// The cap exists to cut off a peer that chatters without delivering
+/// anything, so it counts only unproductive commands: a successful `DATA`
+/// resets it. Counting every command instead would disconnect the well
+/// behaved clients that reuse one connection for a bulk send, which is
+/// exactly the traffic a mail catcher exists to receive.
+const MAX_COMMANDS_PER_TRANSACTION: usize = 1000;
 const IO_TIMEOUT: Duration = Duration::from_secs(60);
+/// Deadline for one whole DATA phase, from `354` to the terminating dot.
+///
+/// Bounds the transfer as a unit instead of per read, which keeps a stalled
+/// peer from holding a session open while still allowing a large message to
+/// arrive over a slow link.
+const DATA_PHASE_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum SmtpStream {
   Plain(TcpStream),
@@ -133,7 +146,7 @@ impl Session {
       }
 
       command_count += 1;
-      if command_count > MAX_COMMANDS {
+      if command_count > MAX_COMMANDS_PER_TRANSACTION {
         self.write("421 Too many commands\r\n").await?;
         return Ok(());
       }
@@ -182,12 +195,13 @@ impl Session {
           self.write(BAD_SEQUENCE).await?;
         } else {
           self.write(DATA_START).await?;
-          match self.receive_data().await {
-            Ok(()) => {}
-            Err(SessionError::MessageTooLarge) => {
+          match timeout(DATA_PHASE_TIMEOUT, self.receive_data()).await {
+            Ok(Ok(())) => command_count = 0,
+            Ok(Err(SessionError::MessageTooLarge)) => {
               self.write("552 Message exceeds maximum size\r\n").await?;
             }
-            Err(e) => return Err(e),
+            Ok(Err(e)) => return Err(e),
+            Err(_) => return Err(SessionError::Timeout),
           }
         }
       } else if upper == "QUIT" {
@@ -322,7 +336,7 @@ impl Session {
 
     loop {
       line_buf.clear();
-      let bytes_read = self.read_bounded_line_raw(&mut line_buf).await?;
+      let bytes_read = self.read_line_untimed(&mut line_buf).await?;
       if bytes_read == 0 {
         return Ok(());
       }
@@ -370,7 +384,7 @@ impl Session {
     let mut line = Vec::new();
     loop {
       line.clear();
-      match self.read_bounded_line_raw(&mut line).await {
+      match self.read_line_untimed(&mut line).await {
         Ok(0) => return,
         Ok(_) => {
           let trimmed = line
@@ -391,10 +405,21 @@ impl Session {
   }
 
   async fn read_bounded_line_raw(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
+    timeout(IO_TIMEOUT, self.read_line_untimed(buf))
+      .await
+      .map_err(|_| SessionError::Timeout)?
+  }
+
+  /// Reads one line, arming no timer of its own.
+  ///
+  /// A single large message is tens of thousands of lines, so timing each read
+  /// individually spends most of the read path registering and dropping timers.
+  /// Callers bound the whole phase instead: commands through
+  /// [`Self::read_bounded_line_raw`], message bodies through the one timeout
+  /// around the DATA phase.
+  async fn read_line_untimed(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
     loop {
-      let available = timeout(IO_TIMEOUT, self.stream_mut()?.fill_buf())
-        .await
-        .map_err(|_| SessionError::Timeout)??;
+      let available = self.stream_mut()?.fill_buf().await?;
       if available.is_empty() {
         if buf.is_empty() {
           return Ok(0);

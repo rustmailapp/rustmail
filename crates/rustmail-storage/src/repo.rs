@@ -157,9 +157,14 @@ impl MessageRepository {
   }
 
   /// Lists messages ordered by newest first, with pagination.
+  ///
+  /// Ordering is by `rowid`, which is arrival order. ULIDs sort the same way
+  /// only down to the millisecond: mail captured within the same millisecond
+  /// is ordered by the ULID's random bits, so `ORDER BY id` shuffles bursts.
+  /// [`Self::search`] orders the same way, so browsing and searching agree.
   pub async fn list(&self, limit: i64, offset: i64) -> Result<Vec<MessageSummary>, StorageError> {
     let messages = sqlx::query_as::<_, MessageSummary>(
-      "SELECT id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at FROM messages ORDER BY id DESC LIMIT ?1 OFFSET ?2",
+      "SELECT id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at FROM messages ORDER BY rowid DESC LIMIT ?1 OFFSET ?2",
     )
     .bind(limit)
     .bind(offset)
@@ -170,6 +175,12 @@ impl MessageRepository {
   }
 
   /// Full-text search across subject, body, sender, and recipients via FTS5.
+  ///
+  /// The FTS table drives the join and the ordering is `fts.rowid DESC`, which
+  /// FTS5 can satisfy natively. Ordering by a `messages` column instead forces
+  /// SQLite to materialise and sort every match before applying `LIMIT`, so a
+  /// query matching a large mailbox pays for the whole result set to return
+  /// one page of it.
   pub async fn search(
     &self,
     query: &str,
@@ -183,10 +194,10 @@ impl MessageRepository {
     let messages = sqlx::query_as::<_, MessageSummary>(
       r#"
       SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at
-      FROM messages m
-      INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+      FROM messages_fts fts
+      INNER JOIN messages m ON m.rowid = fts.rowid
       WHERE messages_fts MATCH ?1
-      ORDER BY m.id DESC
+      ORDER BY fts.rowid DESC
       LIMIT ?2 OFFSET ?3
       "#,
     )
@@ -200,6 +211,11 @@ impl MessageRepository {
   }
 
   /// Counts the total number of FTS5 search matches.
+  ///
+  /// Counted on the index alone. `messages_fts` is an external-content table
+  /// over `messages`, so every indexed rowid has exactly one source row and
+  /// joining back cannot change the count: it only spends a primary-key lookup
+  /// per match to fetch a row the count then discards.
   pub async fn search_count(&self, query: &str) -> Result<i64, StorageError> {
     let quoted = match Self::sanitize_fts_query(query) {
       Some(q) => q,
@@ -208,8 +224,7 @@ impl MessageRepository {
     let row: (i64,) = sqlx::query_as(
       r#"
       SELECT COUNT(*)
-      FROM messages m
-      INNER JOIN messages_fts fts ON m.rowid = fts.rowid
+      FROM messages_fts
       WHERE messages_fts MATCH ?1
       "#,
     )
@@ -230,13 +245,17 @@ impl MessageRepository {
     Some(format!("\"{}\"", sanitized))
   }
 
-  /// Fetches a single message by ID, including bodies and raw bytes.
+  /// Fetches a single message by ID, including its parsed bodies.
+  ///
+  /// The raw RFC 5322 bytes are not read; use [`Self::get_raw`] for those.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
-    let message = sqlx::query_as::<_, Message>("SELECT * FROM messages WHERE id = ?1")
-      .bind(id)
-      .fetch_optional(&self.pool)
-      .await?
-      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    let message = sqlx::query_as::<_, Message>(
+      "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&self.pool)
+    .await?
+    .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
 
     Ok(message)
   }
@@ -314,13 +333,19 @@ impl MessageRepository {
   }
 
   /// Deletes all messages and clears the FTS5 index atomically. Returns the count of deleted messages.
+  ///
+  /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
+  /// An external-content index reads the content row to work out which tokens
+  /// to remove, so a plain `DELETE` issued after the source rows are gone is a
+  /// silent no-op that leaves the whole index behind.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
     let mut txn = self.pool.begin().await?;
 
-    let result = sqlx::query("DELETE FROM messages")
+    sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
       .execute(&mut *txn)
       .await?;
-    sqlx::query("DELETE FROM messages_fts")
+
+    let result = sqlx::query("DELETE FROM messages")
       .execute(&mut *txn)
       .await?;
 
@@ -429,6 +454,25 @@ impl MessageRepository {
     Ok(row.0)
   }
 
+  /// Returns at most `max_bytes` from the start of a message's raw bytes.
+  ///
+  /// Callers that only need the header section, or only enough source to fill
+  /// a preview, should use this rather than [`Self::get_raw`]: `substr` keeps
+  /// SQLite from materialising a multi-megabyte blob that is then discarded.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id.
+  pub async fn get_raw_prefix(&self, id: &str, max_bytes: i64) -> Result<Vec<u8>, StorageError> {
+    let row: (Vec<u8>,) = sqlx::query_as("SELECT substr(raw, 1, ?2) FROM messages WHERE id = ?1")
+      .bind(id)
+      .bind(max_bytes)
+      .fetch_optional(&self.pool)
+      .await?
+      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    Ok(row.0)
+  }
+
   /// Deletes messages older than the given ISO 8601 cutoff. Returns IDs of deleted messages.
   pub async fn delete_older_than(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
     let mut txn = self.pool.begin().await?;
@@ -459,11 +503,14 @@ impl MessageRepository {
   }
 
   /// Trims stored messages to at most `max`, deleting oldest first. Returns IDs of deleted messages.
+  ///
+  /// Ordered by `rowid` to match [`Self::list`], so the rows dropped here are
+  /// exactly the ones the UI shows as oldest.
   pub async fn trim_to_max(&self, max: i64) -> Result<Vec<String>, StorageError> {
     let mut txn = self.pool.begin().await?;
 
     let ids: Vec<(String,)> =
-      sqlx::query_as("SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?1")
+      sqlx::query_as("SELECT id FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1")
         .bind(max)
         .fetch_all(&mut *txn)
         .await?;
@@ -473,14 +520,14 @@ impl MessageRepository {
     }
 
     sqlx::query(
-      "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+      "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
     )
     .bind(max)
     .execute(&mut *txn)
     .await?;
 
     sqlx::query(
-      "DELETE FROM messages WHERE id IN (SELECT id FROM messages ORDER BY id DESC LIMIT -1 OFFSET ?1)",
+      "DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
     )
     .bind(max)
     .execute(&mut *txn)
@@ -566,7 +613,7 @@ mod tests {
     let msg = repo.get(&summary.id).await.unwrap();
     assert_eq!(msg.id, summary.id);
     assert_eq!(msg.text_body.as_deref(), Some("Hello world"));
-    assert_eq!(msg.raw, raw);
+    assert_eq!(repo.get_raw(&summary.id).await.unwrap(), raw);
   }
 
   #[tokio::test]
@@ -863,6 +910,43 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn repeated_delete_all_does_not_grow_the_fts_index() {
+    let repo = test_repo().await;
+
+    async fn index_rows(repo: &MessageRepository) -> i64 {
+      sqlx::query_scalar("SELECT count(*) FROM messages_fts_data")
+        .fetch_one(&repo.pool)
+        .await
+        .unwrap()
+    }
+
+    let mut sizes = Vec::new();
+    for round in 0..3 {
+      for i in 0..5 {
+        repo
+          .insert(
+            "a@t.com",
+            &["b@t.com".into()],
+            &raw_email(&format!("round{round}msg{i}"), "a@t.com", "b@t.com"),
+          )
+          .await
+          .unwrap();
+      }
+      repo.delete_all().await.unwrap();
+      sizes.push(index_rows(&repo).await);
+    }
+
+    assert!(
+      sizes.iter().all(|size| *size == sizes[0]),
+      "index kept growing across delete_all cycles: {sizes:?}"
+    );
+    assert!(
+      repo.search("round0msg0", 50, 0).await.unwrap().is_empty(),
+      "deleted terms must not stay in the index"
+    );
+  }
+
+  #[tokio::test]
   async fn get_raw_bytes() {
     let repo = test_repo().await;
     let raw = raw_email("Raw test", "a@t.com", "b@t.com");
@@ -873,6 +957,97 @@ mod tests {
 
     let fetched = repo.get_raw(&s.id).await.unwrap();
     assert_eq!(fetched, raw);
+  }
+
+  #[tokio::test]
+  async fn get_raw_prefix_returns_only_the_requested_bytes() {
+    let repo = test_repo().await;
+    let raw = raw_email("Prefix test", "a@t.com", "b@t.com");
+    let s = repo
+      .insert("a@t.com", &["b@t.com".into()], &raw)
+      .await
+      .unwrap();
+
+    let head = repo.get_raw_prefix(&s.id, 12).await.unwrap();
+    assert_eq!(head, raw[..12]);
+
+    let beyond_end = repo
+      .get_raw_prefix(&s.id, raw.len() as i64 * 2)
+      .await
+      .unwrap();
+    assert_eq!(
+      beyond_end, raw,
+      "asking for more than the message holds must yield the whole message"
+    );
+  }
+
+  #[tokio::test]
+  async fn get_raw_prefix_reports_a_missing_message() {
+    let repo = test_repo().await;
+    assert!(matches!(
+      repo.get_raw_prefix("nope", 16).await,
+      Err(StorageError::NotFound(_))
+    ));
+  }
+
+  /// Enough messages to land inside one millisecond, which is where ULID
+  /// ordering and arrival ordering diverge.
+  const BURST: usize = 40;
+
+  #[tokio::test]
+  async fn search_and_list_agree_on_order_within_a_burst() {
+    let repo = test_repo().await;
+
+    for i in 0..BURST {
+      repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(&format!("burstterm item{i}"), "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+    }
+
+    let listed: Vec<String> = repo
+      .list(BURST as i64, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .map(|m| m.id)
+      .collect();
+    let found: Vec<String> = repo
+      .search("burstterm", BURST as i64, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .map(|m| m.id)
+      .collect();
+
+    assert_eq!(listed.len(), BURST);
+    assert_eq!(
+      found, listed,
+      "browsing and searching must return the same order, newest first"
+    );
+  }
+
+  #[tokio::test]
+  async fn search_counts_every_match_without_joining_the_source_table() {
+    let repo = test_repo().await;
+
+    for i in 0..BURST {
+      repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(&format!("countterm item{i}"), "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(repo.search_count("countterm").await.unwrap(), BURST as i64);
+    assert_eq!(repo.search_count("nothingmatchesthis").await.unwrap(), 0);
   }
 
   #[tokio::test]

@@ -144,17 +144,67 @@ paths:
     get:
       operationId: getMessageRaw
       summary: Download raw RFC 822 message source
+      description: >
+        Returns the whole source by default. Pass `limit` to read only the
+        first N bytes, which is what the UI's Raw tab does so that opening a
+        multi-megabyte message neither transfers nor renders all of it.
       tags: [Messages]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of bytes to return, counted from the start of the message.
+          schema:
+            type: integer
+            minimum: 1
+          example: 131072
       responses:
         '200':
           description: >
-            Raw RFC 822 message bytes. Content-Disposition is
-            `attachment; filename="<id>.eml"`.
+            Raw RFC 822 message bytes, truncated to `limit` when given.
+            Content-Disposition is `attachment; filename="<id>.eml"`.
           content:
             message/rfc822:
               schema:
                 type: string
                 format: binary
+        '400':
+          description: '`limit` was given but is not a positive number of bytes'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/messages/{id}/headers:
+    parameters:
+      - $ref: '#/components/parameters/MessageId'
+
+    get:
+      operationId: getMessageHeaders
+      summary: List the message header fields
+      description: >
+        Returns the header section only, in wire order, with duplicates
+        preserved and folded lines joined by a single space. Cheaper than
+        fetching the raw source when only the headers are needed.
+      tags: [Messages]
+      responses:
+        '200':
+          description: Header fields in wire order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MessageHeader'
+              example:
+                - name: Received
+                  value: "from a.example.com by b.example.com; Tue, 1 Jul 2025 10:00:00 +0000"
+                - name: From
+                  value: "sender@example.com"
+                - name: Subject
+                  value: "Welcome aboard"
         '404':
           $ref: '#/components/responses/NotFound'
 
@@ -648,6 +698,19 @@ components:
           type: integer
           description: Number of messages that matched the given filters
           example: 2
+
+    MessageHeader:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+          description: Header field name as it appears on the wire
+          example: Subject
+        value:
+          type: string
+          description: Field value with folded continuation lines joined by a space
+          example: "Welcome aboard"
 
     AuthCheck:
       type: object

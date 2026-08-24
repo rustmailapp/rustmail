@@ -1,4 +1,10 @@
-import type { Attachment, AuthResults, ListResponse, Message } from "./types";
+import type {
+  Attachment,
+  AuthResults,
+  ListResponse,
+  Message,
+  MessageHeader,
+} from "./types";
 
 const BASE = "/api/v1";
 
@@ -83,8 +89,17 @@ export async function getAuthResults(id: string): Promise<AuthResults> {
   return fetchJson(`${BASE}/messages/${enc(id)}/auth`);
 }
 
-export async function getRawMessage(id: string): Promise<string> {
-  const res = await fetch(`${BASE}/messages/${enc(id)}/raw`);
+export async function getHeaders(id: string): Promise<MessageHeader[]> {
+  return fetchJson(`${BASE}/messages/${enc(id)}/headers`);
+}
+
+/** Fetches a message's raw source, optionally only its first `limitBytes`. */
+export async function getRawMessage(
+  id: string,
+  limitBytes?: number,
+): Promise<string> {
+  const query = limitBytes === undefined ? "" : `?limit=${limitBytes}`;
+  const res = await fetch(`${BASE}/messages/${enc(id)}/raw${query}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.text();
 }

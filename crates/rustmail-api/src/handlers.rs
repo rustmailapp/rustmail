@@ -7,6 +7,20 @@ use serde::{Deserialize, Serialize};
 use crate::state::{AppState, WsEvent};
 use rustmail_storage::StorageError;
 
+/// Captured mail is immutable once stored, so anything derived from a
+/// message's bytes can be cached indefinitely. `private` keeps shared caches
+/// out of captured mail when rustmail is bound to a non-loopback address.
+///
+/// A deleted message can therefore still be served from a client's cache if
+/// its URL is requested again. ULIDs are never reused, so this can only ever
+/// resurface the message that URL already named, and the UI drops the row on
+/// `message:delete` rather than re-requesting it.
+const IMMUTABLE_MESSAGE_CACHE: &str = "private, max-age=31536000, immutable";
+
+/// Read state, stars and tags change over a message's life, so these
+/// responses must not be served from a cache.
+const MUTABLE_MESSAGE_CACHE: &str = "no-store";
+
 #[derive(Deserialize)]
 pub struct ListParams {
   pub q: Option<String>,
@@ -38,10 +52,14 @@ pub async fn list_messages(
     (msgs, total)
   };
 
-  Ok(Json(serde_json::json!({
-      "messages": messages,
-      "total": count,
-  })))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string())],
+    Json(serde_json::json!({
+        "messages": messages,
+        "total": count,
+    })),
+  ))
 }
 
 pub async fn get_message(
@@ -49,7 +67,11 @@ pub async fn get_message(
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
   let message = state.repo.get(&id).await?;
-  Ok(Json(message))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string())],
+    Json(message),
+  ))
 }
 
 const MAX_TAGS: usize = 20;
@@ -137,7 +159,11 @@ pub async fn list_attachments(
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
   let attachments = state.repo.get_attachments(&id).await?;
-  Ok(Json(attachments))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(attachments),
+  ))
 }
 
 pub async fn get_attachment(
@@ -163,6 +189,7 @@ pub async fn get_attachment(
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}\"", filename),
       ),
+      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
       (
         header::HeaderName::from_static("x-content-type-options"),
         "nosniff".to_string(),
@@ -202,10 +229,7 @@ pub async fn get_inline_attachment(
     StatusCode::OK,
     [
       (header::CONTENT_TYPE, content_type),
-      (
-        header::CACHE_CONTROL,
-        "public, max-age=31536000, immutable".to_string(),
-      ),
+      (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
       (
         header::HeaderName::from_static("x-content-type-options"),
         "nosniff".to_string(),
@@ -219,16 +243,127 @@ pub async fn get_inline_attachment(
   ))
 }
 
+/// `limit` is taken as text so that a malformed value is rejected by this
+/// handler, in the same JSON shape as an out-of-range one, rather than by the
+/// query extractor in a different shape.
+#[derive(Deserialize)]
+pub struct RawParams {
+  pub limit: Option<String>,
+}
+
+const RAW_LIMIT_ERROR: &str = "limit must be a positive number of bytes";
+
 pub async fn get_raw_message(
   State(state): State<AppState>,
   Path(id): Path<String>,
+  Query(params): Query<RawParams>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = state.repo.get_raw(&id).await?;
+  let limit = match params.limit.as_deref() {
+    Some(text) => match text.parse::<i64>() {
+      Ok(limit) if limit > 0 => Some(limit),
+      _ => {
+        return Ok(
+          (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": RAW_LIMIT_ERROR })),
+          )
+            .into_response(),
+        );
+      }
+    },
+    None => None,
+  };
+
+  let raw = match limit {
+    Some(limit) => state.repo.get_raw_prefix(&id, limit).await?,
+    None => state.repo.get_raw(&id).await?,
+  };
+
+  Ok(
+    (
+      StatusCode::OK,
+      [
+        (header::CONTENT_TYPE, "message/rfc822".to_string()),
+        (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
+      ],
+      raw,
+    )
+      .into_response(),
+  )
+}
+
+/// One header field as it appears on the wire, with folded lines joined.
+#[derive(Debug, Serialize)]
+pub struct MessageHeader {
+  pub name: String,
+  pub value: String,
+}
+
+/// Raw bytes read when only the header section is needed.
+const HEADER_SECTION_PREFIX_BYTES: i64 = 64 * 1024;
+
+fn ends_header_section(raw: &[u8]) -> bool {
+  raw.windows(4).any(|w| w == b"\r\n\r\n") || raw.windows(2).any(|w| w == b"\n\n")
+}
+
+/// Reads enough of a message's source to cover its header section.
+///
+/// Real headers fit in [`HEADER_SECTION_PREFIX_BYTES`] many times over, so the
+/// common case is one short read instead of pulling a whole multi-megabyte
+/// blob out of SQLite. A message whose header section is genuinely longer
+/// falls back to the full source rather than silently losing fields.
+async fn read_header_section(state: &AppState, id: &str) -> Result<Vec<u8>, StorageError> {
+  let prefix = state
+    .repo
+    .get_raw_prefix(id, HEADER_SECTION_PREFIX_BYTES)
+    .await?;
+
+  let complete =
+    (prefix.len() as i64) < HEADER_SECTION_PREFIX_BYTES || ends_header_section(&prefix);
+  if complete {
+    return Ok(prefix);
+  }
+
+  state.repo.get_raw(id).await
+}
+
+pub async fn get_headers(
+  State(state): State<AppState>,
+  Path(id): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+  let raw = read_header_section(&state, &id).await?;
+
+  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
+  let headers: Vec<MessageHeader> = parsed
+    .as_ref()
+    .and_then(|msg| msg.parts.first())
+    .map(|root| root.headers.as_slice())
+    .unwrap_or_default()
+    .iter()
+    .map(|h| MessageHeader {
+      name: h.name.as_str().to_string(),
+      value: unfold_header_value(
+        raw
+          .get(h.offset_start as usize..h.offset_end as usize)
+          .unwrap_or_default(),
+      ),
+    })
+    .collect();
+
   Ok((
     StatusCode::OK,
-    [(header::CONTENT_TYPE, "message/rfc822".to_string())],
-    raw,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(headers),
   ))
+}
+
+fn unfold_header_value(value: &[u8]) -> String {
+  String::from_utf8_lossy(value)
+    .split(['\r', '\n'])
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
 }
 
 #[derive(Deserialize)]
@@ -304,6 +439,7 @@ pub async fn export_message(
               header::CONTENT_DISPOSITION,
               format!("attachment; filename=\"{}.eml\"", sanitize_filename(&id)),
             ),
+            (header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string()),
           ],
           raw,
         )
@@ -322,6 +458,7 @@ pub async fn export_message(
                 header::CONTENT_DISPOSITION,
                 format!("attachment; filename=\"{}.json\"", sanitize_filename(&id)),
               ),
+              (header::CACHE_CONTROL, MUTABLE_MESSAGE_CACHE.to_string()),
             ],
             body,
           )
@@ -494,9 +631,9 @@ pub async fn get_auth_results(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = state.repo.get_raw(&id).await?;
+  let raw = read_header_section(&state, &id).await?;
 
-  let parsed = mail_parser::MessageParser::default().parse(&raw);
+  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
   let headers = parsed
     .as_ref()
     .and_then(|msg| msg.parts.first())
@@ -540,12 +677,16 @@ pub async fn get_auth_results(
     }
   }
 
-  Ok(Json(AuthResults {
-    dkim,
-    spf,
-    dmarc,
-    arc,
-  }))
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(AuthResults {
+      dkim,
+      spf,
+      dmarc,
+      arc,
+    }),
+  ))
 }
 
 fn parse_auth_results_header(

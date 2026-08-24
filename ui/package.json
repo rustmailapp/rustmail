@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@tanstack/solid-virtual": "^3.13.37",
     "solid-js": "^1.9.13"
   },
   "devDependencies": {

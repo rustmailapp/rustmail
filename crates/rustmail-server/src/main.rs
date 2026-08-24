@@ -237,10 +237,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
     "Assert mode: waiting for matching emails"
   );
 
-  let pool = sqlx::sqlite::SqlitePoolOptions::new()
-    .max_connections(2)
-    .connect("sqlite::memory:")
-    .await?;
+  let pool = connect_pool(IN_MEMORY_DB_URL, true).await?;
   initialize_database(&pool).await?;
 
   let repo = MessageRepository::new(pool);
@@ -328,6 +325,37 @@ fn default_db_path() -> PathBuf {
     .unwrap_or_else(|| PathBuf::from("."))
     .join("rustmail")
     .join("rustmail.db")
+}
+
+const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
+const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+
+/// Opens a SQLite connection pool for `db_url`.
+///
+/// In-memory pools are pinned to a single permanent connection. SQLite drops
+/// an in-memory database once its last connection closes, and the pool would
+/// otherwise reap every idle connection after ten minutes, silently discarding
+/// all captured mail. A single connection also keeps concurrent writers off
+/// shared-cache locking, which reports `SQLITE_LOCKED` instead of the
+/// `SQLITE_BUSY` that `busy_timeout` retries.
+async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool> {
+  let pool_options = if in_memory {
+    sqlx::sqlite::SqlitePoolOptions::new()
+      .min_connections(1)
+      .max_connections(1)
+      .idle_timeout(None)
+      .max_lifetime(None)
+  } else {
+    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_MAX_CONNECTIONS)
+  };
+
+  let connect_options = rustmail_storage::connect_options(db_url)
+    .with_context(|| format!("invalid database URL: {db_url}"))?;
+
+  pool_options
+    .connect_with(connect_options)
+    .await
+    .with_context(|| format!("failed to open database: {db_url}"))
 }
 
 fn install_rustls_crypto_provider() {
@@ -529,7 +557,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let db_url = if args.ephemeral {
     info!("Running in ephemeral mode (in-memory database)");
-    "sqlite::memory:".to_string()
+    IN_MEMORY_DB_URL.to_string()
   } else {
     let db_path = args.db_path.unwrap_or_else(default_db_path);
     if let Some(parent) = db_path.parent() {
@@ -539,10 +567,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 
-  let pool = sqlx::sqlite::SqlitePoolOptions::new()
-    .max_connections(5)
-    .connect(&db_url)
-    .await?;
+  let pool = connect_pool(&db_url, args.ephemeral).await?;
 
   initialize_database(&pool).await?;
 
@@ -684,6 +709,105 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 }
 
 #[cfg(test)]
+mod pool_tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn ephemeral_pool_never_drops_its_only_connection() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+
+    let options = pool.options();
+    assert_eq!(
+      options.get_min_connections(),
+      1,
+      "an in-memory database is destroyed once its last connection closes"
+    );
+    assert_eq!(options.get_idle_timeout(), None);
+    assert_eq!(options.get_max_lifetime(), None);
+  }
+
+  #[tokio::test]
+  async fn ephemeral_pool_retains_stored_messages() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+
+    repo
+      .insert(
+        "a@test.com",
+        &["b@test.com".into()],
+        b"From: a@test.com\r\nSubject: kept\r\n\r\nbody",
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert!(pool.size() >= 1);
+  }
+
+  const CONCURRENT_WORKERS: usize = 16;
+  const CONCURRENCY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn single_connection_pool_serializes_without_deadlocking() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+
+    // Ephemeral mode funnels SMTP inserts, retention and every HTTP request
+    // through one connection. A repository method that acquired a second
+    // connection while holding one would deadlock here rather than hang the
+    // whole server in production.
+    let mut handles = Vec::new();
+    for i in 0..CONCURRENT_WORKERS {
+      let repo = repo.clone();
+      handles.push(tokio::spawn(async move {
+        repo
+          .insert(
+            "a@test.com",
+            &["b@test.com".into()],
+            format!("From: a@test.com\r\nSubject: worker{i}\r\n\r\nbody").as_bytes(),
+          )
+          .await
+          .unwrap();
+        repo.count().await.unwrap();
+        repo.search(&format!("worker{i}"), 10, 0).await.unwrap();
+        repo.list(10, 0).await.unwrap();
+      }));
+    }
+
+    tokio::time::timeout(CONCURRENCY_DEADLINE, async {
+      for handle in handles {
+        handle.await.unwrap();
+      }
+    })
+    .await
+    .expect("single-connection pool deadlocked");
+
+    assert_eq!(repo.count().await.unwrap(), CONCURRENT_WORKERS as i64);
+  }
+
+  #[tokio::test]
+  async fn file_pool_allows_concurrent_connections() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let pool = connect_pool(
+      &format!("sqlite:{}?mode=rwc", dir.path().join("pool.db").display()),
+      false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+      pool.options().get_max_connections(),
+      FILE_DB_MAX_CONNECTIONS
+    );
+
+    pool.close().await;
+  }
+}
+
+#[cfg(test)]
 mod retention_tests {
   use super::*;
   use rustmail_storage::{MessageRepository, initialize_database};
@@ -777,12 +901,11 @@ mod retention_tests {
       ids.push(insert_sample(&repo, &format!("msg-{i}")).await);
     }
 
-    // Storage orders `trim_to_max` by ULID DESC, so derive survivors/deleted
-    // from the sorted ids instead of assuming insertion order equals ULID order.
-    let mut newest_first = ids.clone();
-    newest_first.sort_by(|a, b| b.cmp(a));
-    let expected_survivors: Vec<String> = newest_first.iter().take(2).cloned().collect();
-    let expected_deleted: Vec<String> = newest_first.iter().skip(2).cloned().collect();
+    // Storage trims by arrival order, so the last inserted rows survive.
+    // These are inserted within the same millisecond, where ULID order and
+    // arrival order genuinely differ.
+    let expected_survivors: Vec<String> = ids.iter().rev().take(2).cloned().collect();
+    let expected_deleted: Vec<String> = ids.iter().rev().skip(2).cloned().collect();
 
     run_retention_tick(&repo, &state, 0, 2, OffsetDateTime::now_utc()).await;
 
@@ -808,7 +931,7 @@ mod retention_tests {
       ids.push(insert_sample(&repo, &format!("m-{i}")).await);
     }
 
-    // Cutoff keeps all four rows; trim drops the oldest two by ULID, so
+    // Cutoff keeps all four rows; trim drops the two that arrived first, so
     // exactly two delete events should fire and match those ids.
     run_retention_tick(&repo, &state, 24, 2, OffsetDateTime::now_utc()).await;
 
@@ -816,9 +939,7 @@ mod retention_tests {
     let mut got = drain_delete_events(&mut rx);
     got.sort();
 
-    let mut newest_first = ids.clone();
-    newest_first.sort_by(|a, b| b.cmp(a));
-    let mut want: Vec<String> = newest_first.into_iter().skip(2).collect();
+    let mut want: Vec<String> = ids.iter().rev().skip(2).cloned().collect();
     want.sort();
     assert_eq!(got, want);
   }

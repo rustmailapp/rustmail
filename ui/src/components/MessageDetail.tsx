@@ -10,9 +10,22 @@ import {
 import { selectedId, setSelectedId, messages } from "../stores/messages";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
-import type { Attachment, AuthCheck, AuthResults } from "../lib/types";
+import type {
+  Attachment,
+  AuthCheck,
+  AuthResults,
+  MessageHeader,
+} from "../lib/types";
 
 type Tab = "html" | "text" | "headers" | "auth" | "raw";
+
+/**
+ * Raw source fetched for the Raw tab.
+ *
+ * Laying out a whole large message is what made the tab freeze, so the server
+ * is asked for a bounded prefix and the rest stays behind the .eml download.
+ */
+const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
 
 const TAB_LABELS: Record<Tab, string> = {
   html: "HTML",
@@ -35,9 +48,16 @@ export default function MessageDetail() {
     return api.listAttachments(id);
   });
 
-  const [rawSource] = createResource(selectedId, async (id) => {
+  const rawTarget = () => (tab() === "raw" ? selectedId() : null);
+  const [rawSource] = createResource(rawTarget, async (id) => {
     if (!id) return null;
-    return api.getRawMessage(id);
+    return api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES);
+  });
+
+  const headersTarget = () => (tab() === "headers" ? selectedId() : null);
+  const [headers] = createResource(headersTarget, async (id) => {
+    if (!id) return null;
+    return api.getHeaders(id);
   });
 
   const authSource = () => (tab() === "auth" ? selectedId() : null);
@@ -256,13 +276,17 @@ export default function MessageDetail() {
                     </pre>
                   </Match>
                   <Match when={tab() === "headers"}>
-                    <HeadersView raw={rawSource()} />
+                    <HeadersView headers={headers()} />
                   </Match>
                   <Match when={tab() === "auth"}>
                     <AuthView results={authResults()} />
                   </Match>
                   <Match when={tab() === "raw"}>
-                    <RawView raw={rawSource()} />
+                    <RawView
+                      raw={rawSource()}
+                      messageId={msg().id}
+                      size={msg().size}
+                    />
                   </Match>
                 </Switch>
               </div>
@@ -354,58 +378,32 @@ function HtmlPreview(props: {
   );
 }
 
-function parseHeaders(raw: string): { name: string; value: string }[] {
-  const headerSection = raw.split(/\r?\n\r?\n/)[0] || "";
-  const headers: { name: string; value: string }[] = [];
-
-  for (const line of headerSection.split(/\r?\n/)) {
-    if (line.startsWith(" ") || line.startsWith("\t")) {
-      if (headers.length > 0) {
-        headers[headers.length - 1].value += " " + line.trim();
-      }
-    } else {
-      const colonIdx = line.indexOf(":");
-      if (colonIdx > 0) {
-        headers.push({
-          name: line.substring(0, colonIdx).trim(),
-          value: line.substring(colonIdx + 1).trim(),
-        });
-      }
-    }
-  }
-
-  return headers;
-}
-
-function HeadersView(props: { raw: string | null | undefined }) {
+function HeadersView(props: { headers: MessageHeader[] | null | undefined }) {
   return (
     <Show
-      when={props.raw}
+      when={props.headers}
       fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
     >
-      {(raw) => {
-        const headers = () => parseHeaders(raw());
-        return (
-          <div class="p-4">
-            <table class="w-full text-sm">
-              <tbody>
-                <For each={headers()}>
-                  {(h) => (
-                    <tr class="border-b border-zinc-200/50 dark:border-zinc-800/50">
-                      <td class="py-1.5 pr-4 text-zinc-500 dark:text-zinc-400 font-mono text-xs whitespace-nowrap align-top font-medium">
-                        {h.name}
-                      </td>
-                      <td class="py-1.5 text-zinc-700 dark:text-zinc-300 font-mono text-xs break-all">
-                        {h.value}
-                      </td>
-                    </tr>
-                  )}
-                </For>
-              </tbody>
-            </table>
-          </div>
-        );
-      }}
+      {(headers) => (
+        <div class="p-4">
+          <table class="w-full text-sm">
+            <tbody>
+              <For each={headers()}>
+                {(h) => (
+                  <tr class="border-b border-zinc-200/50 dark:border-zinc-800/50">
+                    <td class="py-1.5 pr-4 text-zinc-500 dark:text-zinc-400 font-mono text-xs whitespace-nowrap align-top font-medium">
+                      {h.name}
+                    </td>
+                    <td class="py-1.5 text-zinc-700 dark:text-zinc-300 font-mono text-xs break-all">
+                      {h.value}
+                    </td>
+                  </tr>
+                )}
+              </For>
+            </tbody>
+          </table>
+        </div>
+      )}
     </Show>
   );
 }
@@ -610,16 +608,37 @@ function TagEditor(props: { messageId: string }) {
   );
 }
 
-function RawView(props: { raw: string | null | undefined }) {
+function RawView(props: {
+  raw: string | null | undefined;
+  messageId: string;
+  size: number;
+}) {
+  const truncated = () => props.size > RAW_PREVIEW_LIMIT_BYTES;
+
   return (
     <Show
       when={props.raw}
       fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
     >
       {(raw) => (
-        <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
-          {raw()}
-        </pre>
+        <>
+          <Show when={truncated()}>
+            <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+              Showing the first {formatSize(RAW_PREVIEW_LIMIT_BYTES)} of{" "}
+              {formatSize(props.size)}.{" "}
+              <a
+                href={api.exportUrl(props.messageId, "eml")}
+                download={`${props.messageId}.eml`}
+                class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+              >
+                Download the full source
+              </a>
+            </div>
+          </Show>
+          <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
+            {raw()}
+          </pre>
+        </>
       )}
     </Show>
   );

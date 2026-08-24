@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
 use rustls::ServerConfig as RustlsServerConfig;
 use tokio::io::AsyncWriteExt;
@@ -46,6 +45,12 @@ impl Default for SmtpServerConfig {
 ///
 /// Listens for TCP connections and spawns a session task for each.
 /// Concurrent sessions are capped at 100 via a semaphore.
+///
+/// A session is not capped in total duration. Every await inside one already
+/// carries its own deadline — commands and responses through the per-line I/O
+/// timeout, message bodies through the DATA phase timeout, STARTTLS through the
+/// handshake timeout — so a stalled peer is cut off without a blanket limit,
+/// and one that keeps delivering is not disconnected mid-send.
 pub struct SmtpServer {
   config: SmtpServerConfig,
   sender: mpsc::Sender<ReceivedMessage>,
@@ -87,10 +92,8 @@ impl SmtpServer {
           let tls = self.config.tls.clone();
           tokio::spawn(async move {
             let mut session = Session::new(stream, peer, sender, max_size, tls);
-            match tokio::time::timeout(Duration::from_secs(300), session.handle()).await {
-              Ok(Err(e)) => error!(peer = %peer, error = %e, "SMTP session error"),
-              Err(_) => warn!(peer = %peer, "SMTP session timed out after 5 minutes"),
-              _ => {}
+            if let Err(e) = session.handle().await {
+              error!(peer = %peer, error = %e, "SMTP session error");
             }
             drop(permit);
           });
