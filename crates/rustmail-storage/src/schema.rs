@@ -114,6 +114,15 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
 
   sqlx::query(
     r#"
+        CREATE INDEX IF NOT EXISTS idx_attachments_message_id
+        ON attachments(message_id)
+        "#,
+  )
+  .execute(pool)
+  .await?;
+
+  sqlx::query(
+    r#"
         CREATE INDEX IF NOT EXISTS idx_messages_created_at
         ON messages(created_at)
         "#,
@@ -272,4 +281,30 @@ mod tests {
     }
   }
 
+  #[tokio::test]
+  async fn attachments_are_indexed_by_message() {
+    let pool = SqlitePoolOptions::new()
+      .connect_with(connect_options("sqlite::memory:").unwrap())
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+
+    // Without this index every attachment listing, and every cascade from a
+    // deleted message, scans the whole attachments table.
+    let rows: Vec<(i64, i64, i64, String)> =
+      sqlx::query_as("EXPLAIN QUERY PLAN SELECT id FROM attachments WHERE message_id = 'x'")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+    let plan = rows
+      .into_iter()
+      .map(|(_, _, _, detail)| detail)
+      .collect::<Vec<_>>()
+      .join(" ");
+    assert!(
+      plan.contains("idx_attachments_message_id"),
+      "attachment lookup by message is not using its index: {plan}"
+    );
+  }
 }
