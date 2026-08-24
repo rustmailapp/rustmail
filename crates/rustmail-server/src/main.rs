@@ -910,12 +910,11 @@ mod retention_tests {
       ids.push(insert_sample(&repo, &format!("msg-{i}")).await);
     }
 
-    // Storage orders `trim_to_max` by ULID DESC, so derive survivors/deleted
-    // from the sorted ids instead of assuming insertion order equals ULID order.
-    let mut newest_first = ids.clone();
-    newest_first.sort_by(|a, b| b.cmp(a));
-    let expected_survivors: Vec<String> = newest_first.iter().take(2).cloned().collect();
-    let expected_deleted: Vec<String> = newest_first.iter().skip(2).cloned().collect();
+    // Storage trims by arrival order, so the last inserted rows survive.
+    // These are inserted within the same millisecond, where ULID order and
+    // arrival order genuinely differ.
+    let expected_survivors: Vec<String> = ids.iter().rev().take(2).cloned().collect();
+    let expected_deleted: Vec<String> = ids.iter().rev().skip(2).cloned().collect();
 
     run_retention_tick(&repo, &state, 0, 2, OffsetDateTime::now_utc()).await;
 
@@ -941,7 +940,7 @@ mod retention_tests {
       ids.push(insert_sample(&repo, &format!("m-{i}")).await);
     }
 
-    // Cutoff keeps all four rows; trim drops the oldest two by ULID, so
+    // Cutoff keeps all four rows; trim drops the two that arrived first, so
     // exactly two delete events should fire and match those ids.
     run_retention_tick(&repo, &state, 24, 2, OffsetDateTime::now_utc()).await;
 
@@ -949,9 +948,7 @@ mod retention_tests {
     let mut got = drain_delete_events(&mut rx);
     got.sort();
 
-    let mut newest_first = ids.clone();
-    newest_first.sort_by(|a, b| b.cmp(a));
-    let mut want: Vec<String> = newest_first.into_iter().skip(2).collect();
+    let mut want: Vec<String> = ids.iter().rev().skip(2).cloned().collect();
     want.sort();
     assert_eq!(got, want);
   }
