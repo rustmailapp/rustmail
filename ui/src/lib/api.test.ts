@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getMessage, REQUEST_TIMEOUT_MS } from "./api";
+import {
+  BULK_REQUEST_TIMEOUT_MS,
+  deleteAllMessages,
+  getMessage,
+  REQUEST_TIMEOUT_MS,
+} from "./api";
 
 const fetchMock = vi.fn<typeof fetch>();
 
@@ -87,6 +92,23 @@ describe("request deadline", () => {
     await read;
     expect(signal()?.aborted).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives a whole-inbox delete a longer budget than a read", async () => {
+    const signal = stallFetch();
+
+    const write = expect(deleteAllMessages()).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(signal()?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(
+      BULK_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS,
+    );
+
+    await write;
+    expect(signal()?.aborted).toBe(true);
   });
 
   it("never opens a request the caller had already given up on", async () => {

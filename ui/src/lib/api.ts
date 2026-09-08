@@ -12,6 +12,15 @@ const BASE = "/api/v1";
 export const REQUEST_TIMEOUT_MS = 15_000;
 
 /**
+ * How long a whole-inbox delete may take.
+ *
+ * The row count it walks is unbounded and the store takes one writer at a
+ * time, so this write can legitimately outlast a read by a wide margin. Held
+ * to a read's deadline it would abort a delete that was going to succeed.
+ */
+export const BULK_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
  * Runs `request` under a deadline, and under `signal` if the caller gave one.
  *
  * The deadline is a `setTimeout` rather than `AbortSignal.timeout` because the
@@ -22,6 +31,7 @@ export const REQUEST_TIMEOUT_MS = 15_000;
  */
 async function withDeadline<T>(
   signal: AbortSignal | null | undefined,
+  timeoutMs: number,
   request: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   signal?.throwIfAborted();
@@ -30,12 +40,9 @@ async function withDeadline<T>(
   const timer = setTimeout(
     () =>
       controller.abort(
-        new DOMException(
-          `Request exceeded ${REQUEST_TIMEOUT_MS}ms`,
-          "TimeoutError",
-        ),
+        new DOMException(`Request exceeded ${timeoutMs}ms`, "TimeoutError"),
       ),
-    REQUEST_TIMEOUT_MS,
+    timeoutMs,
   );
   const forward = () => controller.abort(signal?.reason);
   signal?.addEventListener("abort", forward, { once: true });
@@ -48,8 +55,12 @@ async function withDeadline<T>(
   }
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  return withDeadline(init?.signal, async (signal): Promise<T> => {
+async function fetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  return withDeadline(init?.signal, timeoutMs, async (signal): Promise<T> => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);
@@ -58,8 +69,12 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   });
 }
 
-async function fetchText(url: string, init?: RequestInit): Promise<string> {
-  return withDeadline(init?.signal, async (signal) => {
+async function fetchText(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<string> {
+  return withDeadline(init?.signal, timeoutMs, async (signal) => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);
@@ -68,8 +83,12 @@ async function fetchText(url: string, init?: RequestInit): Promise<string> {
   });
 }
 
-async function fetchVoid(url: string, init?: RequestInit): Promise<void> {
-  await withDeadline(init?.signal, async (signal) => {
+async function fetchVoid(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<void> {
+  await withDeadline(init?.signal, timeoutMs, async (signal) => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);
@@ -106,7 +125,11 @@ export async function deleteMessage(id: string): Promise<void> {
 }
 
 export async function deleteAllMessages(): Promise<void> {
-  await fetchVoid(`${BASE}/messages`, { method: "DELETE" });
+  await fetchVoid(
+    `${BASE}/messages`,
+    { method: "DELETE" },
+    BULK_REQUEST_TIMEOUT_MS,
+  );
 }
 
 export async function markRead(id: string, is_read: boolean): Promise<void> {
