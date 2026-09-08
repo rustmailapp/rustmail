@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mail_parser::{MessageParser, MimeHeaders, PartType};
 use sqlx::SqlitePool;
@@ -10,6 +10,7 @@ use ulid::Ulid;
 
 use crate::error::StorageError;
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
+use crate::schema::BUSY_TIMEOUT;
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
   format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
@@ -24,6 +25,14 @@ const PRIMARY_CODE_MASK: i32 = 0xFF;
 const WRITE_ATTEMPTS: u32 = 5;
 /// Delay before the second attempt; doubles from there.
 const WRITE_RETRY_BASE_DELAY: Duration = Duration::from_millis(20);
+/// Ceiling on a whole retry sequence.
+///
+/// Tied to [`BUSY_TIMEOUT`] because SQLite's own busy handler already waits
+/// that long inside a single attempt before reporting contention. Counting
+/// attempts alone would let five of those stack up, and `delete_all` is
+/// reachable from an HTTP handler, so a request could hang for a multiple of
+/// what one attempt already costs.
+const WRITE_RETRY_BUDGET: Duration = BUSY_TIMEOUT;
 
 /// Whether a failed write is worth attempting again.
 ///
@@ -55,7 +64,9 @@ fn jitter(bound: Duration) -> Duration {
 
 /// Runs `op`, retrying while the database reports the write as contended.
 ///
-/// Attempts are bounded and back off exponentially with jitter. Retrying is
+/// Bounded twice over: by attempt count and by a wall-clock budget, so an
+/// attempt that spends its whole `busy_timeout` inside SQLite cannot stack
+/// with four more. Backs off exponentially with jitter. Retrying is
 /// safe because a failed write leaves nothing behind: the transaction rolls
 /// back, and an insert mints a fresh id per attempt, so no attempt can
 /// duplicate a row committed by an earlier one.
@@ -64,12 +75,17 @@ where
   F: FnMut() -> Fut,
   Fut: Future<Output = Result<T, StorageError>>,
 {
+  let deadline = Instant::now() + WRITE_RETRY_BUDGET;
   let mut attempt = 0;
   loop {
     let result = op().await;
     match &result {
-      Err(error) if is_retryable_lock(error) && attempt + 1 < WRITE_ATTEMPTS => {
-        let backoff = WRITE_RETRY_BASE_DELAY * 2_u32.pow(attempt);
+      Err(error)
+        if is_retryable_lock(error)
+          && attempt + 1 < WRITE_ATTEMPTS
+          && Instant::now() < deadline =>
+      {
+        let backoff = WRITE_RETRY_BASE_DELAY.saturating_mul(2_u32.saturating_pow(attempt));
         debug!(
           attempt = attempt + 1,
           "write contended, retrying after backoff"
@@ -1355,10 +1371,16 @@ mod tests {
     (MessageRepository::new(pool.clone()), dir, pool)
   }
 
+  /// A writer holds the lock for less than the retry budget.
+  ///
+  /// The sleep stands in for a concurrent writer's duration, not for test
+  /// synchronisation: the hold has to overlap the insert's first attempt and
+  /// end well inside the retry budget, which is at least 300ms of backoff.
   #[tokio::test]
   async fn insert_waits_out_a_writer_holding_the_lock() {
     let (repo, dir, pool) = impatient_repo().await;
     let _guard = TempDir(dir);
+    let hold = std::time::Duration::from_millis(60);
 
     let mut blocker = pool.acquire().await.unwrap();
     sqlx::query("BEGIN IMMEDIATE")
@@ -1367,7 +1389,7 @@ mod tests {
       .unwrap();
 
     let releaser = tokio::spawn(async move {
-      tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+      tokio::time::sleep(hold).await;
       sqlx::query("ROLLBACK")
         .execute(&mut *blocker)
         .await
@@ -1412,6 +1434,10 @@ mod tests {
       is_retryable_lock(&error),
       "expected a lock error to be reported as-is, got {error:?}"
     );
+    sqlx::query("ROLLBACK")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
     assert_eq!(repo.count().await.unwrap(), 0);
   }
 
