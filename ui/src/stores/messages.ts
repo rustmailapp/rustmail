@@ -147,7 +147,7 @@ function unhide(id: string): void {
  */
 function deleteWithUndo(id: string): void {
   commitDelete();
-  setHiddenIds((ids) => [...ids, id]);
+  setHiddenIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
   setUndoableId(id);
   undoTimer = setTimeout(() => commitDelete(), UNDO_WINDOW_MS);
 }

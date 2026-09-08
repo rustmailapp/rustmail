@@ -354,6 +354,15 @@ describe("deleteWithUndo", () => {
     expect(undoableId()).toBeNull();
   });
 
+  it("hides a message once even when it is deleted twice", async () => {
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    deleteWithUndo("id-0");
+
+    expect(total()).toBe(1);
+  });
+
   it("writes the pending deletion out when the page goes away", async () => {
     await seed(range(2));
 
