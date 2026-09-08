@@ -165,6 +165,11 @@ export default function MessageDetail() {
             (failed(attachments) ? [] : (attachments() ?? [])).filter(
               (a) => a.filename || !a.content_id,
             );
+          const rawReady = createMemo(() => {
+            if (failed(rawSource)) return undefined;
+            const raw = rawSource();
+            return raw === undefined ? undefined : { raw };
+          });
 
           return (
             <div class="flex flex-col h-full">
@@ -382,7 +387,7 @@ export default function MessageDetail() {
                   </Match>
                   <Match when={tab() === "raw"}>
                     <Show
-                      when={!failed(rawSource) && rawSource()}
+                      when={rawReady()}
                       fallback={
                         <ReadState
                           resource={rawSource}
@@ -393,7 +398,7 @@ export default function MessageDetail() {
                     >
                       {(value) => (
                         <RawView
-                          raw={value()}
+                          raw={value().raw}
                           messageId={msg().id}
                           size={msg().size}
                         />

@@ -190,6 +190,20 @@ for (const resource of RESOURCES) {
   });
 }
 
+test("renders a message whose raw source is empty", async ({ page }) => {
+  await mockInbox(page, 2);
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.route(readPattern("/raw"), (route) => route.fulfill({ body: "" }));
+
+  await openFirstMessage(page);
+  await page.getByRole("button", { name: "Raw", exact: true }).click();
+
+  await expect(page.locator("pre")).toHaveCount(1);
+  await expect(page.getByText("Loading...")).toBeHidden();
+  expect(errors).toEqual([]);
+});
+
 test("cancels a read the selection has already moved past", async ({
   page,
 }) => {
