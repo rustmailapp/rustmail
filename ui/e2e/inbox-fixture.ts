@@ -18,6 +18,30 @@ function clampLimit(limit: number): number {
   return Math.min(Math.max(limit, MIN_LIMIT), MAX_LIMIT);
 }
 
+/**
+ * The events the real server broadcasts after a PATCH.
+ *
+ * One per field present, matching `update_message` in `rustmail-api`. The UI
+ * never flips these flags locally, so without the echo a test would never see
+ * a message become read.
+ */
+function patchEvents(id: string, patch: Partial<MessageSummary>): WsEvent[] {
+  const events: WsEvent[] = [];
+  if (patch.is_read !== undefined) {
+    events.push({ type: "message:read", data: { id, is_read: patch.is_read } });
+  }
+  if (patch.is_starred !== undefined) {
+    events.push({
+      type: "message:starred",
+      data: { id, is_starred: patch.is_starred },
+    });
+  }
+  if (patch.tags !== undefined) {
+    events.push({ type: "message:tags", data: { id, tags: patch.tags } });
+  }
+  return events;
+}
+
 export function messageId(index: number): string {
   return `msg-${String(index).padStart(4, "0")}`;
 }
@@ -76,6 +100,16 @@ export async function mockInbox(
     socket = ws;
   });
 
+  const broadcast = async (events: WsEvent[]) => {
+    if (events.length === 0) return;
+    const deadline = Date.now() + SOCKET_WAIT_MS;
+    while (!socket && Date.now() < deadline) {
+      await page.waitForTimeout(SOCKET_POLL_MS);
+    }
+    if (!socket) throw new Error("the page never opened its WebSocket");
+    for (const event of events) socket.send(JSON.stringify(event));
+  };
+
   await page.route(API, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -87,6 +121,13 @@ export async function mockInbox(
     }
     if (request.method() === "PATCH") {
       calls.patched.push(path);
+      const single = /^\/messages\/([^/]+)$/.exec(path);
+      const patch = request.postDataJSON() as Partial<MessageSummary>;
+      const target = all.find((m) => m.id === single?.[1]);
+      if (target && single) {
+        Object.assign(target, patch);
+        await broadcast(patchEvents(single[1], patch));
+      }
       return route.fulfill({ status: NO_CONTENT, body: "" });
     }
     if (path === "/messages") {
@@ -119,13 +160,8 @@ export async function mockInbox(
 
   return {
     calls,
-    async push(event: WsEvent) {
-      const deadline = Date.now() + SOCKET_WAIT_MS;
-      while (!socket && Date.now() < deadline) {
-        await page.waitForTimeout(SOCKET_POLL_MS);
-      }
-      if (!socket) throw new Error("the page never opened its WebSocket");
-      socket.send(JSON.stringify(event));
+    push(event: WsEvent) {
+      return broadcast([event]);
     },
   };
 }

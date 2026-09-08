@@ -190,14 +190,13 @@ describe("moveSelection", () => {
     expect(selectedId()).toBe("id-2");
   });
 
-  it("falls back to the first entry when the selection is filtered out", async () => {
-    await seed([message(0, { is_read: true }), message(1), message(2)]);
-    setSelectedId("id-0");
-    toggleFilter("unread");
+  it("falls back to the first entry when the selection is gone", async () => {
+    await seed(range(3));
+    setSelectedId("id-does-not-exist");
 
     moveSelection("next");
 
-    expect(selectedId()).toBe("id-1");
+    expect(selectedId()).toBe("id-0");
   });
 
   it("lands on the last visible entry, not the last loaded one", async () => {
@@ -234,5 +233,84 @@ describe("selectMessage", () => {
 
     expect(selectedId()).toBe("id-7");
     logged.mockRestore();
+  });
+});
+
+describe("filteredMessages", () => {
+  it("keeps the selected message once the filter stops matching it", async () => {
+    await seed([message(0, { is_read: true }), message(1), message(2)]);
+    setSelectedId("id-0");
+
+    toggleFilter("unread");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+    ]);
+  });
+
+  it("drops the previous one as the selection moves on", async () => {
+    await seed([
+      message(0, { is_read: true }),
+      message(1, { is_read: true }),
+      message(2),
+    ]);
+    setSelectedId("id-0");
+    toggleFilter("unread");
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-2"]);
+
+    setSelectedId("id-1");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1", "id-2"]);
+  });
+
+  it("hides a non-matching message that is not selected", async () => {
+    await seed([message(0, { is_read: true }), message(1)]);
+    setSelectedId(null);
+
+    toggleFilter("unread");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("makes no exception for the starred filter", async () => {
+    await seed([message(0), message(1, { is_starred: true })]);
+    setSelectedId("id-0");
+
+    toggleFilter("starred");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("makes no exception for the attachments filter", async () => {
+    await seed([message(0), message(1, { has_attachments: true })]);
+    setSelectedId("id-0");
+
+    toggleFilter("attachments");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("leaves the list empty when nothing matches and only the selection would", async () => {
+    await seed([message(0), message(1)]);
+    setSelectedId("id-0");
+
+    toggleFilter("starred");
+
+    expect(filteredMessages()).toEqual([]);
+  });
+
+  it("drops the selected message when another active filter excludes it", async () => {
+    await seed([
+      message(0, { is_read: true }),
+      message(1, { is_starred: true }),
+    ]);
+    setSelectedId("id-0");
+
+    toggleFilter("unread");
+    toggleFilter("starred");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
   });
 });
