@@ -19,6 +19,7 @@ result-*
 CLAUDE.md
 BRIEF.md
 RUSTMAIL.md
+reviews/
 
 # Docs
 docs/.vitepress/dist

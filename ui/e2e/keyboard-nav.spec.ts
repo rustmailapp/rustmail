@@ -21,6 +21,12 @@ const MAX_TAB_STOPS = 12;
 const KEY_REPEAT_MS = 35;
 /** A walk should settle into one load, with headroom for a slow runner. */
 const MAX_SETTLED_FETCHES = 4;
+/**
+ * Long enough to close a deletion's undo window, short enough to stay inside
+ * the request deadline behind it, which would otherwise abort the pane's reads
+ * while the clock is being wound forward.
+ */
+const PAST_UNDO_WINDOW_MS = 6_000;
 
 function list(page: Page): Locator {
   return page.getByRole("listbox", { name: "Messages" });
@@ -54,6 +60,23 @@ async function openInbox(page: Page, total?: number) {
   await expect(list(page)).toBeVisible();
   await expect(selectedOption(page)).toHaveCount(1);
   return backend;
+}
+
+/**
+ * Opens the inbox with time stopped, so a test drives the clock itself.
+ *
+ * Deletion waits out an undo window before it writes anything, and a suite
+ * that waited for that in real seconds would spend most of its run asleep.
+ */
+async function openInboxAtRest(page: Page, total?: number) {
+  const now = new Date("2026-09-08T12:00:00Z");
+  await page.clock.install({ time: now });
+  await page.clock.pauseAt(now);
+  return openInbox(page, total);
+}
+
+function row(page: Page, id: string | null): Locator {
+  return page.locator(`[role="option"][data-id="${id}"]`);
 }
 
 /** Tabs forward until the list has focus, recording every role passed through. */
@@ -413,13 +436,75 @@ test.describe("global shortcuts", () => {
     expect(await position(page)).toBe(1);
   });
 
-  test("d deletes the selected message", async ({ page }) => {
-    const backend = await openInbox(page);
+  test("d takes the message out of the list before deleting it", async ({
+    page,
+  }) => {
+    const backend = await openInboxAtRest(page);
     const id = await selectedOption(page).getAttribute("data-id");
 
     await page.keyboard.press("d");
 
+    await expect(row(page, id)).toHaveCount(0);
+    await expect(page.getByRole("status")).toContainText("Message deleted");
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
+  test("d deletes the message once its undo window closes", async ({
+    page,
+  }) => {
+    const backend = await openInboxAtRest(page);
+    const id = await selectedOption(page).getAttribute("data-id");
+
+    await page.keyboard.press("d");
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
+
     await expect.poll(() => backend.calls.deleted).toEqual([`/messages/${id}`]);
+    await expect(page.getByRole("status")).toBeHidden();
+  });
+
+  test("u brings the message back and calls the delete off", async ({
+    page,
+  }) => {
+    const backend = await openInboxAtRest(page);
+    const id = await selectedOption(page).getAttribute("data-id");
+
+    await page.keyboard.press("d");
+    await expect(row(page, id)).toHaveCount(0);
+    await page.keyboard.press("u");
+
+    await expect(row(page, id)).toHaveCount(1);
+    await expect(selectedOption(page)).toHaveAttribute("data-id", String(id));
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
+  test("a second d commits the deletion before it", async ({ page }) => {
+    const backend = await openInboxAtRest(page);
+    const first = await selectedOption(page).getAttribute("data-id");
+
+    await page.keyboard.press("d");
+    const second = await selectedOption(page).getAttribute("data-id");
+    await page.keyboard.press("d");
+
+    await expect
+      .poll(() => backend.calls.deleted)
+      .toEqual([`/messages/${first}`]);
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
+    await expect
+      .poll(() => backend.calls.deleted)
+      .toEqual([`/messages/${first}`, `/messages/${second}`]);
+  });
+
+  test("u does nothing once the undo window has closed", async ({ page }) => {
+    const backend = await openInboxAtRest(page);
+    const id = await selectedOption(page).getAttribute("data-id");
+
+    await page.keyboard.press("d");
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
+    await expect.poll(() => backend.calls.deleted).toEqual([`/messages/${id}`]);
+    await page.keyboard.press("u");
+
+    await expect(row(page, id)).toHaveCount(0);
   });
 
   test("Shift still reaches the clear-all shortcut", async ({ page }) => {
@@ -432,6 +517,24 @@ test.describe("global shortcuts", () => {
         exact: false,
       }),
     ).toBeVisible();
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
+  test("shortcuts stay out of the way while a confirmation is open", async ({
+    page,
+  }) => {
+    const backend = await openInboxAtRest(page);
+    const before = await position(page);
+
+    await page.keyboard.press("Shift+D");
+    await expect(
+      page.getByText("will be permanently deleted", { exact: false }),
+    ).toBeVisible();
+    await page.keyboard.press("d");
+    await page.keyboard.press("j");
+
+    expect(await position(page)).toBe(before);
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
     expect(backend.calls.deleted).toEqual([]);
   });
 

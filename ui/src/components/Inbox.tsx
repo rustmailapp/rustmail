@@ -10,7 +10,7 @@ import {
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
-  messages,
+  visibleMessages,
   total,
   selectedId,
   selectMessage,
@@ -151,7 +151,7 @@ export default function Inbox() {
       <Show when={!loading() && filteredMessages().length === 0}>
         <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-500">
           <Show
-            when={messages().length === 0 && !search()}
+            when={visibleMessages().length === 0 && !search()}
             fallback={
               <>
                 <svg

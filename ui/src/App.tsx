@@ -4,7 +4,11 @@ import FilterBar from "./components/FilterBar";
 import Inbox from "./components/Inbox";
 import MessageDetail from "./components/MessageDetail";
 import Settings from "./components/Settings";
-import ConfirmDialog, { confirm } from "./components/ConfirmDialog";
+import ConfirmDialog, {
+  confirm,
+  confirmOpen,
+} from "./components/ConfirmDialog";
+import UndoToast from "./components/UndoToast";
 import {
   fetchMessages,
   connectWebSocket,
@@ -15,6 +19,9 @@ import {
   setSelectedId,
   selectMessage,
   moveSelection,
+  deleteWithUndo,
+  flushPendingDelete,
+  undoDelete,
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
@@ -25,7 +32,7 @@ import "./stores/rusted";
 
 export default function App() {
   function handleKeydown(e: KeyboardEvent) {
-    if (settingsOpen()) return;
+    if (settingsOpen() || confirmOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -54,10 +61,12 @@ export default function App() {
           } else {
             setSelectedId(null);
           }
-          api
-            .deleteMessage(id)
-            .catch(() => console.error("Failed to delete message"));
+          deleteWithUndo(id);
         }
+        break;
+      }
+      case "u": {
+        undoDelete();
         break;
       }
       case "D": {
@@ -114,10 +123,12 @@ export default function App() {
     }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);
+    window.addEventListener("pagehide", flushPendingDelete);
   });
 
   onCleanup(() => {
     document.removeEventListener("keydown", handleKeydown);
+    window.removeEventListener("pagehide", flushPendingDelete);
     disconnectWebSocket();
   });
 
@@ -136,6 +147,7 @@ export default function App() {
       </div>
       <Settings />
       <ConfirmDialog />
+      <UndoToast />
     </div>
   );
 }

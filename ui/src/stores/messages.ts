@@ -4,12 +4,31 @@ import * as api from "../lib/api";
 
 const PAGE_SIZE = 100;
 
+/**
+ * How long a deleted message can be brought back.
+ *
+ * It is the DELETE that waits out the window, not the row: the message leaves
+ * the list on the keystroke, so undo costs nothing but dropping a timer.
+ */
+const UNDO_WINDOW_MS = 5000;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
-const [total, setTotal] = createSignal(0);
+const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
 const [loading, setLoading] = createSignal(false);
 const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
+
+/**
+ * Messages kept out of the list while their deletion is still pending.
+ *
+ * The server still holds them, and a refetch puts them back in `messages`, so
+ * hiding is the only thing keeping them off screen until the DELETE lands.
+ */
+const [hiddenIds, setHiddenIds] = createSignal<readonly string[]>([]);
+/** The one hidden message that can still be brought back. */
+const [undoableId, setUndoableId] = createSignal<string | null>(null);
+let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
 const defaultFilters: FilterState = {
   starred: false,
@@ -45,6 +64,14 @@ function toggleTagFilter(tag: string) {
   }));
 }
 
+const visibleMessages = createMemo(() => {
+  const hidden = hiddenIds();
+  if (hidden.length === 0) return messages();
+  return messages().filter((m) => !hidden.includes(m.id));
+});
+
+const total = createMemo(() => Math.max(0, storedTotal() - hiddenIds().length));
+
 /**
  * The inbox list: loaded messages narrowed by the active filters.
  *
@@ -58,10 +85,10 @@ function toggleTagFilter(tag: string) {
 const filteredMessages = createMemo(() => {
   const f = filters();
   if (!f.starred && !f.unread && !f.attachments && f.tags.length === 0) {
-    return messages();
+    return visibleMessages();
   }
   const selected = selectedId();
-  return messages().filter((m) => {
+  return visibleMessages().filter((m) => {
     if (f.starred && !m.is_starred) return false;
     if (f.unread && m.is_read && m.id !== selected) return false;
     if (f.attachments && !m.has_attachments) return false;
@@ -73,7 +100,7 @@ const filteredMessages = createMemo(() => {
 
 const allTags = createMemo(() => {
   const counts = new Map<string, number>();
-  for (const m of messages()) {
+  for (const m of visibleMessages()) {
     for (const t of m.tags) {
       counts.set(t, (counts.get(t) || 0) + 1);
     }
@@ -81,7 +108,7 @@ const allTags = createMemo(() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
 });
 
-const hasMore = createMemo(() => messages().length < total());
+const hasMore = createMemo(() => messages().length < storedTotal());
 
 /** Where {@link moveSelection} should land, relative to the current selection. */
 type SelectionTarget = "next" | "prev" | "first" | "last";
@@ -99,6 +126,80 @@ function selectMessage(msg: MessageSummary): void {
       .markRead(msg.id, true)
       .catch(() => console.error(`Failed to mark message ${msg.id} as read`));
   }
+}
+
+function clearUndoTimer(): void {
+  if (undoTimer !== null) {
+    clearTimeout(undoTimer);
+    undoTimer = null;
+  }
+}
+
+function unhide(id: string): void {
+  setHiddenIds((ids) => ids.filter((hidden) => hidden !== id));
+}
+
+/**
+ * Takes `id` out of the list, and deletes it once its undo window closes.
+ *
+ * Only the newest deletion is undoable: a second one commits the one before
+ * it, so undo always means the message that just disappeared.
+ */
+function deleteWithUndo(id: string): void {
+  commitDelete();
+  setHiddenIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  setUndoableId(id);
+  undoTimer = setTimeout(() => commitDelete(), UNDO_WINDOW_MS);
+}
+
+/**
+ * Issues the DELETE for the message waiting on one, closing its undo window.
+ *
+ * The message stays hidden until the write settles, so the row does not come
+ * back for a round trip on the way out. Once it has settled the hiding has
+ * nothing left to do either way: on success the `message:delete` event has
+ * taken the message out of the list, and on failure the server still holds it,
+ * so keeping it hidden would claim a deletion that never happened.
+ */
+function commitDelete(keepalive = false): void {
+  const id = undoableId();
+  clearUndoTimer();
+  setUndoableId(null);
+  if (id === null) return;
+
+  api
+    .deleteMessage(id, { keepalive })
+    .catch(() => console.error(`Failed to delete message ${id}`))
+    .finally(() => unhide(id));
+}
+
+/**
+ * Commits the pending deletion in a way that outlives the page.
+ *
+ * A plain write is cancelled when the document goes away, so a message
+ * deleted seconds before a tab closes would be back on the next visit —
+ * `keepalive` is what makes the deletion mean what it said.
+ */
+function flushPendingDelete(): void {
+  commitDelete(true);
+}
+
+/** Brings the last deleted message back, while its window is still open. */
+function undoDelete(): void {
+  const id = undoableId();
+  clearUndoTimer();
+  setUndoableId(null);
+  if (id === null) return;
+
+  unhide(id);
+  setSelectedId(id);
+}
+
+/** Forgets every pending deletion, for when the whole store is gone anyway. */
+function dropPendingDeletes(): void {
+  clearUndoTimer();
+  setUndoableId(null);
+  setHiddenIds([]);
 }
 
 function targetIndex(
@@ -143,7 +244,7 @@ async function fetchMessages() {
     const q = search() || undefined;
     const res = await api.listMessages(PAGE_SIZE, 0, q);
     setMessages(res.messages);
-    setTotal(res.total);
+    setStoredTotal(res.total);
   } finally {
     setLoading(false);
   }
@@ -159,7 +260,7 @@ async function loadMore() {
       const seen = new Set(prev.map((m) => m.id));
       return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
     });
-    setTotal(res.total);
+    setStoredTotal(res.total);
   } finally {
     setLoadingMore(false);
   }
@@ -204,12 +305,12 @@ function connectWebSocket() {
           fetchMessages();
         } else {
           setMessages((prev) => [event.data, ...prev]);
-          setTotal((t) => t + 1);
+          setStoredTotal((t) => t + 1);
         }
         break;
       case "message:delete":
         setMessages((prev) => prev.filter((m) => m.id !== event.data.id));
-        setTotal((t) => Math.max(0, t - 1));
+        setStoredTotal((t) => Math.max(0, t - 1));
         if (selectedId() === event.data.id) setSelectedId(null);
         break;
       case "message:read":
@@ -236,8 +337,9 @@ function connectWebSocket() {
         );
         break;
       case "messages:clear":
+        dropPendingDeletes();
         setMessages([]);
-        setTotal(0);
+        setStoredTotal(0);
         setSelectedId(null);
         break;
     }
@@ -266,13 +368,19 @@ function disconnectWebSocket() {
 }
 
 export {
+  UNDO_WINDOW_MS,
+  flushPendingDelete,
   messages,
+  visibleMessages,
   filteredMessages,
   total,
   selectedId,
   setSelectedId,
   selectMessage,
   moveSelection,
+  deleteWithUndo,
+  undoDelete,
+  undoableId,
   type SelectionTarget,
   loading,
   loadingMore,

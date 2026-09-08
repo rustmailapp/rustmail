@@ -8,19 +8,92 @@ import type {
 
 const BASE = "/api/v1";
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
+/** How long a single request may take, headers and body together. */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * How long a whole-inbox delete may take.
+ *
+ * The row count it walks is unbounded and the store takes one writer at a
+ * time, so this write can legitimately outlast a read by a wide margin. Held
+ * to a read's deadline it would abort a delete that was going to succeed.
+ */
+export const BULK_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * Runs `request` under a deadline, and under `signal` if the caller gave one.
+ *
+ * The deadline is a `setTimeout` rather than `AbortSignal.timeout` because the
+ * latter runs on a native timer that no clock stub reaches, and a deadline no
+ * test can advance to is a deadline no test can check. The body read belongs
+ * inside the deadline too: a response whose stream stalls after the headers
+ * arrive hangs just as long as one that never answers.
+ */
+async function withDeadline<T>(
+  signal: AbortSignal | null | undefined,
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  signal?.throwIfAborted();
+
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        new DOMException(`Request exceeded ${timeoutMs}ms`, "TimeoutError"),
+      ),
+    timeoutMs,
+  );
+  const forward = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", forward, { once: true });
+
+  try {
+    return await request(controller.signal);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forward);
   }
-  return res.json();
 }
 
-async function fetchVoid(url: string, init?: RequestInit): Promise<void> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
-  }
+async function fetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
+  return withDeadline(init?.signal, timeoutMs, async (signal): Promise<T> => {
+    const res = await fetch(url, { ...init, signal });
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  });
+}
+
+async function fetchText(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<string> {
+  return withDeadline(init?.signal, timeoutMs, async (signal) => {
+    const res = await fetch(url, { ...init, signal });
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`);
+    }
+    return res.text();
+  });
+}
+
+async function fetchVoid(
+  url: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<void> {
+  await withDeadline(init?.signal, timeoutMs, async (signal) => {
+    const res = await fetch(url, { ...init, signal });
+    if (!res.ok) {
+      throw new Error(`API error: ${res.status} ${res.statusText}`);
+    }
+  });
 }
 
 export async function listMessages(
@@ -40,16 +113,35 @@ function enc(s: string): string {
   return encodeURIComponent(s);
 }
 
-export async function getMessage(id: string): Promise<Message> {
-  return fetchJson(`${BASE}/messages/${enc(id)}`);
+export async function getMessage(
+  id: string,
+  signal?: AbortSignal,
+): Promise<Message> {
+  return fetchJson(`${BASE}/messages/${enc(id)}`, { signal });
 }
 
-export async function deleteMessage(id: string): Promise<void> {
-  await fetchVoid(`${BASE}/messages/${enc(id)}`, { method: "DELETE" });
+/**
+ * Deletes one message.
+ *
+ * `keepalive` lets the write outlive the document, for the deletion a closing
+ * page still owes the server.
+ */
+export async function deleteMessage(
+  id: string,
+  options: { keepalive?: boolean } = {},
+): Promise<void> {
+  await fetchVoid(`${BASE}/messages/${enc(id)}`, {
+    method: "DELETE",
+    keepalive: options.keepalive,
+  });
 }
 
 export async function deleteAllMessages(): Promise<void> {
-  await fetchVoid(`${BASE}/messages`, { method: "DELETE" });
+  await fetchVoid(
+    `${BASE}/messages`,
+    { method: "DELETE" },
+    BULK_REQUEST_TIMEOUT_MS,
+  );
 }
 
 export async function markRead(id: string, is_read: boolean): Promise<void> {
@@ -81,27 +173,35 @@ export async function setTags(id: string, tags: string[]): Promise<void> {
 
 export async function listAttachments(
   messageId: string,
+  signal?: AbortSignal,
 ): Promise<Attachment[]> {
-  return fetchJson(`${BASE}/messages/${enc(messageId)}/attachments`);
+  return fetchJson(`${BASE}/messages/${enc(messageId)}/attachments`, {
+    signal,
+  });
 }
 
-export async function getAuthResults(id: string): Promise<AuthResults> {
-  return fetchJson(`${BASE}/messages/${enc(id)}/auth`);
+export async function getAuthResults(
+  id: string,
+  signal?: AbortSignal,
+): Promise<AuthResults> {
+  return fetchJson(`${BASE}/messages/${enc(id)}/auth`, { signal });
 }
 
-export async function getHeaders(id: string): Promise<MessageHeader[]> {
-  return fetchJson(`${BASE}/messages/${enc(id)}/headers`);
+export async function getHeaders(
+  id: string,
+  signal?: AbortSignal,
+): Promise<MessageHeader[]> {
+  return fetchJson(`${BASE}/messages/${enc(id)}/headers`, { signal });
 }
 
 /** Fetches a message's raw source, optionally only its first `limitBytes`. */
 export async function getRawMessage(
   id: string,
   limitBytes?: number,
+  signal?: AbortSignal,
 ): Promise<string> {
   const query = limitBytes === undefined ? "" : `?limit=${limitBytes}`;
-  const res = await fetch(`${BASE}/messages/${enc(id)}/raw${query}`);
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
-  return res.text();
+  return fetchText(`${BASE}/messages/${enc(id)}/raw${query}`, { signal });
 }
 
 export function exportUrl(messageId: string, format: "eml" | "json"): string {

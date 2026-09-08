@@ -2,12 +2,21 @@ import {
   createSignal,
   createResource,
   createMemo,
+  onCleanup,
   Show,
   For,
   Switch,
   Match,
+  type Accessor,
+  type Resource,
+  type ResourceReturn,
 } from "solid-js";
-import { selectedId, setSelectedId, messages } from "../stores/messages";
+import {
+  deleteWithUndo,
+  messages,
+  selectedId,
+  setSelectedId,
+} from "../stores/messages";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
@@ -36,6 +45,40 @@ const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
  */
 const SELECTION_SETTLE_MS = 120;
 
+/**
+ * A pane read of `target`, cancelled when a newer read replaces it.
+ *
+ * `createResource` hands its fetcher no cancellation token, so each start
+ * aborts whatever the previous start left in flight: a read the selection has
+ * already moved past stops holding a connection, and unmounting the pane
+ * abandons the last one instead of resolving into nothing.
+ */
+function createPaneRead<T>(
+  target: Accessor<string | null>,
+  read: (id: string, signal: AbortSignal) => Promise<T>,
+): ResourceReturn<T> {
+  let controller: AbortController | null = null;
+  onCleanup(() => controller?.abort());
+
+  return createResource(target, (id) => {
+    controller?.abort();
+    controller = new AbortController();
+    return read(id, controller.signal);
+  });
+}
+
+/**
+ * Whether a read failed and has nothing in flight to replace the failure.
+ *
+ * `state` rather than `error`, because a resource keeps its error set while it
+ * retries; reading the resource in that window is safe and yields the stale
+ * value, so the pane should show the retry in progress rather than the error
+ * that started it.
+ */
+function failed(resource: Resource<unknown>): boolean {
+  return resource.state === "errored";
+}
+
 const TAB_LABELS: Record<Tab, string> = {
   html: "HTML",
   text: "Text",
@@ -51,33 +94,33 @@ export default function MessageDetail() {
     selectedId() === settledId() ? settledId() : null,
   );
 
-  const [message] = createResource(activeId, async (id) => {
-    if (!id) return null;
-    return api.getMessage(id);
-  });
+  const [message, { refetch: refetchMessage }] = createPaneRead(
+    activeId,
+    api.getMessage,
+  );
 
-  const [attachments] = createResource(activeId, async (id) => {
-    if (!id) return [];
-    return api.listAttachments(id);
-  });
+  const [attachments, { refetch: refetchAttachments }] = createPaneRead(
+    activeId,
+    api.listAttachments,
+  );
 
   const rawTarget = () => (tab() === "raw" ? activeId() : null);
-  const [rawSource] = createResource(rawTarget, async (id) => {
-    if (!id) return null;
-    return api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES);
-  });
+  const [rawSource, { refetch: refetchRaw }] = createPaneRead(
+    rawTarget,
+    (id, signal) => api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES, signal),
+  );
 
   const headersTarget = () => (tab() === "headers" ? activeId() : null);
-  const [headers] = createResource(headersTarget, async (id) => {
-    if (!id) return null;
-    return api.getHeaders(id);
-  });
+  const [headers, { refetch: refetchHeaders }] = createPaneRead(
+    headersTarget,
+    api.getHeaders,
+  );
 
-  const authSource = () => (tab() === "auth" ? activeId() : null);
-  const [authResults] = createResource(authSource, async (id) => {
-    if (!id) return null;
-    return api.getAuthResults(id);
-  });
+  const authTarget = () => (tab() === "auth" ? activeId() : null);
+  const [authResults, { refetch: refetchAuth }] = createPaneRead(
+    authTarget,
+    api.getAuthResults,
+  );
 
   return (
     <Show
@@ -107,13 +150,26 @@ export default function MessageDetail() {
       }
     >
       <Show
-        when={message()}
-        fallback={<div class="p-4 text-zinc-500 text-sm">Loading...</div>}
+        when={!failed(message) && message()}
+        fallback={
+          <ReadState
+            resource={message}
+            label="this message"
+            onRetry={refetchMessage}
+          />
+        }
       >
         {(msg) => {
           const recipients = () => msg().recipients;
           const downloadableAttachments = () =>
-            (attachments() ?? []).filter((a) => a.filename || !a.content_id);
+            (failed(attachments) ? [] : (attachments() ?? [])).filter(
+              (a) => a.filename || !a.content_id,
+            );
+          const rawReady = createMemo(() => {
+            if (failed(rawSource)) return undefined;
+            const raw = rawSource();
+            return raw === undefined ? undefined : { raw };
+          });
 
           return (
             <div class="flex flex-col h-full">
@@ -196,9 +252,9 @@ export default function MessageDetail() {
                       </svg>
                     </a>
                     <button
-                      onClick={async () => {
-                        await api.deleteMessage(msg().id);
+                      onClick={() => {
                         setSelectedId(null);
+                        deleteWithUndo(msg().id);
                       }}
                       class="btn-destructive rounded-md border p-1.5 transition cursor-pointer"
                       title="Delete"
@@ -222,6 +278,19 @@ export default function MessageDetail() {
               </div>
 
               <TagEditor messageId={msg().id} />
+
+              <Show when={failed(attachments)}>
+                <div class="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
+                  <span>Could not load attachments.</span>
+                  <button
+                    onClick={refetchAttachments}
+                    aria-label="Retry loading attachments"
+                    class="font-medium underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                </div>
+              </Show>
 
               <Show when={downloadableAttachments().length > 0}>
                 <div class="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex flex-wrap gap-2">
@@ -289,17 +358,52 @@ export default function MessageDetail() {
                     </pre>
                   </Match>
                   <Match when={tab() === "headers"}>
-                    <HeadersView headers={headers()} />
+                    <Show
+                      when={!failed(headers) && headers()}
+                      fallback={
+                        <ReadState
+                          resource={headers}
+                          label="headers"
+                          onRetry={refetchHeaders}
+                        />
+                      }
+                    >
+                      {(value) => <HeadersView headers={value()} />}
+                    </Show>
                   </Match>
                   <Match when={tab() === "auth"}>
-                    <AuthView results={authResults()} />
+                    <Show
+                      when={!failed(authResults) && authResults()}
+                      fallback={
+                        <ReadState
+                          resource={authResults}
+                          label="authentication results"
+                          onRetry={refetchAuth}
+                        />
+                      }
+                    >
+                      {(value) => <AuthView results={value()} />}
+                    </Show>
                   </Match>
                   <Match when={tab() === "raw"}>
-                    <RawView
-                      raw={rawSource()}
-                      messageId={msg().id}
-                      size={msg().size}
-                    />
+                    <Show
+                      when={rawReady()}
+                      fallback={
+                        <ReadState
+                          resource={rawSource}
+                          label="the raw source"
+                          onRetry={refetchRaw}
+                        />
+                      }
+                    >
+                      {(value) => (
+                        <RawView
+                          raw={value().raw}
+                          messageId={msg().id}
+                          size={msg().size}
+                        />
+                      )}
+                    </Show>
                   </Match>
                 </Switch>
               </div>
@@ -307,6 +411,31 @@ export default function MessageDetail() {
           );
         }}
       </Show>
+    </Show>
+  );
+}
+
+/** The pane's placeholder for a read that is still running, or that failed. */
+function ReadState(props: {
+  resource: Resource<unknown>;
+  label: string;
+  onRetry: () => void;
+}) {
+  return (
+    <Show
+      when={failed(props.resource)}
+      fallback={<div class="p-4 text-zinc-500 text-sm">Loading...</div>}
+    >
+      <div class="p-4 text-sm text-zinc-500 dark:text-zinc-400">
+        <p>Could not load {props.label}.</p>
+        <button
+          onClick={props.onRetry}
+          aria-label={`Retry loading ${props.label}`}
+          class="mt-2 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer"
+        >
+          Retry
+        </button>
+      </div>
     </Show>
   );
 }
@@ -391,33 +520,26 @@ function HtmlPreview(props: {
   );
 }
 
-function HeadersView(props: { headers: MessageHeader[] | null | undefined }) {
+function HeadersView(props: { headers: MessageHeader[] }) {
   return (
-    <Show
-      when={props.headers}
-      fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
-    >
-      {(headers) => (
-        <div class="p-4">
-          <table class="w-full text-sm">
-            <tbody>
-              <For each={headers()}>
-                {(h) => (
-                  <tr class="border-b border-zinc-200/50 dark:border-zinc-800/50">
-                    <td class="py-1.5 pr-4 text-zinc-500 dark:text-zinc-400 font-mono text-xs whitespace-nowrap align-top font-medium">
-                      {h.name}
-                    </td>
-                    <td class="py-1.5 text-zinc-700 dark:text-zinc-300 font-mono text-xs break-all">
-                      {h.value}
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Show>
+    <div class="p-4">
+      <table class="w-full text-sm">
+        <tbody>
+          <For each={props.headers}>
+            {(h) => (
+              <tr class="border-b border-zinc-200/50 dark:border-zinc-800/50">
+                <td class="py-1.5 pr-4 text-zinc-500 dark:text-zinc-400 font-mono text-xs whitespace-nowrap align-top font-medium">
+                  {h.name}
+                </td>
+                <td class="py-1.5 text-zinc-700 dark:text-zinc-300 font-mono text-xs break-all">
+                  {h.value}
+                </td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -485,56 +607,47 @@ function AuthSection(props: { title: string; checks: AuthCheck[] }) {
   );
 }
 
-function AuthView(props: { results: AuthResults | null | undefined }) {
+function AuthView(props: { results: AuthResults }) {
+  const isEmpty = () =>
+    props.results.dkim.length === 0 &&
+    props.results.spf.length === 0 &&
+    props.results.dmarc.length === 0 &&
+    props.results.arc.length === 0;
+
   return (
     <Show
-      when={props.results}
-      fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
-    >
-      {(r) => {
-        const isEmpty = () =>
-          r().dkim.length === 0 &&
-          r().spf.length === 0 &&
-          r().dmarc.length === 0 &&
-          r().arc.length === 0;
-
-        return (
-          <Show
-            when={!isEmpty()}
-            fallback={
-              <div class="flex flex-col items-center justify-center h-48 text-zinc-400 dark:text-zinc-600">
-                <svg
-                  class="size-8 mb-2 opacity-40"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"
-                  />
-                </svg>
-                <p class="text-sm">No authentication headers found</p>
-                <p class="text-xs mt-1">
-                  DKIM, SPF, and DMARC headers are typically added by receiving
-                  mail servers
-                </p>
-              </div>
-            }
+      when={!isEmpty()}
+      fallback={
+        <div class="flex flex-col items-center justify-center h-48 text-zinc-400 dark:text-zinc-600">
+          <svg
+            class="size-8 mb-2 opacity-40"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            stroke-width="1.5"
           >
-            <div class="p-4">
-              <AuthSection title="DKIM" checks={r().dkim} />
-              <AuthSection title="SPF" checks={r().spf} />
-              <AuthSection title="DMARC" checks={r().dmarc} />
-              <Show when={r().arc.length > 0}>
-                <AuthSection title="ARC" checks={r().arc} />
-              </Show>
-            </div>
-          </Show>
-        );
-      }}
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"
+            />
+          </svg>
+          <p class="text-sm">No authentication headers found</p>
+          <p class="text-xs mt-1">
+            DKIM, SPF, and DMARC headers are typically added by receiving mail
+            servers
+          </p>
+        </div>
+      }
+    >
+      <div class="p-4">
+        <AuthSection title="DKIM" checks={props.results.dkim} />
+        <AuthSection title="SPF" checks={props.results.spf} />
+        <AuthSection title="DMARC" checks={props.results.dmarc} />
+        <Show when={props.results.arc.length > 0}>
+          <AuthSection title="ARC" checks={props.results.arc} />
+        </Show>
+      </div>
     </Show>
   );
 }
@@ -621,38 +734,27 @@ function TagEditor(props: { messageId: string }) {
   );
 }
 
-function RawView(props: {
-  raw: string | null | undefined;
-  messageId: string;
-  size: number;
-}) {
+function RawView(props: { raw: string; messageId: string; size: number }) {
   const truncated = () => props.size > RAW_PREVIEW_LIMIT_BYTES;
 
   return (
-    <Show
-      when={props.raw}
-      fallback={<div class="p-4 text-sm text-zinc-500">Loading...</div>}
-    >
-      {(raw) => (
-        <>
-          <Show when={truncated()}>
-            <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
-              Showing the first {formatSize(RAW_PREVIEW_LIMIT_BYTES)} of{" "}
-              {formatSize(props.size)}.{" "}
-              <a
-                href={api.exportUrl(props.messageId, "eml")}
-                download={`${props.messageId}.eml`}
-                class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
-              >
-                Download the full source
-              </a>
-            </div>
-          </Show>
-          <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
-            {raw()}
-          </pre>
-        </>
-      )}
-    </Show>
+    <>
+      <Show when={truncated()}>
+        <div class="border-b border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-4 py-2 text-xs text-amber-800 dark:text-amber-300">
+          Showing the first {formatSize(RAW_PREVIEW_LIMIT_BYTES)} of{" "}
+          {formatSize(props.size)}.{" "}
+          <a
+            href={api.exportUrl(props.messageId, "eml")}
+            download={`${props.messageId}.eml`}
+            class="font-medium underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-200"
+          >
+            Download the full source
+          </a>
+        </div>
+      </Show>
+      <pre class="p-4 text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap font-mono leading-relaxed">
+        {props.raw}
+      </pre>
+    </>
   );
 }
