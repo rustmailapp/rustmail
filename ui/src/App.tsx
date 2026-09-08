@@ -28,6 +28,7 @@ export default function App() {
     if (settingsOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     const msgs = filteredMessages();
     const currentIdx = msgs.findIndex((m) => m.id === selectedId());
