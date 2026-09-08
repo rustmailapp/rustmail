@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { mockInbox, optionSelector, TOTAL_MESSAGES } from "./inbox-fixture";
+import {
+  messageId,
+  mockInbox,
+  optionSelector,
+  TOTAL_MESSAGES,
+} from "./inbox-fixture";
 
 /**
  * Rows past this point were never in the DOM at load: the initial page holds
@@ -9,6 +14,13 @@ const DEEP_TARGET_POSITION = 420;
 const SELECTION_TIMEOUT_MS = 30_000;
 const SEARCH_INPUT = 'input[placeholder="Search emails..."]';
 const MAX_TAB_STOPS = 12;
+/**
+ * Roughly the OS key-repeat interval, which is the cadence this feature gets
+ * used at when someone holds the arrow key down.
+ */
+const KEY_REPEAT_MS = 35;
+/** A walk should settle into one load, with headroom for a slow runner. */
+const MAX_SETTLED_FETCHES = 4;
 
 function list(page: Page): Locator {
   return page.getByRole("listbox", { name: "Messages" });
@@ -286,6 +298,40 @@ test.describe("inbox keyboard navigation", () => {
       Number(await selectedOption(page).getAttribute("aria-setsize")),
     ).toBeLessThanOrEqual(TOTAL_MESSAGES);
     expect(await position(page)).toBe(DEEP_TARGET_POSITION);
+  });
+});
+
+test.describe("detail pane loading", () => {
+  test("does not fetch a message for every row walked past", async ({
+    page,
+  }) => {
+    const backend = await openInbox(page);
+    await tabToList(page);
+    const steps = 29;
+    backend.calls.fetched.length = 0;
+
+    for (let i = 0; i < steps; i++) {
+      await page.keyboard.press("ArrowDown");
+      await page.waitForTimeout(KEY_REPEAT_MS);
+    }
+
+    expect(await position(page)).toBe(steps + 1);
+    const landed = `/messages/${messageId(steps)}`;
+    await expect.poll(() => backend.calls.fetched.at(-1)).toBe(landed);
+    expect(backend.calls.fetched.length).toBeLessThan(MAX_SETTLED_FETCHES);
+  });
+
+  test("loads the message a deliberate selection lands on", async ({
+    page,
+  }) => {
+    const backend = await openInbox(page);
+    backend.calls.fetched.length = 0;
+
+    await page.locator('[role="option"]').nth(2).click();
+
+    await expect
+      .poll(() => backend.calls.fetched)
+      .toEqual([`/messages/${messageId(2)}`]);
   });
 });
 
