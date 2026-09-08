@@ -41,6 +41,8 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: build-ui
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTMAIL_BUILD_VERSION: ${{ github.ref_name }}
     strategy:
       matrix:
         include:
@@ -199,6 +201,23 @@ jobs:
             chmod +x "$dir/rustmail"
             tar -czf "release/rustmail-${target}.tar.gz" -C "$dir" rustmail
           done
+
+      # The version reaches the binary through the environment, and six of the
+      # eight targets are built inside a cross container that forwards only
+      # what Cross.toml names. A binary stamped with the fallback version
+      # must not reach the release, so this checks one cross-built target
+      # before anything is published.
+      - name: Verify the built binary carries the release version
+        env:
+          EXPECTED: ${{ github.ref_name }}
+        run: |
+          reported=$(artifacts/rustmail-x86_64-unknown-linux-gnu/rustmail --version)
+          expected="rustmail ${EXPECTED#v}"
+          echo "reported: ${reported}"
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::binary reports '${reported}', expected '${expected}'"
+            exit 1
+          fi
 
       - name: Get previous tag
         id: prev_tag

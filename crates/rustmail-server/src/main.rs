@@ -15,7 +15,11 @@ use rustmail_smtp::{ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, format_iso8601, initialize_database};
 
 #[derive(Parser)]
-#[command(name = "rustmail", about = "A modern SMTP mail catcher")]
+#[command(
+  name = "rustmail",
+  version = env!("RUSTMAIL_BUILD_VERSION"),
+  about = "A modern SMTP mail catcher"
+)]
 struct Cli {
   #[command(subcommand)]
   command: Option<Command>,
@@ -708,6 +712,31 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod version_tests {
+  use super::*;
+  use clap::CommandFactory;
+  use clap::error::ErrorKind;
+
+  #[test]
+  fn answers_the_version_flag() {
+    let error = Cli::command()
+      .try_get_matches_from(["rustmail", "--version"])
+      .expect_err("--version stops parsing to print the version");
+
+    assert_eq!(error.kind(), ErrorKind::DisplayVersion);
+    assert!(
+      error.to_string().contains(env!("RUSTMAIL_BUILD_VERSION")),
+      "the Homebrew formula asserts this output carries the release version"
+    );
+  }
+
+  #[test]
+  fn resolves_a_non_empty_version() {
+    assert!(!env!("RUSTMAIL_BUILD_VERSION").is_empty());
+  }
 }
 
 #[cfg(test)]

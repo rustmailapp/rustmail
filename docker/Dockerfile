@@ -23,6 +23,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY --from=ui-builder /app/ui/dist ui/dist
+# The build context carries no .git, so the version has to be handed in.
+ARG RUSTMAIL_BUILD_VERSION=""
+ENV RUSTMAIL_BUILD_VERSION=${RUSTMAIL_BUILD_VERSION}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --release --no-default-features --bin rustmail
 
