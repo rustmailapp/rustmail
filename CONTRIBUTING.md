@@ -107,34 +107,26 @@ When a PR introduces a new user-visible feature (CLI flag, API endpoint, UI capa
 
 ## Releasing
 
-Releases use [`cargo-release`](https://crates.io/crates/cargo-release). Workspace config lives in `Cargo.toml` under `[workspace.metadata.release]`.
-
-`master` is protected (required status checks) and cannot be pushed to directly, so the flow is:
+The tag is the version. `crates/rustmail-server/build.rs` reads it at build time, so no manifest carries the release version and there is no bump commit to land first:
 
 ```bash
-# 1. From a clean master, run the version bump.
-#    Bumps workspace version, refreshes Cargo.lock, commits as "chore: Release",
-#    creates tag v<new>, attempts to push (which will be rejected by branch protection).
-cargo release patch --execute --no-confirm
-
-# 2. Move the local commit onto a branch and reset master.
-git branch chore/bump-<new>
-git tag -d v<new>
-git reset --hard origin/master
-git push -u origin chore/bump-<new>
-
-# 3. Open a PR, wait for CI, merge.
-gh pr create --base master --head chore/bump-<new> --title "chore: bump version to <new>"
-
-# 4. After merge, tag the merge commit and push the tag.
 git fetch
-git tag v<new> origin/master
+git tag -a v<new> origin/master -m "v<new>"
 git push origin v<new>
 ```
 
-The tag push triggers `.github/workflows/release.yml`, which builds multi-platform binaries, Docker images, and a GitHub Release with a changelog auto-generated from conventional commits since the previous tag.
+The tag push triggers `.github/workflows/release.yml`, which builds multi-platform binaries, Docker images, and a GitHub Release with a changelog auto-generated from conventional commits since the previous tag. All workspace crates are `publish = false`; nothing goes to crates.io.
 
-Use `cargo release minor` or `cargo release major` for non-patch bumps. All workspace crates have `publish = false`; cargo-release skips crates.io automatically.
+To see what a build will report before tagging:
+
+```bash
+RUSTMAIL_VERSION=<new> cargo build -p rustmail-server
+./target/debug/rustmail --version
+```
+
+Outside a tagged build the version comes from `git describe`, so a local binary reports its distance from the last release (`0.6.0-32-gff344a9-dirty`) rather than claiming to be one.
+
+The **Update AUR Package** job fails and is expected to: AUR account registration has been closed since June 2026, so `rustmail-bin` cannot be published or updated. See the [installation docs](docs/getting-started/installation.md).
 
 ## Architecture
 

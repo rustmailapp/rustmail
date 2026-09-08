@@ -9,7 +9,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.0"
+# Not the release version: the binary takes that from the tag at build time
+# (see crates/rustmail-server/build.rs). Nothing here is published.
+version = "0.0.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rustmailapp/rustmail"
@@ -41,16 +43,10 @@ dirs = "6.0"
 rustls = "0.23"
 tokio-rustls = "0.26"
 
-rustmail-smtp = { path = "crates/rustmail-smtp", version = "0.6.0" }
-rustmail-storage = { path = "crates/rustmail-storage", version = "0.6.0" }
-rustmail-api = { path = "crates/rustmail-api", version = "0.6.0" }
-rustmail-tui = { path = "crates/rustmail-tui", version = "0.6.0" }
-
-[workspace.metadata.release]
-shared-version = "workspace"
-tag-name = "v{{version}}"
-consolidate-commits = true
-dependent-version = "upgrade"
+rustmail-smtp = { path = "crates/rustmail-smtp" }
+rustmail-storage = { path = "crates/rustmail-storage" }
+rustmail-api = { path = "crates/rustmail-api" }
+rustmail-tui = { path = "crates/rustmail-tui" }
 
 [profile.dev]
 debug = "line-tables-only"
