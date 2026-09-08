@@ -6,7 +6,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 
 use crate::StorageError;
 
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_SIZE_KIB: &str = "-64000";
 const MMAP_SIZE_BYTES: &str = "268435456";
 /// WAL pages that may accumulate before a commit also checkpoints.
