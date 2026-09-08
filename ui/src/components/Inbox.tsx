@@ -1,4 +1,12 @@
-import { For, Show, createEffect, on, untrack, type Accessor } from "solid-js";
+import {
+  For,
+  Show,
+  createEffect,
+  on,
+  onMount,
+  untrack,
+  type Accessor,
+} from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
@@ -57,6 +65,24 @@ export default function Inbox() {
       if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
     }),
   );
+
+  /**
+   * Attaches a row to the virtualizer's measurement loop.
+   *
+   * The index is written here rather than as a JSX attribute so it exists
+   * before `measureElement` reads it: Solid applies dynamic attributes in an
+   * effect that runs after `ref`, which left every row stuck at the estimated
+   * height and made `scrollToIndex` land short.
+   *
+   * Callers must defer this past the render pass. Measuring resizes an item,
+   * which invalidates the virtualizer's measurement memo; doing that from a
+   * `ref` re-enters the graph mid-render and `getVirtualItems` then yields
+   * holes for indexes it has not remeasured yet.
+   */
+  function measureRow(el: HTMLElement, index: number): void {
+    el.dataset.index = String(index);
+    virtualizer.measureElement(el);
+  }
 
   return (
     <div ref={scroller} class="flex flex-col overflow-y-auto h-full">
@@ -120,10 +146,13 @@ export default function Inbox() {
           <For each={virtualizer.getVirtualItems()}>
             {(item) => {
               const msg = () => filteredMessages()[item.index];
+              let row: HTMLDivElement | undefined;
+              onMount(() => {
+                if (row) measureRow(row, item.index);
+              });
               return (
                 <div
-                  data-index={item.index}
-                  ref={(el) => virtualizer.measureElement(el)}
+                  ref={row}
                   class="absolute top-0 left-0 w-full"
                   style={{ transform: `translateY(${item.start}px)` }}
                 >
