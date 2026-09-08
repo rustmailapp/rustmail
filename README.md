@@ -59,6 +59,12 @@ brew install rustmailapp/rustmail/rustmail
 
 ### Arch Linux (AUR)
 
+> [!WARNING]
+> AUR account registration has been closed since June 2026, so we have no way
+> to publish or update `rustmail-bin`. Whatever this command installs is not a
+> release we publish or keep current. Prefer Homebrew, Docker, or the
+> [pre-built binaries](https://github.com/rustmailapp/rustmail/releases/latest).
+
 ```sh
 yay -S rustmail-bin
 ```
