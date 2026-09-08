@@ -7,24 +7,22 @@ const FALLBACK_VERSION: &str = "0.0.0-dev";
 /// Resolves the version the binary reports, at build time.
 ///
 /// The release tag is the source of truth: no manifest in this workspace
-/// carries the release version, so a release build reads the tag CI is
-/// building and a local build describes its distance from the last one.
-/// `RUSTMAIL_VERSION` overrides both, for a build with no git history.
+/// carries the release version, so the release workflow hands the tag over in
+/// `RUSTMAIL_BUILD_VERSION`, and a build without it describes its distance
+/// from the last tag instead. Taking it from the environment rather than from
+/// git is what keeps it right where git is out of reach — inside a cross
+/// container, or a Docker context built without `.git`.
 fn main() {
-  println!("cargo::rerun-if-env-changed=RUSTMAIL_VERSION");
-  println!("cargo::rerun-if-env-changed=GITHUB_REF_TYPE");
-  println!("cargo::rerun-if-env-changed=GITHUB_REF_NAME");
-  println!("cargo::rustc-env=RUSTMAIL_VERSION={}", resolve_version());
+  println!("cargo::rerun-if-env-changed=RUSTMAIL_BUILD_VERSION");
+  println!(
+    "cargo::rustc-env=RUSTMAIL_BUILD_VERSION={}",
+    resolve_version()
+  );
 }
 
 fn resolve_version() -> String {
-  if let Some(explicit) = non_empty_var("RUSTMAIL_VERSION") {
+  if let Some(explicit) = non_empty_var("RUSTMAIL_BUILD_VERSION") {
     return strip_tag_prefix(&explicit);
-  }
-  if non_empty_var("GITHUB_REF_TYPE").as_deref() == Some("tag")
-    && let Some(tag) = non_empty_var("GITHUB_REF_NAME")
-  {
-    return strip_tag_prefix(&tag);
   }
   describe_head().unwrap_or_else(|| FALLBACK_VERSION.to_owned())
 }

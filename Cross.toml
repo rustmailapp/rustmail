@@ -1,0 +1,6 @@
+# cross runs the build inside a container, which inherits none of the
+# workflow's environment unless it is named here. Six of the eight release
+# targets are cross-compiled, and without this passthrough every one of them
+# would report the fallback version instead of the tag.
+[build.env]
+passthrough = ["RUSTMAIL_BUILD_VERSION"]

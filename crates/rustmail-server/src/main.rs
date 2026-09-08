@@ -17,7 +17,7 @@ use rustmail_storage::{MessageRepository, format_iso8601, initialize_database};
 #[derive(Parser)]
 #[command(
   name = "rustmail",
-  version = env!("RUSTMAIL_VERSION"),
+  version = env!("RUSTMAIL_BUILD_VERSION"),
   about = "A modern SMTP mail catcher"
 )]
 struct Cli {
@@ -728,14 +728,14 @@ mod version_tests {
 
     assert_eq!(error.kind(), ErrorKind::DisplayVersion);
     assert!(
-      error.to_string().contains(env!("RUSTMAIL_VERSION")),
+      error.to_string().contains(env!("RUSTMAIL_BUILD_VERSION")),
       "the Homebrew formula asserts this output carries the release version"
     );
   }
 
   #[test]
   fn resolves_a_non_empty_version() {
-    assert!(!env!("RUSTMAIL_VERSION").is_empty());
+    assert!(!env!("RUSTMAIL_BUILD_VERSION").is_empty());
   }
 }
 

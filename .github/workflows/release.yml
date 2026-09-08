@@ -41,6 +41,8 @@ jobs:
     name: Build (${{ matrix.target }})
     needs: build-ui
     runs-on: ${{ matrix.runner }}
+    env:
+      RUSTMAIL_BUILD_VERSION: ${{ github.ref_name }}
     strategy:
       matrix:
         include:
