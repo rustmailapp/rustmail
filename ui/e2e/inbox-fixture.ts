@@ -18,7 +18,7 @@ function clampLimit(limit: number): number {
   return Math.min(Math.max(limit, MIN_LIMIT), MAX_LIMIT);
 }
 
-function messageId(index: number): string {
+export function messageId(index: number): string {
   return `msg-${String(index).padStart(4, "0")}`;
 }
 
@@ -45,6 +45,7 @@ function summary(index: number): MessageSummary {
 export interface ApiCalls {
   deleted: string[];
   patched: string[];
+  fetched: string[];
 }
 
 /** Handle on the fake backend: what the UI wrote, and a way to push events. */
@@ -68,7 +69,7 @@ export async function mockInbox(
   total: number = TOTAL_MESSAGES,
 ): Promise<InboxBackend> {
   const all = Array.from({ length: total }, (_, i) => summary(i));
-  const calls: ApiCalls = { deleted: [], patched: [] };
+  const calls: ApiCalls = { deleted: [], patched: [], fetched: [] };
   let socket: WebSocketRoute | undefined;
 
   await page.routeWebSocket(WS, (ws) => {
@@ -103,6 +104,7 @@ export async function mockInbox(
     }
     const single = /^\/messages\/([^/]+)$/.exec(path);
     if (single) {
+      calls.fetched.push(path);
       const found = all.find((m) => m.id === single[1]);
       if (!found) return route.fulfill({ status: NOT_FOUND, json: {} });
       const message: Message = {

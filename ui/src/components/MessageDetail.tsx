@@ -10,6 +10,7 @@ import {
 import { selectedId, setSelectedId, messages } from "../stores/messages";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
+import { debounced } from "../lib/reactive";
 import type {
   Attachment,
   AuthCheck,
@@ -27,6 +28,14 @@ type Tab = "html" | "text" | "headers" | "auth" | "raw";
  */
 const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
 
+/**
+ * How long the selection must hold still before the pane loads it.
+ *
+ * Short enough to feel immediate on a deliberate press, long enough that
+ * arrowing through the inbox does not fetch every row on the way.
+ */
+const SELECTION_SETTLE_MS = 120;
+
 const TAB_LABELS: Record<Tab, string> = {
   html: "HTML",
   text: "Text",
@@ -37,30 +46,31 @@ const TAB_LABELS: Record<Tab, string> = {
 
 export default function MessageDetail() {
   const [tab, setTab] = createSignal<Tab>("html");
+  const settledId = debounced(selectedId, SELECTION_SETTLE_MS);
 
-  const [message] = createResource(selectedId, async (id) => {
+  const [message] = createResource(settledId, async (id) => {
     if (!id) return null;
     return api.getMessage(id);
   });
 
-  const [attachments] = createResource(selectedId, async (id) => {
+  const [attachments] = createResource(settledId, async (id) => {
     if (!id) return [];
     return api.listAttachments(id);
   });
 
-  const rawTarget = () => (tab() === "raw" ? selectedId() : null);
+  const rawTarget = () => (tab() === "raw" ? settledId() : null);
   const [rawSource] = createResource(rawTarget, async (id) => {
     if (!id) return null;
     return api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES);
   });
 
-  const headersTarget = () => (tab() === "headers" ? selectedId() : null);
+  const headersTarget = () => (tab() === "headers" ? settledId() : null);
   const [headers] = createResource(headersTarget, async (id) => {
     if (!id) return null;
     return api.getHeaders(id);
   });
 
-  const authSource = () => (tab() === "auth" ? selectedId() : null);
+  const authSource = () => (tab() === "auth" ? settledId() : null);
   const [authResults] = createResource(authSource, async (id) => {
     if (!id) return null;
     return api.getAuthResults(id);
