@@ -279,6 +279,7 @@ export default function MessageDetail() {
                   <span>Could not load attachments.</span>
                   <button
                     onClick={refetchAttachments}
+                    aria-label="Retry loading attachments"
                     class="font-medium underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
                   >
                     Retry
@@ -424,6 +425,7 @@ function ReadState(props: {
         <p>Could not load {props.label}.</p>
         <button
           onClick={props.onRetry}
+          aria-label={`Retry loading ${props.label}`}
           class="mt-2 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer"
         >
           Retry

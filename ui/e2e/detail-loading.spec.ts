@@ -182,7 +182,9 @@ for (const resource of RESOURCES) {
     await expect(notice).toBeVisible();
 
     release();
-    await page.getByRole("button", { name: "Retry" }).click();
+    await page
+      .getByRole("button", { name: `Retry loading ${resource.label}` })
+      .click();
     await expect(notice).toBeHidden();
     expect(errors).toEqual([]);
   });
