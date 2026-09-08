@@ -47,30 +47,33 @@ const TAB_LABELS: Record<Tab, string> = {
 export default function MessageDetail() {
   const [tab, setTab] = createSignal<Tab>("html");
   const settledId = debounced(selectedId, SELECTION_SETTLE_MS);
+  const activeId = createMemo(() =>
+    selectedId() === settledId() ? settledId() : null,
+  );
 
-  const [message] = createResource(settledId, async (id) => {
+  const [message] = createResource(activeId, async (id) => {
     if (!id) return null;
     return api.getMessage(id);
   });
 
-  const [attachments] = createResource(settledId, async (id) => {
+  const [attachments] = createResource(activeId, async (id) => {
     if (!id) return [];
     return api.listAttachments(id);
   });
 
-  const rawTarget = () => (tab() === "raw" ? settledId() : null);
+  const rawTarget = () => (tab() === "raw" ? activeId() : null);
   const [rawSource] = createResource(rawTarget, async (id) => {
     if (!id) return null;
     return api.getRawMessage(id, RAW_PREVIEW_LIMIT_BYTES);
   });
 
-  const headersTarget = () => (tab() === "headers" ? settledId() : null);
+  const headersTarget = () => (tab() === "headers" ? activeId() : null);
   const [headers] = createResource(headersTarget, async (id) => {
     if (!id) return null;
     return api.getHeaders(id);
   });
 
-  const authSource = () => (tab() === "auth" ? settledId() : null);
+  const authSource = () => (tab() === "auth" ? activeId() : null);
   const [authResults] = createResource(authSource, async (id) => {
     if (!id) return null;
     return api.getAuthResults(id);
