@@ -11,8 +11,11 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
   messages,
+  total,
   selectedId,
-  setSelectedId,
+  selectMessage,
+  moveSelection,
+  type SelectionTarget,
   loading,
   loadingMore,
   loadMore,
@@ -35,8 +38,38 @@ const OVERSCAN_ROWS = 8;
 /** Distance from the end of the loaded list that starts the next page. */
 const LOAD_MORE_ROW_THRESHOLD = 10;
 
+/**
+ * Keys that move the selection when the list has focus.
+ *
+ * Arrow keys are bound here rather than on the document so they keep scrolling
+ * the message body when focus is in the detail pane.
+ */
+const SELECTION_KEYS: Record<string, SelectionTarget | undefined> = {
+  ArrowDown: "next",
+  ArrowUp: "prev",
+  Home: "first",
+  End: "last",
+};
+
+function optionId(messageId: string): string {
+  return `msg-option-${messageId}`;
+}
+
+/**
+ * Size of the set a row belongs to, for `aria-setsize`.
+ *
+ * The inbox loads a page at a time, so the server total is what a reader wants
+ * to hear — "message 40 of 600", not a count of what happens to be fetched.
+ * Client-side filters narrow the set below that total, and then only the
+ * filtered length is meaningful.
+ */
+function setSize(): number {
+  return hasActiveFilters() ? filteredMessages().length : total();
+}
+
 export default function Inbox() {
   let scroller: HTMLDivElement | undefined;
+  let listbox: HTMLDivElement | undefined;
 
   const virtualizer = createVirtualizer({
     get count() {
@@ -84,8 +117,37 @@ export default function Inbox() {
     virtualizer.measureElement(el);
   }
 
+  /**
+   * The `aria-activedescendant` target, or nothing when it is not rendered.
+   *
+   * An IDREF pointing at an unmounted row is invalid, and mouse-wheel
+   * scrolling unmounts the selected row without changing the selection, so
+   * this has to track the rendered window rather than the selection alone.
+   */
+  const activeDescendant = () => {
+    const id = selectedId();
+    if (!id) return undefined;
+    const index = filteredMessages().findIndex((m) => m.id === id);
+    if (index < 0) return undefined;
+    const rendered = virtualizer
+      .getVirtualItems()
+      .some((item) => item.index === index);
+    return rendered ? optionId(id) : undefined;
+  };
+
+  function handleKeyDown(e: KeyboardEvent) {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const target = SELECTION_KEYS[e.key];
+    if (!target) return;
+    e.preventDefault();
+    moveSelection(target);
+  }
+
   return (
-    <div ref={scroller} class="flex flex-col overflow-y-auto h-full">
+    <div
+      ref={scroller}
+      class="flex flex-col overflow-y-auto h-full has-[[role=listbox]:focus-visible]:ring-2 has-[[role=listbox]:focus-visible]:ring-inset has-[[role=listbox]:focus-visible]:ring-orange-500/60"
+    >
       <Show when={!loading() && filteredMessages().length === 0}>
         <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-500">
           <Show
@@ -138,31 +200,40 @@ export default function Inbox() {
         </div>
       </Show>
 
-      <Show when={filteredMessages().length > 0}>
-        <div
-          class="relative w-full shrink-0"
-          style={{ height: `${virtualizer.getTotalSize()}px` }}
-        >
-          <For each={virtualizer.getVirtualItems()}>
-            {(item) => {
-              const msg = () => filteredMessages()[item.index];
-              let row: HTMLDivElement | undefined;
-              onMount(() => {
-                if (row) measureRow(row, item.index);
-              });
-              return (
-                <div
-                  ref={row}
-                  class="absolute top-0 left-0 w-full"
-                  style={{ transform: `translateY(${item.start}px)` }}
-                >
-                  <Show when={msg()}>{(m) => <MessageRow msg={m} />}</Show>
-                </div>
-              );
-            }}
-          </For>
-        </div>
-      </Show>
+      <div
+        ref={listbox}
+        role="listbox"
+        aria-label="Messages"
+        tabIndex={0}
+        aria-activedescendant={activeDescendant()}
+        aria-busy={loadingMore()}
+        onKeyDown={handleKeyDown}
+        onClick={() => listbox?.focus()}
+        class="group relative w-full shrink-0 outline-none"
+        style={{ height: `${virtualizer.getTotalSize()}px` }}
+      >
+        <For each={virtualizer.getVirtualItems()}>
+          {(item) => {
+            const msg = () => filteredMessages()[item.index];
+            let row: HTMLDivElement | undefined;
+            onMount(() => {
+              if (row) measureRow(row, item.index);
+            });
+            return (
+              <div
+                role="presentation"
+                ref={row}
+                class="absolute top-0 left-0 w-full"
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                <Show when={msg()}>
+                  {(m) => <MessageRow msg={m} index={item.index} />}
+                </Show>
+              </div>
+            );
+          }}
+        </For>
+      </div>
 
       <Show when={loadingMore()}>
         <div class="py-3 text-center text-xs text-zinc-400 dark:text-zinc-600">
@@ -173,34 +244,22 @@ export default function Inbox() {
   );
 }
 
-function MessageRow(props: { msg: Accessor<MessageSummary> }) {
+function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
   const msg = props.msg;
   const isSelected = () => selectedId() === msg().id;
 
   return (
     <div
-      role="button"
-      tabIndex={0}
+      role="option"
+      id={optionId(msg().id)}
+      aria-selected={isSelected()}
+      aria-posinset={props.index + 1}
+      aria-setsize={setSize()}
       data-id={msg().id}
-      onClick={async () => {
-        setSelectedId(msg().id);
-        if (!msg().is_read) {
-          try {
-            await api.markRead(msg().id, true);
-          } catch {
-            // WS event handles UI sync
-          }
-        }
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          (e.currentTarget as HTMLElement).click();
-        }
-      }}
+      onClick={() => selectMessage(msg())}
       class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
         isSelected()
-          ? "bg-zinc-100 dark:bg-zinc-800/80"
+          ? "bg-zinc-100 dark:bg-zinc-800/80 group-focus-visible:ring-2 group-focus-visible:ring-inset group-focus-visible:ring-orange-500"
           : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
       }`}
     >
@@ -210,6 +269,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary> }) {
             class={`size-2 rounded-full mt-1.5 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
           />
           <button
+            tabIndex={-1}
             onClick={(e) => {
               e.stopPropagation();
               api.markStarred(msg().id, !msg().is_starred).catch(() => {});
