@@ -552,7 +552,7 @@ pub fn format_iso8601(dt: OffsetDateTime) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::initialize_database;
+  use crate::{connect_options, initialize_database};
 
   async fn test_repo() -> MessageRepository {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -1155,13 +1155,18 @@ mod tests {
     // File-backed temp DB so multiple pooled connections hit the same store.
     // Mirrors production (WAL + file) far better than shared-cache in-memory,
     // where FTS5 hits SQLITE_LOCKED under concurrent writes.
+    //
+    // The pool is built through `connect_options` for the same reason: a raw
+    // URL leaves every connection on SQLite's defaults, including a
+    // `busy_timeout` of zero, so any write collision fails instantly instead
+    // of waiting the way production does.
     let dir = std::env::temp_dir().join(format!("rustmail-test-{}", Ulid::new()));
     std::fs::create_dir_all(&dir).unwrap();
     let db_path = dir.join("test.db");
     let url = format!("sqlite://{}?mode=rwc", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
       .max_connections(8)
-      .connect(&url)
+      .connect_with(connect_options(&url).unwrap())
       .await
       .unwrap();
     initialize_database(&pool).await.unwrap();
