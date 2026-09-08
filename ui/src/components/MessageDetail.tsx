@@ -11,7 +11,12 @@ import {
   type Resource,
   type ResourceReturn,
 } from "solid-js";
-import { selectedId, setSelectedId, messages } from "../stores/messages";
+import {
+  deleteWithUndo,
+  messages,
+  selectedId,
+  setSelectedId,
+} from "../stores/messages";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
@@ -242,9 +247,9 @@ export default function MessageDetail() {
                       </svg>
                     </a>
                     <button
-                      onClick={async () => {
-                        await api.deleteMessage(msg().id);
+                      onClick={() => {
                         setSelectedId(null);
+                        deleteWithUndo(msg().id);
                       }}
                       class="btn-destructive rounded-md border p-1.5 transition cursor-pointer"
                       title="Delete"

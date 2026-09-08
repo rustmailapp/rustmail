@@ -87,6 +87,10 @@ const SOCKET_POLL_MS = 25;
  * The UI's only backend contact is this REST surface plus one WebSocket, so
  * stubbing both keeps the browser, its layout engine and the virtualizer real
  * while making the data deterministic. Must be called before navigating.
+ *
+ * A delete answers and then broadcasts, the way the server does: the list is
+ * updated by the event rather than by the response, so a fixture that stayed
+ * quiet would leave that half of the flow untested.
  */
 export async function mockInbox(
   page: Page,
@@ -117,7 +121,16 @@ export async function mockInbox(
 
     if (request.method() === "DELETE") {
       calls.deleted.push(path);
-      return route.fulfill({ status: NO_CONTENT, body: "" });
+      const target = /^\/messages\/([^/]+)$/.exec(path);
+      await route.fulfill({ status: NO_CONTENT, body: "" });
+      if (!target) {
+        all.length = 0;
+        return broadcast([{ type: "messages:clear" }]);
+      }
+      const id = target[1];
+      const index = all.findIndex((m) => m.id === id);
+      if (index >= 0) all.splice(index, 1);
+      return broadcast([{ type: "message:delete", data: { id } }]);
     }
     if (request.method() === "PATCH") {
       calls.patched.push(path);

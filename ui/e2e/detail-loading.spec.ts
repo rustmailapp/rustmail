@@ -5,6 +5,7 @@ import { REQUEST_TIMEOUT_MS } from "../src/lib/api";
 const SETTLED_MS = 150;
 const BEFORE_SETTLED_MS = 20;
 const SELECTED_OPTION = '[role="option"][aria-selected="true"]';
+const FIRST_ROW = '[role="option"][data-id="msg-0000"]';
 const RAW_BODY = "Subject: Next message\r\n\r\nBody";
 const MESSAGE_READ = {
   name: "message",
@@ -98,7 +99,7 @@ for (const resource of RESOURCES) {
   test(`ignores obsolete ${resource.name} errors after keyboard deletion`, async ({
     page,
   }) => {
-    const backend = await mockInbox(page, 5);
+    await mockInbox(page, 5);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     let releaseRequest = () => {};
@@ -129,12 +130,10 @@ for (const resource of RESOURCES) {
     await page.getByRole("listbox", { name: "Messages" }).focus();
     await page.keyboard.press("d");
     await expect(page.locator(SELECTED_OPTION)).toHaveAttribute(
-      "aria-posinset",
-      "2",
+      "data-id",
+      "msg-0001",
     );
-    await expect
-      .poll(() => backend.calls.deleted)
-      .toEqual(["/messages/msg-0000"]);
+    await expect(page.locator(FIRST_ROW)).toHaveCount(0);
     const response = page.waitForResponse(
       (res) =>
         new URL(res.url()).pathname === targetPath &&

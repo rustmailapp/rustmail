@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { messages, total } from "../stores/messages";
+import { total } from "../stores/messages";
 import { toggleSettings } from "../stores/settings";
 import * as api from "../lib/api";
 import { confirm } from "./ConfirmDialog";
@@ -46,7 +46,7 @@ export default function Header() {
           </svg>
         </button>
 
-        <Show when={messages().length > 0}>
+        <Show when={total() > 0}>
           <button
             onClick={async () => {
               const ok = await confirm({

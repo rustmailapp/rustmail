@@ -5,6 +5,7 @@ import Inbox from "./components/Inbox";
 import MessageDetail from "./components/MessageDetail";
 import Settings from "./components/Settings";
 import ConfirmDialog, { confirm } from "./components/ConfirmDialog";
+import UndoToast from "./components/UndoToast";
 import {
   fetchMessages,
   connectWebSocket,
@@ -15,6 +16,8 @@ import {
   setSelectedId,
   selectMessage,
   moveSelection,
+  deleteWithUndo,
+  undoDelete,
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
@@ -54,10 +57,12 @@ export default function App() {
           } else {
             setSelectedId(null);
           }
-          api
-            .deleteMessage(id)
-            .catch(() => console.error("Failed to delete message"));
+          deleteWithUndo(id);
         }
+        break;
+      }
+      case "u": {
+        undoDelete();
         break;
       }
       case "D": {
@@ -136,6 +141,7 @@ export default function App() {
       </div>
       <Settings />
       <ConfirmDialog />
+      <UndoToast />
     </div>
   );
 }

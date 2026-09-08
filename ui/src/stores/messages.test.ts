@@ -1,15 +1,18 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageSummary } from "../lib/types";
 
-const { listMessages, markRead } = vi.hoisted(() => ({
+const { deleteMessage, listMessages, markRead } = vi.hoisted(() => ({
+  deleteMessage: vi.fn(),
   listMessages: vi.fn(),
   markRead: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({ listMessages, markRead }));
+vi.mock("../lib/api", () => ({ deleteMessage, listMessages, markRead }));
 
 const {
+  UNDO_WINDOW_MS,
   clearFilters,
+  deleteWithUndo,
   fetchMessages,
   filteredMessages,
   moveSelection,
@@ -18,6 +21,9 @@ const {
   setSearch,
   setSelectedId,
   toggleFilter,
+  total,
+  undoDelete,
+  undoableId,
 } = await import("./messages");
 
 function message(
@@ -49,8 +55,10 @@ function range(count: number): MessageSummary[] {
 }
 
 beforeEach(async () => {
+  undoDelete();
   vi.clearAllMocks();
   markRead.mockResolvedValue(undefined);
+  deleteMessage.mockResolvedValue(undefined);
   setSearch("");
   clearFilters();
   setSelectedId(null);
@@ -312,5 +320,113 @@ describe("filteredMessages", () => {
     toggleFilter("starred");
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+});
+
+describe("deleteWithUndo", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("takes the message out of the list and holds the DELETE back", async () => {
+    await seed(range(3));
+
+    deleteWithUndo("id-0");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1", "id-2"]);
+    expect(total()).toBe(2);
+    expect(undoableId()).toBe("id-0");
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("deletes the message once its undo window closes", async () => {
+    await seed(range(3));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(undoableId()).toBeNull();
+  });
+
+  /**
+   * The row is taken out by the `message:delete` event, not by the response,
+   * and this harness has no socket to deliver one: the message coming back is
+   * what "the hiding is over" looks like here.
+   */
+  it("hides the message for as long as the DELETE is in flight", async () => {
+    let settle = () => {};
+    deleteMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+
+    settle();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(total()).toBe(2);
+  });
+
+  it("brings the message back on undo, and reselects it", async () => {
+    await seed(range(3));
+    setSelectedId("id-1");
+
+    deleteWithUndo("id-0");
+    undoDelete();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+    ]);
+    expect(selectedId()).toBe("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("commits the deletion before it when a second one starts", async () => {
+    await seed(range(3));
+
+    deleteWithUndo("id-0");
+    deleteWithUndo("id-1");
+
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(undoableId()).toBe("id-1");
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-2"]);
+  });
+
+  it("puts the message back when the DELETE fails", async () => {
+    deleteMessage.mockRejectedValue(new Error("unreachable"));
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("does nothing once the undo window has closed", async () => {
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    undoDelete();
+
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
+    expect(selectedId()).toBeNull();
   });
 });
