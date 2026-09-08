@@ -20,6 +20,7 @@ import {
   selectMessage,
   moveSelection,
   deleteWithUndo,
+  flushPendingDelete,
   undoDelete,
   hasActiveFilters,
   clearFilters,
@@ -122,10 +123,12 @@ export default function App() {
     }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);
+    window.addEventListener("pagehide", flushPendingDelete);
   });
 
   onCleanup(() => {
     document.removeEventListener("keydown", handleKeydown);
+    window.removeEventListener("pagehide", flushPendingDelete);
     disconnectWebSocket();
   });
 

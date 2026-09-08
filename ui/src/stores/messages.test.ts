@@ -13,6 +13,7 @@ const {
   UNDO_WINDOW_MS,
   clearFilters,
   deleteWithUndo,
+  flushPendingDelete,
   fetchMessages,
   filteredMessages,
   moveSelection,
@@ -349,7 +350,17 @@ describe("deleteWithUndo", () => {
     deleteWithUndo("id-0");
     await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
 
-    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
+    expect(undoableId()).toBeNull();
+  });
+
+  it("writes the pending deletion out when the page goes away", async () => {
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+
+    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: true });
     expect(undoableId()).toBeNull();
   });
 
@@ -369,7 +380,7 @@ describe("deleteWithUndo", () => {
 
     deleteWithUndo("id-0");
     await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
-    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
     expect(total()).toBe(1);
 
@@ -403,7 +414,7 @@ describe("deleteWithUndo", () => {
     deleteWithUndo("id-1");
 
     expect(deleteMessage).toHaveBeenCalledTimes(1);
-    expect(deleteMessage).toHaveBeenCalledWith("id-0");
+    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
     expect(undoableId()).toBe("id-1");
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-2"]);
   });

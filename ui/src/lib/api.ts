@@ -120,8 +120,20 @@ export async function getMessage(
   return fetchJson(`${BASE}/messages/${enc(id)}`, { signal });
 }
 
-export async function deleteMessage(id: string): Promise<void> {
-  await fetchVoid(`${BASE}/messages/${enc(id)}`, { method: "DELETE" });
+/**
+ * Deletes one message.
+ *
+ * `keepalive` lets the write outlive the document, for the deletion a closing
+ * page still owes the server.
+ */
+export async function deleteMessage(
+  id: string,
+  options: { keepalive?: boolean } = {},
+): Promise<void> {
+  await fetchVoid(`${BASE}/messages/${enc(id)}`, {
+    method: "DELETE",
+    keepalive: options.keepalive,
+  });
 }
 
 export async function deleteAllMessages(): Promise<void> {

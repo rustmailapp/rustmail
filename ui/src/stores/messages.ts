@@ -149,7 +149,7 @@ function deleteWithUndo(id: string): void {
   commitDelete();
   setHiddenIds((ids) => [...ids, id]);
   setUndoableId(id);
-  undoTimer = setTimeout(commitDelete, UNDO_WINDOW_MS);
+  undoTimer = setTimeout(() => commitDelete(), UNDO_WINDOW_MS);
 }
 
 /**
@@ -161,16 +161,27 @@ function deleteWithUndo(id: string): void {
  * taken the message out of the list, and on failure the server still holds it,
  * so keeping it hidden would claim a deletion that never happened.
  */
-function commitDelete(): void {
+function commitDelete(keepalive = false): void {
   const id = undoableId();
   clearUndoTimer();
   setUndoableId(null);
   if (id === null) return;
 
   api
-    .deleteMessage(id)
+    .deleteMessage(id, { keepalive })
     .catch(() => console.error(`Failed to delete message ${id}`))
     .finally(() => unhide(id));
+}
+
+/**
+ * Commits the pending deletion in a way that outlives the page.
+ *
+ * A plain write is cancelled when the document goes away, so a message
+ * deleted seconds before a tab closes would be back on the next visit —
+ * `keepalive` is what makes the deletion mean what it said.
+ */
+function flushPendingDelete(): void {
+  commitDelete(true);
 }
 
 /** Brings the last deleted message back, while its window is still open. */
@@ -358,6 +369,7 @@ function disconnectWebSocket() {
 
 export {
   UNDO_WINDOW_MS,
+  flushPendingDelete,
   messages,
   visibleMessages,
   filteredMessages,
