@@ -4,7 +4,10 @@ import FilterBar from "./components/FilterBar";
 import Inbox from "./components/Inbox";
 import MessageDetail from "./components/MessageDetail";
 import Settings from "./components/Settings";
-import ConfirmDialog, { confirm } from "./components/ConfirmDialog";
+import ConfirmDialog, {
+  confirm,
+  confirmOpen,
+} from "./components/ConfirmDialog";
 import UndoToast from "./components/UndoToast";
 import {
   fetchMessages,
@@ -28,7 +31,7 @@ import "./stores/rusted";
 
 export default function App() {
   function handleKeydown(e: KeyboardEvent) {
-    if (settingsOpen()) return;
+    if (settingsOpen() || confirmOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;

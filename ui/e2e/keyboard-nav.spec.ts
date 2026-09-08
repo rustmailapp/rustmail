@@ -520,6 +520,24 @@ test.describe("global shortcuts", () => {
     expect(backend.calls.deleted).toEqual([]);
   });
 
+  test("shortcuts stay out of the way while a confirmation is open", async ({
+    page,
+  }) => {
+    const backend = await openInboxAtRest(page);
+    const before = await position(page);
+
+    await page.keyboard.press("Shift+D");
+    await expect(
+      page.getByText("will be permanently deleted", { exact: false }),
+    ).toBeVisible();
+    await page.keyboard.press("d");
+    await page.keyboard.press("j");
+
+    expect(await position(page)).toBe(before);
+    await page.clock.runFor(PAST_UNDO_WINDOW_MS);
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
   test("modifier chords never reach the shortcuts", async ({ page }) => {
     const backend = await openInbox(page);
     const before = await position(page);

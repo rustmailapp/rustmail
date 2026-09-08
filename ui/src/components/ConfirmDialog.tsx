@@ -13,6 +13,11 @@ const [dialogState, setDialogState] = createSignal<{
   resolve: (confirmed: boolean) => void;
 } | null>(null);
 
+/** Whether a confirmation is on screen and waiting on an answer. */
+export function confirmOpen(): boolean {
+  return dialogState() !== null;
+}
+
 export function confirm(options: ConfirmDialogOptions): Promise<boolean> {
   return new Promise((resolve) => {
     setDialogState({ options, resolve });
