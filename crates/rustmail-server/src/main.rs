@@ -284,7 +284,9 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
               return true;
             }
           }
-          Err(e) => tracing::error!(error = %e, "Failed to store message"),
+          Err(e) => {
+            tracing::error!(error = %e, "Dropped a message: the SMTP session was already accepted and storing it failed")
+          }
         }
       }
       false
@@ -632,7 +634,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
             }
           }
           Err(e) => {
-            tracing::error!(error = %e, "Failed to store message");
+            tracing::error!(error = %e, "Dropped a message: the SMTP session was already accepted and storing it failed");
           }
         }
       }

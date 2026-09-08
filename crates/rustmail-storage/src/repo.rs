@@ -1,3 +1,6 @@
+use std::future::Future;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use mail_parser::{MessageParser, MimeHeaders, PartType};
 use sqlx::SqlitePool;
 use time::OffsetDateTime;
@@ -10,6 +13,74 @@ use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
   format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+
+/// SQLite primary result code for `SQLITE_BUSY`.
+const SQLITE_BUSY: i32 = 5;
+/// SQLite primary result code for `SQLITE_LOCKED`.
+const SQLITE_LOCKED: i32 = 6;
+/// Low byte of a SQLite result code, which carries the primary code.
+const PRIMARY_CODE_MASK: i32 = 0xFF;
+/// Total attempts a contended write gets, the first one included.
+const WRITE_ATTEMPTS: u32 = 5;
+/// Delay before the second attempt; doubles from there.
+const WRITE_RETRY_BASE_DELAY: Duration = Duration::from_millis(20);
+
+/// Whether a failed write is worth attempting again.
+///
+/// SQLite serialises writers, so a busy or locked database is a transient
+/// state rather than a rejection. `busy_timeout` covers most of it, but not
+/// the cases where SQLite refuses to wait — promoting a transaction that would
+/// deadlock, for one — so the caller still has to be prepared to retry.
+fn is_retryable_lock(error: &StorageError) -> bool {
+  let StorageError::Database(sqlx::Error::Database(db_error)) = error else {
+    return false;
+  };
+  db_error
+    .code()
+    .and_then(|code| code.parse::<i32>().ok())
+    .is_some_and(|code| matches!(code & PRIMARY_CODE_MASK, SQLITE_BUSY | SQLITE_LOCKED))
+}
+
+/// Spread for a retry delay, so racing writers do not wake together.
+///
+/// The clock's sub-second noise is uncorrelated enough between two processes
+/// to serve here, which keeps this off an RNG dependency.
+fn jitter(bound: Duration) -> Duration {
+  let nanos = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .map_or(0, |since| u64::from(since.subsec_nanos()));
+  let bound_nanos = u64::try_from(bound.as_nanos()).unwrap_or(u64::MAX).max(1);
+  Duration::from_nanos(nanos % bound_nanos)
+}
+
+/// Runs `op`, retrying while the database reports the write as contended.
+///
+/// Attempts are bounded and back off exponentially with jitter. Retrying is
+/// safe because a failed write leaves nothing behind: the transaction rolls
+/// back, and an insert mints a fresh id per attempt, so no attempt can
+/// duplicate a row committed by an earlier one.
+async fn retry_on_lock<T, F, Fut>(mut op: F) -> Result<T, StorageError>
+where
+  F: FnMut() -> Fut,
+  Fut: Future<Output = Result<T, StorageError>>,
+{
+  let mut attempt = 0;
+  loop {
+    let result = op().await;
+    match &result {
+      Err(error) if is_retryable_lock(error) && attempt + 1 < WRITE_ATTEMPTS => {
+        let backoff = WRITE_RETRY_BASE_DELAY * 2_u32.pow(attempt);
+        debug!(
+          attempt = attempt + 1,
+          "write contended, retrying after backoff"
+        );
+        tokio::time::sleep(backoff + jitter(backoff)).await;
+        attempt += 1;
+      }
+      _ => return result,
+    }
+  }
+}
 
 /// Repository for storing and querying captured email messages.
 ///
@@ -35,6 +106,15 @@ impl MessageRepository {
   ///
   /// Returns [`StorageError::Database`] if any insert fails.
   pub async fn insert(
+    &self,
+    sender: &str,
+    recipients: &[String],
+    raw: &[u8],
+  ) -> Result<MessageSummary, StorageError> {
+    retry_on_lock(|| self.insert_once(sender, recipients, raw)).await
+  }
+
+  async fn insert_once(
     &self,
     sender: &str,
     recipients: &[String],
@@ -339,6 +419,10 @@ impl MessageRepository {
   /// to remove, so a plain `DELETE` issued after the source rows are gone is a
   /// silent no-op that leaves the whole index behind.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
+    retry_on_lock(|| self.delete_all_once()).await
+  }
+
+  async fn delete_all_once(&self) -> Result<u64, StorageError> {
     let mut txn = self.pool.begin().await?;
 
     sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
@@ -1252,6 +1336,83 @@ mod tests {
     // Final state matches writer output.
     let final_results = repo.search("writer", 50, 0).await.unwrap();
     assert_eq!(final_results.len(), 20);
+  }
+
+  /// Pool that never waits on a lock, so only a retry can get a write through.
+  async fn impatient_repo() -> (MessageRepository, std::path::PathBuf, SqlitePool) {
+    let dir = std::env::temp_dir().join(format!("rustmail-busy-{}", Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite://{}?mode=rwc", dir.join("test.db").display());
+    let options = connect_options(&url)
+      .unwrap()
+      .busy_timeout(std::time::Duration::ZERO);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(4)
+      .connect_with(options)
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    (MessageRepository::new(pool.clone()), dir, pool)
+  }
+
+  #[tokio::test]
+  async fn insert_waits_out_a_writer_holding_the_lock() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let releaser = tokio::spawn(async move {
+      tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+      sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    });
+
+    let summary = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("contended", "a@t.com", "b@t.com"),
+      )
+      .await
+      .expect("a contended insert should be retried, not surfaced");
+
+    releaser.await.unwrap();
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert_eq!(summary.sender, "a@t.com");
+  }
+
+  #[tokio::test]
+  async fn insert_gives_up_when_the_lock_is_never_released() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("blocked", "a@t.com", "b@t.com"),
+      )
+      .await
+      .expect_err("a lock that never clears must surface, not hang forever");
+
+    assert!(
+      is_retryable_lock(&error),
+      "expected a lock error to be reported as-is, got {error:?}"
+    );
+    assert_eq!(repo.count().await.unwrap(), 0);
   }
 
   #[tokio::test]
