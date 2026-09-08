@@ -45,12 +45,23 @@ function toggleTagFilter(tag: string) {
   }));
 }
 
+/**
+ * The inbox list: loaded messages narrowed by the active filters.
+ *
+ * The selected message stays in the list even once a filter stops matching
+ * it. Selecting marks a message read, so under the unread filter every
+ * keypress would otherwise drop the row it just landed on, leaving the
+ * selection pointing outside the list and sending navigation back to the top.
+ * Keeping it lets the list shrink behind the cursor instead.
+ */
 const filteredMessages = createMemo(() => {
   const f = filters();
   if (!f.starred && !f.unread && !f.attachments && f.tags.length === 0) {
     return messages();
   }
+  const selected = selectedId();
   return messages().filter((m) => {
+    if (m.id === selected) return true;
     if (f.starred && !m.is_starred) return false;
     if (f.unread && m.is_read) return false;
     if (f.attachments && !m.has_attachments) return false;

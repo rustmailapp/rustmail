@@ -36,6 +36,11 @@ down.
 The star toggle on each row is not a tab stop either; use `s` to star the
 selected message.
 
+With a filter active, the selected message stays in the list even once it stops
+matching — selecting a message marks it read, so under the **Unread** filter the
+row you just landed on would otherwise vanish and take your place in the list
+with it. The list shrinks behind you as you move instead.
+
 Shortcuts are active when no input field is focused, and are ignored when a
 modifier key is held, so browser chords such as `Cmd`/`Ctrl`+`D` keep their
 normal behaviour.

@@ -301,6 +301,34 @@ test.describe("inbox keyboard navigation", () => {
   });
 });
 
+test.describe("unread filter", () => {
+  test("walks forward instead of snapping back to the top", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await page.getByRole("button", { name: "Unread" }).click();
+    await tabToList(page);
+    const steps = 5;
+    const before = Number(
+      await selectedOption(page).getAttribute("aria-setsize"),
+    );
+
+    for (let i = 1; i <= steps; i++) {
+      await page.keyboard.press("ArrowDown");
+      await expect
+        .poll(() => selectedOption(page).getAttribute("data-id"))
+        .toBe(messageId(i));
+    }
+
+    const readBehind = steps - 1;
+    await expect(page.locator(optionSelector(1))).toHaveCount(0);
+    await expect(page.locator(optionSelector(steps))).toHaveCount(1);
+    expect(
+      Number(await selectedOption(page).getAttribute("aria-setsize")),
+    ).toBe(before - readBehind);
+  });
+});
+
 test.describe("detail pane loading", () => {
   test("does not fetch a message for every row walked past", async ({
     page,
