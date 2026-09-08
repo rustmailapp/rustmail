@@ -1,0 +1,375 @@
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { mockInbox, optionSelector, TOTAL_MESSAGES } from "./inbox-fixture";
+
+/**
+ * Rows past this point were never in the DOM at load: the initial page holds
+ * 100 messages and the virtualizer mounts roughly 20 of them.
+ */
+const DEEP_TARGET_POSITION = 420;
+const SELECTION_TIMEOUT_MS = 30_000;
+const SEARCH_INPUT = 'input[placeholder="Search emails..."]';
+const MAX_TAB_STOPS = 12;
+
+function list(page: Page): Locator {
+  return page.getByRole("listbox", { name: "Messages" });
+}
+
+function selectedOption(page: Page): Locator {
+  return page.locator('[role="option"][aria-selected="true"]');
+}
+
+async function position(page: Page): Promise<number> {
+  return Number(await selectedOption(page).getAttribute("aria-posinset"));
+}
+
+function activeDescription(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.activeElement;
+    if (!el) return "none";
+    return `${el.tagName.toLowerCase()}[${el.getAttribute("role") ?? ""}]`;
+  });
+}
+
+function activeRole(page: Page): Promise<string> {
+  return page.evaluate(
+    () => document.activeElement?.getAttribute("role") ?? "none",
+  );
+}
+
+async function openInbox(page: Page, total?: number) {
+  const backend = await mockInbox(page, total);
+  await page.goto("/");
+  await expect(list(page)).toBeVisible();
+  await expect(selectedOption(page)).toHaveCount(1);
+  return backend;
+}
+
+/** Tabs forward until the list has focus, recording every role passed through. */
+async function tabToList(page: Page): Promise<string[]> {
+  const seen: string[] = [];
+  await page.locator(SEARCH_INPUT).focus();
+  for (let i = 0; i < MAX_TAB_STOPS; i++) {
+    await page.keyboard.press("Tab");
+    const role = await activeRole(page);
+    seen.push(role);
+    if (role === "listbox") break;
+  }
+  return seen;
+}
+
+/**
+ * Presses `key` until the selection reaches `target`.
+ *
+ * A press is a no-op while the page holding the next row is still in flight,
+ * so progress is driven by the observed position rather than by press count.
+ * Waiting for the position to merely stop changing would settle early, on a
+ * page boundary, while the next request is still open.
+ */
+async function pressUntil(
+  page: Page,
+  key: string,
+  target: number,
+): Promise<void> {
+  const deadline = Date.now() + SELECTION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if ((await position(page)) >= target) return;
+    await page.keyboard.press(key);
+  }
+  throw new Error(
+    `selection stalled at ${await position(page)} before reaching ${target}`,
+  );
+}
+
+function arrowDownTo(page: Page, target: number): Promise<void> {
+  return pressUntil(page, "ArrowDown", target);
+}
+
+test.describe("inbox keyboard navigation", () => {
+  test("puts the list in the tab order and keeps rows out of it", async ({
+    page,
+  }) => {
+    await openInbox(page);
+
+    const seen = await tabToList(page);
+
+    expect(seen).toContain("listbox");
+    expect(seen).not.toContain("option");
+    await expect(page.locator('[role="option"][tabindex]')).toHaveCount(0);
+  });
+
+  test("costs a single tab stop to pass the whole list", async ({ page }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    const inside: string[] = [];
+    for (let i = 0; i < MAX_TAB_STOPS; i++) {
+      await page.keyboard.press("Tab");
+      const withinList = await page.evaluate(() =>
+        Boolean(
+          document.activeElement?.closest('[role="listbox"]') ??
+          document.activeElement?.matches('[role="listbox"]'),
+        ),
+      );
+      if (!withinList) break;
+      inside.push(await activeDescription(page));
+    }
+
+    expect(inside).toEqual([]);
+  });
+
+  test("keeps the list focused across a clear and refill", async ({ page }) => {
+    const backend = await openInbox(page);
+    await tabToList(page);
+    await arrowDownTo(page, 4);
+
+    await backend.push({ type: "messages:clear" });
+    await expect(page.locator('[role="option"]')).toHaveCount(0);
+
+    await backend.push({
+      type: "message:new",
+      data: {
+        id: "msg-fresh",
+        sender: "fresh@example.test",
+        recipients: ["inbox@example.test"],
+        subject: "Arrived after the clear",
+        size: 512,
+        has_attachments: false,
+        is_read: false,
+        is_starred: false,
+        tags: [],
+        created_at: "2026-02-01T00:00:00Z",
+      },
+    });
+    await expect(page.locator('[role="option"]')).toHaveCount(1);
+
+    expect(await activeRole(page)).toBe("listbox");
+    await page.keyboard.press("ArrowDown");
+    expect(await position(page)).toBe(1);
+  });
+
+  test("never points activedescendant at a row that is gone", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+    await expect(page.locator(optionSelector(0))).toHaveCount(1);
+
+    await page.mouse.move(200, 400);
+    await page.mouse.wheel(0, 6000);
+    await expect.poll(() => selectedOption(page).count()).toBe(0);
+
+    expect(await list(page).getAttribute("aria-activedescendant")).toBeNull();
+    expect(await activeRole(page)).toBe("listbox");
+
+    await page.keyboard.press("ArrowDown");
+    await expect(selectedOption(page)).toBeInViewport();
+    expect(await list(page).getAttribute("aria-activedescendant")).toBe(
+      await selectedOption(page).getAttribute("id"),
+    );
+  });
+
+  test("reaches a row that was never rendered, keeping focus on the list", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+    await expect(page.locator(optionSelector(0))).toHaveCount(1);
+
+    await arrowDownTo(page, DEEP_TARGET_POSITION);
+
+    expect(await position(page)).toBe(DEEP_TARGET_POSITION);
+    await expect(page.locator(optionSelector(0))).toHaveCount(0);
+    expect(await activeRole(page)).toBe("listbox");
+    await expect(selectedOption(page)).toBeInViewport();
+  });
+
+  test("keeps activedescendant on the one selected row", async ({ page }) => {
+    await openInbox(page);
+    await tabToList(page);
+    await arrowDownTo(page, 30);
+
+    await expect(selectedOption(page)).toHaveCount(1);
+    expect(await list(page).getAttribute("aria-activedescendant")).toBe(
+      await selectedOption(page).getAttribute("id"),
+    );
+  });
+
+  test("reports the whole inbox size, not the loaded page", async ({
+    page,
+  }) => {
+    await openInbox(page);
+
+    expect(
+      Number(await selectedOption(page).getAttribute("aria-setsize")),
+    ).toBe(TOTAL_MESSAGES);
+    expect(await page.locator('[role="option"]').count()).toBeLessThan(
+      TOTAL_MESSAGES,
+    );
+  });
+
+  test("Home and End reach both ends of a single-page inbox", async ({
+    page,
+  }) => {
+    const total = 40;
+    await openInbox(page, total);
+    await tabToList(page);
+    await arrowDownTo(page, 12);
+
+    await page.keyboard.press("End");
+    expect(await position(page)).toBe(total);
+    await expect(selectedOption(page)).toBeInViewport();
+
+    await page.keyboard.press("Home");
+    expect(await position(page)).toBe(1);
+    await expect(selectedOption(page)).toBeInViewport();
+  });
+
+  test("End walks through every page to the true last message", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await pressUntil(page, "End", TOTAL_MESSAGES);
+
+    expect(await position(page)).toBe(TOTAL_MESSAGES);
+    await expect(selectedOption(page)).toBeInViewport();
+  });
+
+  test("holds still at both ends of the list", async ({ page }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await page.keyboard.press("ArrowUp");
+    expect(await position(page)).toBe(1);
+
+    await pressUntil(page, "End", TOTAL_MESSAGES);
+    await page.keyboard.press("ArrowDown");
+    expect(await position(page)).toBe(TOTAL_MESSAGES);
+  });
+
+  test("hands focus to the list when a row is clicked", async ({ page }) => {
+    await openInbox(page);
+
+    await page.locator('[role="option"]').nth(3).click();
+    expect(await activeRole(page)).toBe("listbox");
+    const clicked = await position(page);
+
+    await page.keyboard.press("ArrowDown");
+
+    expect(await position(page)).toBe(clicked + 1);
+  });
+
+  test("ignores the arrow keys when focus is outside the list", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+    await arrowDownTo(page, 5);
+    const before = await position(page);
+
+    await page.getByTitle("Settings").focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+
+    expect(await activeRole(page)).not.toBe("listbox");
+    expect(await position(page)).toBe(before);
+  });
+
+  test("loads every page while walking to the end", async ({ page }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await arrowDownTo(page, DEEP_TARGET_POSITION);
+
+    expect(
+      Number(await selectedOption(page).getAttribute("aria-setsize")),
+    ).toBeLessThanOrEqual(TOTAL_MESSAGES);
+    expect(await position(page)).toBe(DEEP_TARGET_POSITION);
+  });
+});
+
+test.describe("virtualizer measurement", () => {
+  test("mounts and scrolls without console warnings", async ({ page }) => {
+    const noise: string[] = [];
+    page.on("console", (m) => {
+      if (m.type() === "warning" || m.type() === "error") noise.push(m.text());
+    });
+    page.on("pageerror", (e) => noise.push(e.message));
+
+    await openInbox(page);
+    await tabToList(page);
+    await arrowDownTo(page, 40);
+
+    expect(noise).toEqual([]);
+  });
+
+  test("stacks rows on measured heights, not the estimate", async ({
+    page,
+  }) => {
+    await openInbox(page);
+
+    const rows = await page
+      .locator('[role="presentation"]')
+      .evaluateAll((els) =>
+        els.slice(0, 5).map((el) => {
+          const box = el.getBoundingClientRect();
+          return { top: box.top, height: box.height };
+        }),
+      );
+
+    expect(rows.length).toBeGreaterThan(2);
+    for (const [i, row] of rows.slice(1).entries()) {
+      const previous = rows[i];
+      expect(previous).toBeDefined();
+      if (!previous) continue;
+      expect(row.top - previous.top).toBeCloseTo(previous.height, 0);
+    }
+  });
+});
+
+test.describe("global shortcuts", () => {
+  test("j and k walk the list", async ({ page }) => {
+    await openInbox(page);
+
+    await page.keyboard.press("j");
+    expect(await position(page)).toBe(2);
+
+    await page.keyboard.press("k");
+    expect(await position(page)).toBe(1);
+  });
+
+  test("d deletes the selected message", async ({ page }) => {
+    const backend = await openInbox(page);
+    const id = await selectedOption(page).getAttribute("data-id");
+
+    await page.keyboard.press("d");
+
+    await expect.poll(() => backend.calls.deleted).toEqual([`/messages/${id}`]);
+  });
+
+  test("Shift still reaches the clear-all shortcut", async ({ page }) => {
+    const backend = await openInbox(page);
+
+    await page.keyboard.press("Shift+D");
+
+    await expect(
+      page.getByText(`All ${TOTAL_MESSAGES} messages will be permanently`, {
+        exact: false,
+      }),
+    ).toBeVisible();
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
+  test("modifier chords never reach the shortcuts", async ({ page }) => {
+    const backend = await openInbox(page);
+    const before = await position(page);
+
+    for (const chord of ["Meta+d", "Control+d", "Meta+j", "Control+k"]) {
+      await page.keyboard.press(chord);
+    }
+
+    expect(backend.calls.deleted).toEqual([]);
+    expect(await position(page)).toBe(before);
+  });
+});

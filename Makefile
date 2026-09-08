@@ -1,4 +1,4 @@
-.PHONY: dev dev-ui dev-server build build-ui build-server run check test lint fmt clean
+.PHONY: dev dev-ui dev-server build build-ui build-server run check test test-e2e lint fmt clean
 
 # Development — run UI dev server + Rust backend concurrently
 dev:
@@ -34,6 +34,10 @@ check:
 
 test:
 	cargo test
+	cd ui && pnpm test
+
+test-e2e:
+	cd ui && pnpm test:e2e
 
 lint:
 	cargo clippy --all-targets -- -D warnings
@@ -41,7 +45,7 @@ lint:
 
 fmt:
 	cargo fmt
-	cd ui && pnpm exec prettier --write src/
+	cd ui && pnpm exec prettier --write src/ e2e/ *.config.ts
 
 # Cleanup
 clean:

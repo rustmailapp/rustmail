@@ -13,6 +13,8 @@ import {
   total,
   selectedId,
   setSelectedId,
+  selectMessage,
+  moveSelection,
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
@@ -26,35 +28,18 @@ export default function App() {
     if (settingsOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     const msgs = filteredMessages();
-    if (msgs.length === 0 && (e.key === "j" || e.key === "k")) return;
-
     const currentIdx = msgs.findIndex((m) => m.id === selectedId());
-
-    function selectAndRead(idx: number) {
-      const msg = msgs[idx];
-      if (msg) {
-        setSelectedId(msg.id);
-        if (!msg.is_read) api.markRead(msg.id, true).catch(() => {});
-      }
-    }
 
     switch (e.key) {
       case "j": {
-        if (currentIdx === -1) {
-          selectAndRead(0);
-        } else if (currentIdx < msgs.length - 1) {
-          selectAndRead(currentIdx + 1);
-        }
+        moveSelection("next");
         break;
       }
       case "k": {
-        if (currentIdx === -1) {
-          selectAndRead(0);
-        } else if (currentIdx > 0) {
-          selectAndRead(currentIdx - 1);
-        }
+        moveSelection("prev");
         break;
       }
       case "d": {
@@ -65,8 +50,7 @@ export default function App() {
               ? null
               : (msgs[currentIdx + 1] ?? msgs[currentIdx - 1] ?? null);
           if (next) {
-            setSelectedId(next.id);
-            if (!next.is_read) api.markRead(next.id, true).catch(() => {});
+            selectMessage(next);
           } else {
             setSelectedId(null);
           }
