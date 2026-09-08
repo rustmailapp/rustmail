@@ -48,11 +48,12 @@ function toggleTagFilter(tag: string) {
 /**
  * The inbox list: loaded messages narrowed by the active filters.
  *
- * The selected message stays in the list even once a filter stops matching
- * it. Selecting marks a message read, so under the unread filter every
- * keypress would otherwise drop the row it just landed on, leaving the
- * selection pointing outside the list and sending navigation back to the top.
- * Keeping it lets the list shrink behind the cursor instead.
+ * The unread filter alone makes an exception for the selected message.
+ * Selecting marks a message read, so that one filter is invalidated by the
+ * act of selecting: every keypress would drop the row it had just landed on,
+ * leaving the selection outside the list and sending navigation back to the
+ * top. Keeping it lets the list shrink behind the cursor instead. No other
+ * filter is affected by selecting, so none of them make the exception.
  */
 const filteredMessages = createMemo(() => {
   const f = filters();
@@ -61,9 +62,8 @@ const filteredMessages = createMemo(() => {
   }
   const selected = selectedId();
   return messages().filter((m) => {
-    if (m.id === selected) return true;
     if (f.starred && !m.is_starred) return false;
-    if (f.unread && m.is_read) return false;
+    if (f.unread && m.is_read && m.id !== selected) return false;
     if (f.attachments && !m.has_attachments) return false;
     if (f.tags.length > 0 && !f.tags.some((t) => m.tags.includes(t)))
       return false;

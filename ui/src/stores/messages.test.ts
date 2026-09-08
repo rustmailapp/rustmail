@@ -273,4 +273,44 @@ describe("filteredMessages", () => {
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
   });
+
+  it("makes no exception for the starred filter", async () => {
+    await seed([message(0), message(1, { is_starred: true })]);
+    setSelectedId("id-0");
+
+    toggleFilter("starred");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("makes no exception for the attachments filter", async () => {
+    await seed([message(0), message(1, { has_attachments: true })]);
+    setSelectedId("id-0");
+
+    toggleFilter("attachments");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("leaves the list empty when nothing matches and only the selection would", async () => {
+    await seed([message(0), message(1)]);
+    setSelectedId("id-0");
+
+    toggleFilter("starred");
+
+    expect(filteredMessages()).toEqual([]);
+  });
+
+  it("drops the selected message when another active filter excludes it", async () => {
+    await seed([
+      message(0, { is_read: true }),
+      message(1, { is_starred: true }),
+    ]);
+    setSelectedId("id-0");
+
+    toggleFilter("unread");
+    toggleFilter("starred");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
 });
