@@ -1,6 +1,7 @@
 import { createSignal, createMemo } from "solid-js";
 import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
 import * as api from "../lib/api";
+import * as schema from "../lib/schema";
 
 const PAGE_SIZE = 100;
 
@@ -273,6 +274,27 @@ let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let hasConnected = false;
 
+/**
+ * The event a frame carries, or `undefined` if it carries nothing usable.
+ *
+ * A frame reaches the store as text nobody has checked, and the list is built
+ * straight out of it — `message:new` is appended as a message. The frame never
+ * reaches the log either: it holds a sender, its recipients and a subject.
+ */
+function readEvent(frame: unknown): WsEvent | undefined {
+  if (typeof frame !== "string") return undefined;
+
+  let body: unknown;
+  try {
+    body = JSON.parse(frame);
+  } catch {
+    return undefined;
+  }
+
+  const parsed = schema.wsEvent.safeParse(body);
+  return parsed.success ? parsed.data : undefined;
+}
+
 function connectWebSocket() {
   disconnectWebSocket();
 
@@ -291,11 +313,9 @@ function connectWebSocket() {
   };
 
   ws.onmessage = (e) => {
-    let event: WsEvent;
-    try {
-      event = JSON.parse(e.data);
-    } catch {
-      console.error("Failed to parse WebSocket message:", e.data);
+    const event = readEvent(e.data);
+    if (event === undefined) {
+      console.error("Discarded a WebSocket frame the UI could not read");
       return;
     }
 

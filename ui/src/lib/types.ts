@@ -1,51 +1,23 @@
-export interface MessageSummary {
-  id: string;
-  sender: string;
-  recipients: string[];
-  subject: string | null;
-  size: number;
-  has_attachments: boolean;
-  is_read: boolean;
-  is_starred: boolean;
-  tags: string[];
-  created_at: string;
-}
+import type * as z from "zod/mini";
+import type * as schema from "./schema";
 
-export interface Message extends MessageSummary {
-  text_body: string | null;
-  html_body: string | null;
-}
+/**
+ * The domain types, inferred from the schemas that check them at the boundary.
+ *
+ * Declaring these by hand alongside the schemas would let the two drift, and
+ * the drift would only show as a runtime rejection of a response the server
+ * was right to send. `FilterState` is written out because it is inbox state
+ * that never crosses a boundary, so nothing validates it.
+ */
 
-export interface Attachment {
-  id: string;
-  message_id: string;
-  filename: string | null;
-  content_type: string | null;
-  content_id: string | null;
-  size: number | null;
-}
-
-export interface ListResponse {
-  messages: MessageSummary[];
-  total: number;
-}
-
-export interface MessageHeader {
-  name: string;
-  value: string;
-}
-
-export interface AuthCheck {
-  status: string;
-  details: string;
-}
-
-export interface AuthResults {
-  dkim: AuthCheck[];
-  spf: AuthCheck[];
-  dmarc: AuthCheck[];
-  arc: AuthCheck[];
-}
+export type MessageSummary = z.infer<typeof schema.messageSummary>;
+export type Message = z.infer<typeof schema.message>;
+export type Attachment = z.infer<typeof schema.attachment>;
+export type ListResponse = z.infer<typeof schema.listResponse>;
+export type MessageHeader = z.infer<typeof schema.messageHeader>;
+export type AuthCheck = z.infer<typeof schema.authCheck>;
+export type AuthResults = z.infer<typeof schema.authResults>;
+export type WsEvent = z.infer<typeof schema.wsEvent>;
 
 export interface FilterState {
   starred: boolean;
@@ -53,11 +25,3 @@ export interface FilterState {
   attachments: boolean;
   tags: string[];
 }
-
-export type WsEvent =
-  | { type: "message:new"; data: MessageSummary }
-  | { type: "message:delete"; data: { id: string } }
-  | { type: "message:read"; data: { id: string; is_read: boolean } }
-  | { type: "message:starred"; data: { id: string; is_starred: boolean } }
-  | { type: "message:tags"; data: { id: string; tags: string[] } }
-  | { type: "messages:clear" };

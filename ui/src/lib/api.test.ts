@@ -3,10 +3,33 @@ import {
   BULK_REQUEST_TIMEOUT_MS,
   deleteAllMessages,
   getMessage,
+  listMessages,
   REQUEST_TIMEOUT_MS,
+  ResponseShapeError,
 } from "./api";
 
 const fetchMock = vi.fn<typeof fetch>();
+
+/** A message body exactly as `docs/api.yaml` describes one. */
+function messageBody(
+  over: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: "msg-0000",
+    sender: "sender@example.test",
+    recipients: ["inbox@example.test"],
+    subject: "Subject",
+    size: 1024,
+    has_attachments: false,
+    is_read: false,
+    is_starred: false,
+    tags: [],
+    created_at: "2026-01-01T00:00:00Z",
+    text_body: "Body",
+    html_body: null,
+    ...over,
+  };
+}
 
 /**
  * Installs a backend that answers nothing, and returns the signal it was given.
@@ -65,7 +88,7 @@ describe("request deadline", () => {
   });
 
   it("stops the deadline once the read answers", async () => {
-    fetchMock.mockResolvedValue(Response.json({ id: "msg-0000" }));
+    fetchMock.mockResolvedValue(Response.json(messageBody()));
 
     await expect(getMessage("msg-0000")).resolves.toMatchObject({
       id: "msg-0000",
@@ -121,5 +144,80 @@ describe("request deadline", () => {
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("response shape", () => {
+  it("accepts the shape the API documents", async () => {
+    fetchMock.mockResolvedValue(Response.json(messageBody()));
+
+    await expect(getMessage("msg-0000")).resolves.toEqual(messageBody());
+  });
+
+  it("keeps a field the UI does not know about out of the domain model", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(messageBody({ delivered_at: "2026-01-01T00:00:01Z" })),
+    );
+
+    await expect(getMessage("msg-0000")).resolves.toEqual(messageBody());
+  });
+
+  it("rejects a response missing a field, naming the route", async () => {
+    const { created_at: _dropped, ...withoutDate } = messageBody();
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(Response.json(withoutDate)),
+    );
+
+    await expect(getMessage("msg-0000")).rejects.toThrow(ResponseShapeError);
+    await expect(getMessage("msg-0000")).rejects.toThrow(
+      "GET /messages/{id} returned an unexpected shape: created_at should be string",
+    );
+  });
+
+  it("names the row a list response drifted in", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ messages: [messageBody({ size: "1024" })], total: 1 }),
+    );
+
+    await expect(listMessages()).rejects.toThrow(
+      "GET /messages returned an unexpected shape: messages[0].size should be number",
+    );
+  });
+
+  it("keeps the response body out of the error it raises", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(messageBody({ size: "confidential-subject-line" })),
+    );
+
+    await expect(getMessage("msg-0000")).rejects.toThrow(
+      expect.not.stringContaining("confidential-subject-line"),
+    );
+  });
+
+  it("rejects a body that is not JSON at all", async () => {
+    fetchMock.mockResolvedValue(new Response("<html>502</html>"));
+
+    await expect(getMessage("msg-0000")).rejects.toThrow(
+      "GET /messages/{id} returned an unexpected shape: the body is not JSON",
+    );
+  });
+
+  it("reports a cancelled body read as the cancellation it was", async () => {
+    const res = new Response("");
+    let failBody: (reason: unknown) => void = () => {};
+    vi.spyOn(res, "json").mockReturnValue(
+      new Promise((_resolve, reject) => {
+        failBody = reject;
+      }),
+    );
+    fetchMock.mockResolvedValue(res);
+
+    const read = expect(getMessage("msg-0000")).rejects.toMatchObject({
+      name: "TimeoutError",
+    });
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    failBody(new DOMException("body read aborted", "AbortError"));
+
+    await read;
   });
 });

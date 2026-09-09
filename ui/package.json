@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@tanstack/solid-virtual": "^3.13.37",
-    "solid-js": "^1.9.13"
+    "solid-js": "^1.9.13",
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

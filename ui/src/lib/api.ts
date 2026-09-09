@@ -1,3 +1,5 @@
+import type * as z from "zod/mini";
+import * as schema from "./schema";
 import type {
   Attachment,
   AuthResults,
@@ -55,17 +57,80 @@ async function withDeadline<T>(
   }
 }
 
-async function fetchJson<T>(
+/**
+ * A response whose shape is not the one `docs/api.yaml` promises.
+ *
+ * Names the route and the field that drifted, never the value that was there:
+ * a response body carries message content, and this text reaches the console
+ * and, for a write, the screen.
+ */
+export class ResponseShapeError extends Error {
+  constructor(route: string, detail: string, options?: ErrorOptions) {
+    super(`${route} returned an unexpected shape: ${detail}`, options);
+    this.name = "ResponseShapeError";
+  }
+}
+
+function fieldPath(path: readonly PropertyKey[]): string {
+  return path.reduce<string>((acc, step) => {
+    if (typeof step === "number") return `${acc}[${step}]`;
+    return acc === "" ? String(step) : `${acc}.${String(step)}`;
+  }, "");
+}
+
+/**
+ * Checks a decoded body against `shape`, or rejects naming `route`.
+ *
+ * Only the first issue is reported. A drifted response usually breaks the same
+ * way in every row it returns, and one field named precisely says more than a
+ * hundred repetitions of it.
+ */
+function parse<S extends z.ZodMiniType>(
+  route: string,
+  shape: S,
+  body: unknown,
+): z.infer<S> {
+  const result = shape.safeParse(body);
+  if (result.success) return result.data;
+
+  const issue = result.error.issues[0];
+  if (issue === undefined) {
+    throw new ResponseShapeError(route, "the body did not match");
+  }
+  const where = issue.path.length === 0 ? "the body" : fieldPath(issue.path);
+  const detail =
+    "expected" in issue
+      ? `${where} should be ${issue.expected}`
+      : `${where} is not one of the shapes this route returns`;
+  throw new ResponseShapeError(route, detail);
+}
+
+async function readJson(
+  route: string,
+  res: Response,
+  signal: AbortSignal,
+): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (cause) {
+    signal.throwIfAborted();
+    throw new ResponseShapeError(route, "the body is not JSON", { cause });
+  }
+}
+
+async function fetchJson<S extends z.ZodMiniType>(
+  route: string,
   url: string,
+  shape: S,
   init?: RequestInit,
   timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<T> {
-  return withDeadline(init?.signal, timeoutMs, async (signal): Promise<T> => {
+): Promise<z.infer<S>> {
+  return withDeadline(init?.signal, timeoutMs, async (signal) => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);
     }
-    return res.json();
+    return parse(route, shape, await readJson(route, res, signal));
   });
 }
 
@@ -106,7 +171,11 @@ export async function listMessages(
     offset: String(offset),
   });
   if (q) params.set("q", q);
-  return fetchJson(`${BASE}/messages?${params}`);
+  return fetchJson(
+    "GET /messages",
+    `${BASE}/messages?${params}`,
+    schema.listResponse,
+  );
 }
 
 function enc(s: string): string {
@@ -117,7 +186,12 @@ export async function getMessage(
   id: string,
   signal?: AbortSignal,
 ): Promise<Message> {
-  return fetchJson(`${BASE}/messages/${enc(id)}`, { signal });
+  return fetchJson(
+    "GET /messages/{id}",
+    `${BASE}/messages/${enc(id)}`,
+    schema.message,
+    { signal },
+  );
 }
 
 /**
@@ -175,23 +249,36 @@ export async function listAttachments(
   messageId: string,
   signal?: AbortSignal,
 ): Promise<Attachment[]> {
-  return fetchJson(`${BASE}/messages/${enc(messageId)}/attachments`, {
-    signal,
-  });
+  return fetchJson(
+    "GET /messages/{id}/attachments",
+    `${BASE}/messages/${enc(messageId)}/attachments`,
+    schema.attachmentList,
+    { signal },
+  );
 }
 
 export async function getAuthResults(
   id: string,
   signal?: AbortSignal,
 ): Promise<AuthResults> {
-  return fetchJson(`${BASE}/messages/${enc(id)}/auth`, { signal });
+  return fetchJson(
+    "GET /messages/{id}/auth",
+    `${BASE}/messages/${enc(id)}/auth`,
+    schema.authResults,
+    { signal },
+  );
 }
 
 export async function getHeaders(
   id: string,
   signal?: AbortSignal,
 ): Promise<MessageHeader[]> {
-  return fetchJson(`${BASE}/messages/${enc(id)}/headers`, { signal });
+  return fetchJson(
+    "GET /messages/{id}/headers",
+    `${BASE}/messages/${enc(id)}/headers`,
+    schema.headerList,
+    { signal },
+  );
 }
 
 /** Fetches a message's raw source, optionally only its first `limitBytes`. */
