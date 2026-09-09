@@ -2,6 +2,8 @@ use rustmail_storage::MessageRepository;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, broadcast};
 
+use crate::origin::Origin;
+
 const MAX_WS_CONNECTIONS: usize = 50;
 
 /// Events sent to WebSocket clients in real time.
@@ -43,6 +45,8 @@ pub struct AppState {
   pub release_port: Option<u16>,
   /// Semaphore limiting concurrent WebSocket connections.
   pub ws_semaphore: Arc<Semaphore>,
+  /// Origins allowed to open the WebSocket on top of the server's own.
+  pub allowed_origins: Arc<[Origin]>,
 }
 
 impl AppState {
@@ -59,7 +63,18 @@ impl AppState {
       release_host,
       release_port,
       ws_semaphore: Arc::new(Semaphore::new(MAX_WS_CONNECTIONS)),
+      allowed_origins: Arc::from([]),
     }
+  }
+
+  /// Lets browser pages on `origins` open the WebSocket.
+  ///
+  /// The origin the server itself is reached at always may, so this is only
+  /// needed when the UI reaches RustMail through a reverse proxy that does not
+  /// forward the public `Host`, or from a separate front-end origin.
+  pub fn with_allowed_origins(mut self, origins: Vec<Origin>) -> Self {
+    self.allowed_origins = Arc::from(origins);
+    self
   }
 
   /// Sends an event to all connected WebSocket clients.

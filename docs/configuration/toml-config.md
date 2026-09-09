@@ -22,6 +22,7 @@ smtp_tls_key = "/etc/rustmail/tls/smtp-key.pem"
 log_level = "info"
 webhook_url = "https://hooks.example.com/email"
 release_host = "smtp.example.com:587"
+allowed_origins = ["https://mail.example.com"]
 ```
 
 Configure both `smtp_tls_cert` and `smtp_tls_key` to enable optional SMTP `STARTTLS` on the existing SMTP listener. Setting only one of the two fails startup.

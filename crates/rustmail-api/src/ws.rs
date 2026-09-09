@@ -1,21 +1,42 @@
 use axum::body::Bytes;
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::http::StatusCode;
+use axum::http::header::{HOST, ORIGIN};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 use tracing::{debug, warn};
 
+use crate::origin::origin_allowed;
 use crate::state::AppState;
 
 const WS_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WS_IDLE_TIMEOUT: Duration = Duration::from_secs(90);
 
+/// Upgrades a request to a WebSocket carrying [`WsEvent`](crate::WsEvent)s.
+///
+/// A handshake sent by a browser page is refused unless it comes from the
+/// origin RustMail is reached at or from a configured one: the events name
+/// senders, recipients and subjects, and nothing else stops a page the victim
+/// happens to have open from subscribing. A handshake with no `Origin` at all
+/// is a non-browser client — the TUI, `websocat`, CI — and is allowed, since a
+/// browser will not let a page omit the header.
 pub async fn ws_handler(
   ws: WebSocketUpgrade,
   State(state): State<AppState>,
+  headers: HeaderMap,
 ) -> Result<impl IntoResponse, StatusCode> {
+  if let Some(origin) = headers.get(ORIGIN)
+    && !origin_allowed(origin, headers.get(HOST), &state.allowed_origins)
+  {
+    warn!(
+      origin = %String::from_utf8_lossy(origin.as_bytes()),
+      "WebSocket handshake rejected: origin not allowed"
+    );
+    return Err(StatusCode::FORBIDDEN);
+  }
+
   let permit = state
     .ws_semaphore
     .clone()

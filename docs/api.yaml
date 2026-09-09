@@ -488,6 +488,12 @@ paths:
       responses:
         '101':
           description: Switching Protocols — WebSocket handshake successful
+        '403':
+          description: >
+            Forbidden — the handshake carried an `Origin` header that is
+            neither the origin the server is reached at nor one passed to
+            `--allowed-origin`. Clients that send no `Origin` at all are
+            unaffected.
 
 components:
 
