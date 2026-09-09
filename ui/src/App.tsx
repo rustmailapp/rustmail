@@ -28,6 +28,7 @@ import {
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
+import { notify } from "./stores/notices";
 import { settingsOpen } from "./stores/settings";
 import "./stores/theme";
 import "./stores/rusted";
@@ -112,10 +113,14 @@ export default function App() {
   }
 
   onMount(async () => {
-    await fetchMessages();
-    if (!selectedId()) {
-      const first = filteredMessages()[0];
-      if (first) setSelectedId(first.id);
+    try {
+      await fetchMessages();
+      if (!selectedId()) {
+        const first = filteredMessages()[0];
+        if (first) setSelectedId(first.id);
+      }
+    } catch {
+      notify("Could not load the inbox.");
     }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);

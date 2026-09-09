@@ -157,3 +157,39 @@ test("keeps a notice and the undo toast clear of each other", async ({
   if (!toastBox || !noticeBox) return;
   expect(noticeBox.y + noticeBox.height).toBeLessThanOrEqual(toastBox.y);
 });
+
+test("keeps the socket and the shortcuts alive when the first load fails", async ({
+  page,
+}) => {
+  const backend = await mockInbox(page, 5);
+  await page.route(/\/api\/v1\/messages(\?|$)/, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ status: SERVER_ERROR, json: { error: "nope" } });
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toContainText(
+    "Could not load the inbox.",
+  );
+
+  await backend.push({
+    type: "message:new",
+    data: {
+      id: "msg-live",
+      sender: "live@example.test",
+      recipients: ["inbox@example.test"],
+      subject: "Arrived over the socket",
+      size: 512,
+      has_attachments: false,
+      is_read: false,
+      is_starred: false,
+      tags: [],
+      created_at: "2026-02-01T00:00:00Z",
+    },
+  });
+  await expect(page.locator('[role="option"]')).toHaveCount(1);
+
+  await page.keyboard.press("j");
+
+  await expect(selectedOption(page)).toHaveCount(1);
+});
