@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
-use rustmail_api::{AppState, Origin, WsEvent};
+use rustmail_api::{AppState, Hostname, Origin, WsEvent};
 use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
 
@@ -89,6 +89,14 @@ struct ServeArgs {
   )]
   allowed_origins: Vec<String>,
 
+  /// Host name browsers may reach RustMail on, e.g. mail.example.com
+  #[arg(
+    long = "allowed-host",
+    env = "RUSTMAIL_ALLOWED_HOSTS",
+    value_delimiter = ','
+  )]
+  allowed_hosts: Vec<String>,
+
   #[arg(long)]
   config: Option<String>,
 }
@@ -146,6 +154,7 @@ struct TomlConfig {
   webhook_url: Option<String>,
   release_host: Option<String>,
   allowed_origins: Option<Vec<String>>,
+  allowed_hosts: Option<Vec<String>>,
 }
 
 fn apply_toml_to_env(config: &TomlConfig) {
@@ -196,6 +205,9 @@ fn apply_toml_to_env(config: &TomlConfig) {
   }
   if let Some(v) = &config.allowed_origins {
     set_if_absent("RUSTMAIL_ALLOWED_ORIGINS", &v.join(","));
+  }
+  if let Some(v) = &config.allowed_hosts {
+    set_if_absent("RUSTMAIL_ALLOWED_HOSTS", &v.join(","));
   }
 }
 
@@ -522,6 +534,19 @@ fn parse_allowed_origins(values: &[String]) -> Result<Vec<Origin>> {
     .collect()
 }
 
+/// Reads the host names browsers may reach RustMail on.
+///
+/// Blank entries are dropped for the same reason as in
+/// [`parse_allowed_origins`].
+fn parse_allowed_hosts(values: &[String]) -> Result<Vec<Hostname>> {
+  values
+    .iter()
+    .map(|value| value.trim())
+    .filter(|value| !value.is_empty())
+    .map(|value| value.parse::<Hostname>().context("invalid --allowed-host"))
+    .collect()
+}
+
 fn parse_bind_addr(bind: &str) -> Result<std::net::IpAddr> {
   bind.parse().map_err(|_| {
     anyhow::anyhow!(
@@ -597,6 +622,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let bind_addr = parse_bind_addr(&args.bind)?;
   let allowed_origins = parse_allowed_origins(&args.allowed_origins)?;
+  let allowed_hosts = parse_allowed_hosts(&args.allowed_hosts)?;
   let smtp_tls =
     build_smtp_tls_config(args.smtp_tls_cert.as_deref(), args.smtp_tls_key.as_deref())?;
 
@@ -632,7 +658,8 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
 
   let state = AppState::new(repo.clone(), ws_tx, release_host, release_port)
-    .with_allowed_origins(allowed_origins.clone());
+    .with_allowed_origins(allowed_origins.clone())
+    .with_allowed_hosts(allowed_hosts.clone());
 
   let smtp_config = SmtpServerConfig {
     host: bind_addr,
@@ -734,6 +761,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     info!(
       origins = %origins.join(", "),
       "WebSocket accepts these origins besides the one it is served from"
+    );
+  }
+  if !allowed_hosts.is_empty() {
+    let hosts: Vec<String> = allowed_hosts.iter().map(Hostname::to_string).collect();
+    info!(
+      hosts = %hosts.join(", "),
+      "Browsers may reach RustMail on these names besides addresses and localhost"
     );
   }
 
@@ -857,6 +891,24 @@ mod allowed_origin_tests {
     assert!(
       parse_allowed_origins(&[String::new()]).unwrap().is_empty(),
       "an empty TOML list and an unset env var must not refuse startup"
+    );
+  }
+
+  #[test]
+  fn reads_every_configured_host() {
+    let hosts = parse_allowed_hosts(&["Mail.Example.com".to_string(), String::new()]).unwrap();
+
+    let spelled: Vec<String> = hosts.iter().map(Hostname::to_string).collect();
+    assert_eq!(spelled, ["mail.example.com"]);
+  }
+
+  #[test]
+  fn a_bad_host_refuses_startup() {
+    let error = parse_allowed_hosts(&["https://mail.example.com".to_string()]).unwrap_err();
+
+    assert!(
+      format!("{error:#}").contains("bare name"),
+      "the failure has to say what to write instead: {error:#}"
     );
   }
 

@@ -20,6 +20,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--log-level` | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`. |
 | `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
 | `--allowed-origin` | `RUSTMAIL_ALLOWED_ORIGINS` | — | Extra origin allowed to open the WebSocket, as `scheme://host[:port]`. Repeat the flag or comma-separate the variable. The origin RustMail is served on is always allowed. |
+| `--allowed-host` | `RUSTMAIL_ALLOWED_HOSTS` | — | Host name browsers may reach RustMail on, as a bare name. Repeat the flag or comma-separate the variable. IP addresses and `localhost` are always answered. |
 | `--config` | — | — | Path to an optional TOML configuration file. |
 
 `STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured; setting only one fails startup. After the client upgrades the connection, it must send `EHLO` again before continuing the session.
@@ -42,6 +43,21 @@ rustmail serve --smtp-tls-cert ./certs/localhost.pem --smtp-tls-key ./certs/loca
 # Allow releasing emails to a specific SMTP server
 rustmail serve --release-host smtp.mailgun.org:587
 
-# Behind a reverse proxy that does not forward the public Host header
+# Behind a reverse proxy serving RustMail at https://mail.example.com
 rustmail serve --allowed-origin https://mail.example.com
 ```
+
+## Hosts and origins
+
+RustMail is a development tool with no authentication, so it takes care not to answer pages it was not opened by.
+
+- **`Host`** decides whether a browser gets an answer at all. An IP address, `localhost` and `*.localhost` always do: neither can be pointed at another machine by someone else's DNS. Any other name — a reverse proxy's public name, a Docker service name, a `.local` name — has to be named with `--allowed-host`, otherwise the request is refused with `403`. This is what closes DNS rebinding, where an attacker's domain is re-pointed at the machine running RustMail and every other check sees a same-origin request.
+- **`Origin`** decides whether a browser may open the WebSocket. The origin RustMail is served on may; others need `--allowed-origin`. See [WebSocket](/features/websocket).
+
+Naming an origin also allows its host, so a reverse-proxy deployment does not have to write the same name twice:
+
+```sh
+rustmail serve --allowed-origin https://mail.example.com
+```
+
+Neither check applies to clients that are not browsers, because DNS rebinding is an attack on browsers alone. A request is taken for a browser's when it carries `Sec-Fetch-*` (which a page cannot strip, and which every engine has sent since March 2023), an `Origin`, or a `Mozilla/` user agent (which covers older browsers). A CI script, `curl`, the TUI and `rustmail-action` match none of those and are answered on any host.
