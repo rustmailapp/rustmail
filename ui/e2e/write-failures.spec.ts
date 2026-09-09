@@ -58,7 +58,7 @@ test("says the message is back when its deletion fails", async ({ page }) => {
   await page.clock.runFor(PAST_UNDO_WINDOW_MS);
 
   await expect(page.getByRole("alert")).toContainText(
-    "Could not delete the message. It is back in the inbox.",
+    "Could not delete \u201CMessage 0\u201D. It is back in the inbox.",
   );
   await expect(row(page, id)).toHaveCount(1);
 });
@@ -76,7 +76,7 @@ test("says the star did not land", async ({ page }) => {
   await page.keyboard.press("s");
 
   await expect(page.getByRole("alert")).toContainText(
-    "Could not star the message.",
+    "Could not star \u201CMessage 0\u201D.",
   );
 });
 

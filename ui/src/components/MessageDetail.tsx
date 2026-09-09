@@ -81,6 +81,25 @@ function failed(resource: Resource<unknown>): boolean {
   return resource.state === "errored";
 }
 
+/**
+ * The contract mismatch a read failed on, if that is what it failed on.
+ *
+ * Worth telling apart from a transient failure, because the two ask for
+ * opposite things. A request that drifted from the schema will drift the same
+ * way every time, so a retry cannot fix it; reloading can, since a tab left
+ * open across a server upgrade holds an interface the new binary no longer
+ * serves.
+ */
+function mismatch(resource: Resource<unknown>): api.ResponseShapeError | null {
+  if (resource.state !== "errored") return null;
+  const error: unknown = resource.error;
+  return error instanceof api.ResponseShapeError ? error : null;
+}
+
+function reloadPage(): void {
+  location.reload();
+}
+
 const TAB_LABELS: Record<Tab, string> = {
   html: "HTML",
   text: "Text",
@@ -279,14 +298,32 @@ export default function MessageDetail() {
 
               <Show when={failed(attachments)}>
                 <div class="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
-                  <span>Could not load attachments.</span>
-                  <button
-                    onClick={refetchAttachments}
-                    aria-label="Retry loading attachments"
-                    class="font-medium underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                  <Show
+                    when={mismatch(attachments)}
+                    fallback={
+                      <>
+                        <span>Could not load attachments.</span>
+                        <button
+                          onClick={refetchAttachments}
+                          aria-label="Retry loading attachments"
+                          class="font-medium underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                        >
+                          Retry
+                        </button>
+                      </>
+                    }
                   >
-                    Retry
-                  </button>
+                    <span>
+                      This page does not match the server it is talking to.
+                    </span>
+                    <button
+                      onClick={reloadPage}
+                      aria-label="Reload the page"
+                      class="font-medium underline underline-offset-2 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+                    >
+                      Reload
+                    </button>
+                  </Show>
                 </div>
               </Show>
 
@@ -413,6 +450,9 @@ export default function MessageDetail() {
   );
 }
 
+const RECOVERY_BUTTON_CLASS =
+  "mt-2 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer";
+
 /** The pane's placeholder for a read that is still running, or that failed. */
 function ReadState(props: {
   resource: Resource<unknown>;
@@ -424,16 +464,37 @@ function ReadState(props: {
       when={failed(props.resource)}
       fallback={<div class="p-4 text-zinc-500 text-sm">Loading...</div>}
     >
-      <div class="p-4 text-sm text-zinc-500 dark:text-zinc-400">
-        <p>Could not load {props.label}.</p>
-        <button
-          onClick={props.onRetry}
-          aria-label={`Retry loading ${props.label}`}
-          class="mt-2 rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition cursor-pointer"
-        >
-          Retry
-        </button>
-      </div>
+      <Show
+        when={mismatch(props.resource)}
+        fallback={
+          <div class="p-4 text-sm text-zinc-500 dark:text-zinc-400">
+            <p>Could not load {props.label}.</p>
+            <button
+              onClick={props.onRetry}
+              aria-label={`Retry loading ${props.label}`}
+              class={RECOVERY_BUTTON_CLASS}
+            >
+              Retry
+            </button>
+          </div>
+        }
+      >
+        {(drift) => (
+          <div class="p-4 text-sm text-zinc-500 dark:text-zinc-400">
+            <p>This page does not match the server it is talking to.</p>
+            <p class="mt-1 font-mono text-xs break-all text-zinc-400 dark:text-zinc-500">
+              {drift().message}
+            </p>
+            <button
+              onClick={reloadPage}
+              aria-label="Reload the page"
+              class={RECOVERY_BUTTON_CLASS}
+            >
+              Reload
+            </button>
+          </div>
+        )}
+      </Show>
     </Show>
   );
 }

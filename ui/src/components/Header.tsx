@@ -1,5 +1,10 @@
 import { Show } from "solid-js";
-import { clearInbox, total, visibleMessages } from "../stores/messages";
+import {
+  clearInbox,
+  clearInboxPrompt,
+  total,
+  visibleMessages,
+} from "../stores/messages";
 import { toggleSettings } from "../stores/settings";
 import { confirm } from "./ConfirmDialog";
 
@@ -48,11 +53,7 @@ export default function Header() {
         <Show when={visibleMessages().length > 0}>
           <button
             onClick={async () => {
-              const ok = await confirm({
-                title: "Clear all messages",
-                message: `All ${total()} messages will be permanently deleted.`,
-                confirmLabel: "Clear all",
-              });
+              const ok = await confirm(clearInboxPrompt());
               if (ok) await clearInbox();
             }}
             class="btn-destructive rounded-md border px-2.5 py-1 text-xs font-medium transition cursor-pointer"

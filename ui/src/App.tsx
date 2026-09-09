@@ -21,6 +21,7 @@ import {
   selectMessage,
   starMessage,
   clearInbox,
+  clearInboxPrompt,
   moveSelection,
   deleteWithUndo,
   flushPendingDelete,
@@ -73,13 +74,8 @@ export default function App() {
         break;
       }
       case "D": {
-        const count = total();
-        if (count === 0) break;
-        confirm({
-          title: "Clear all messages",
-          message: `All ${count} messages will be permanently deleted.`,
-          confirmLabel: "Clear all",
-        }).then(async (ok) => {
+        if (total() === 0) break;
+        confirm(clearInboxPrompt()).then(async (ok) => {
           if (ok) await clearInbox();
         });
         break;

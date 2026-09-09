@@ -123,9 +123,8 @@ async function fetchJson<S extends z.ZodMiniType>(
   url: string,
   shape: S,
   init?: RequestInit,
-  timeoutMs = REQUEST_TIMEOUT_MS,
 ): Promise<z.infer<S>> {
-  return withDeadline(init?.signal, timeoutMs, async (signal) => {
+  return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);
@@ -134,12 +133,8 @@ async function fetchJson<S extends z.ZodMiniType>(
   });
 }
 
-async function fetchText(
-  url: string,
-  init?: RequestInit,
-  timeoutMs = REQUEST_TIMEOUT_MS,
-): Promise<string> {
-  return withDeadline(init?.signal, timeoutMs, async (signal) => {
+async function fetchText(url: string, init?: RequestInit): Promise<string> {
+  return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
     if (!res.ok) {
       throw new Error(`API error: ${res.status} ${res.statusText}`);

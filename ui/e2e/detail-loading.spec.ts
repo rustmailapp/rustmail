@@ -230,3 +230,102 @@ test("cancels a read the selection has already moved past", async ({
   expect(errors).toEqual([]);
   release();
 });
+
+/** A message body whose `size` drifted from the schema the UI holds. */
+function driftedMessage(): Record<string, unknown> {
+  return {
+    id: "msg-0000",
+    sender: "sender-0@example.test",
+    recipients: ["inbox@example.test"],
+    subject: "Message 0",
+    size: "2048 bytes",
+    has_attachments: false,
+    is_read: false,
+    is_starred: false,
+    tags: [],
+    created_at: "2026-01-01T00:00:00Z",
+    text_body: "Body",
+    html_body: null,
+  };
+}
+
+test("offers a reload, not a retry, when the response drifted", async ({
+  page,
+}) => {
+  await mockInbox(page, 5);
+  await page.route(readPattern(""), async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: driftedMessage() });
+  });
+
+  await openFirstMessage(page);
+
+  await expect(
+    page.getByText("This page does not match the server it is talking to."),
+  ).toBeVisible();
+  await expect(
+    page.getByText(
+      "GET /messages/{id} returned an unexpected shape: size should be number",
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry loading this message" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Reload the page" }),
+  ).toBeVisible();
+});
+
+test("the reload button actually reloads", async ({ page }) => {
+  await mockInbox(page, 5);
+  await page.route(readPattern(""), async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: driftedMessage() });
+  });
+  await openFirstMessage(page);
+  const reload = page.getByRole("button", { name: "Reload the page" });
+  await expect(reload).toBeVisible();
+
+  const navigated = page.waitForEvent("framenavigated");
+  await reload.click();
+
+  await navigated;
+});
+
+test("still offers a retry when the read merely failed", async ({ page }) => {
+  await mockInbox(page, 5);
+  const release = await stallFirstRead(page, MESSAGE_READ);
+
+  await openFirstMessage(page);
+  await page.clock.runFor(REQUEST_TIMEOUT_MS);
+
+  await expect(
+    page.getByRole("button", { name: "Retry loading this message" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Reload the page" }),
+  ).toHaveCount(0);
+  release();
+});
+
+test("says the attachments strip drifted instead of offering a retry", async ({
+  page,
+}) => {
+  await mockInbox(page, 5);
+  await page.route(readPattern("/attachments"), async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    return route.fulfill({ json: [{ id: "att-0" }] });
+  });
+
+  await openFirstMessage(page);
+
+  await expect(
+    page.getByText("This page does not match the server it is talking to."),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry loading attachments" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Reload the page" }),
+  ).toBeVisible();
+});

@@ -25,6 +25,7 @@ vi.mock("../lib/api", () => ({
 }));
 
 const {
+  NOTICE_SUBJECT_MAX,
   UNDO_WINDOW_MS,
   clearFilters,
   clearInbox,
@@ -471,7 +472,7 @@ describe("deleteWithUndo", () => {
     await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
 
     expect(notices().map((n) => n.text)).toEqual([
-      "Could not delete the message. It is back in the inbox.",
+      "Could not delete \u201CSubject 0\u201D. It is back in the inbox.",
     ]);
   });
 
@@ -588,7 +589,34 @@ describe("WebSocket events", () => {
 });
 
 describe("starMessage", () => {
-  it("says so when starring does not land", async () => {
+  it("names the message that could not be starred", async () => {
+    await seed(range(2));
+    markStarred.mockRejectedValue(new Error("offline"));
+
+    starMessage("id-0", true);
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not star \u201CSubject 0\u201D.",
+      ]),
+    );
+  });
+
+  it("names unstarring when that is what failed", async () => {
+    await seed(range(2));
+    markStarred.mockRejectedValue(new Error("offline"));
+
+    starMessage("id-0", false);
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not unstar \u201CSubject 0\u201D.",
+      ]),
+    );
+  });
+
+  it("falls back to a plain noun when the message has no subject", async () => {
+    await seed([message(0, { subject: null })]);
     markStarred.mockRejectedValue(new Error("offline"));
 
     starMessage("id-0", true);
@@ -600,16 +628,31 @@ describe("starMessage", () => {
     );
   });
 
-  it("names unstarring when that is what failed", async () => {
+  it("trims a subject too long to sit in a notice", async () => {
+    const subject = "x".repeat(NOTICE_SUBJECT_MAX * 2);
+    await seed([message(0, { subject })]);
     markStarred.mockRejectedValue(new Error("offline"));
 
-    starMessage("id-0", false);
+    starMessage("id-0", true);
 
-    await vi.waitFor(() =>
-      expect(notices().map((n) => n.text)).toEqual([
-        "Could not unstar the message.",
-      ]),
+    await vi.waitFor(() => expect(notices()).toHaveLength(1));
+    expect(notices()[0]?.text).toBe(
+      `Could not star \u201C${"x".repeat(NOTICE_SUBJECT_MAX)}\u2026\u201D.`,
     );
+  });
+
+  it("cuts a long subject on a character, not half an emoji", async () => {
+    const subject = "\u{1F4E7}".repeat(NOTICE_SUBJECT_MAX * 2);
+    await seed([message(0, { subject })]);
+    markStarred.mockRejectedValue(new Error("offline"));
+
+    starMessage("id-0", true);
+
+    await vi.waitFor(() => expect(notices()).toHaveLength(1));
+    expect(notices()[0]?.text).toBe(
+      `Could not star \u201C${"\u{1F4E7}".repeat(NOTICE_SUBJECT_MAX)}\u2026\u201D.`,
+    );
+    expect(notices()[0]?.text).not.toContain("\uFFFD");
   });
 
   it("stays quiet when the write lands", async () => {
@@ -636,5 +679,22 @@ describe("clearInbox", () => {
 
     expect(deleteAllMessages).toHaveBeenCalled();
     expect(notices()).toEqual([]);
+  });
+});
+
+describe("read notices", () => {
+  it("stays generic so a walk down the list does not stack them", async () => {
+    await seed(range(3));
+    markRead.mockRejectedValue(new Error("offline"));
+
+    selectMessage(message(0));
+    selectMessage(message(1));
+    selectMessage(message(2));
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not mark the message as read.",
+      ]),
+    );
   });
 });
