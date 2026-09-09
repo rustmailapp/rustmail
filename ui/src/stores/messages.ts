@@ -1,4 +1,5 @@
 import { createSignal, createMemo } from "solid-js";
+import type { ConfirmDialogOptions } from "../components/ConfirmDialog";
 import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
 import * as api from "../lib/api";
 import * as schema from "../lib/schema";
@@ -128,6 +129,15 @@ function selectMessage(msg: MessageSummary): void {
       .markRead(msg.id, true)
       .catch(() => notify("Could not mark the message as read."));
   }
+}
+
+/** What a whole-inbox delete asks before it runs. */
+function clearInboxPrompt(): ConfirmDialogOptions {
+  return {
+    title: "Clear all messages",
+    message: `All ${total()} messages will be permanently deleted.`,
+    confirmLabel: "Clear all",
+  };
 }
 
 /** Deletes every message, saying so when the write does not land. */
@@ -424,6 +434,7 @@ export {
   selectMessage,
   starMessage,
   clearInbox,
+  clearInboxPrompt,
   moveSelection,
   deleteWithUndo,
   undoDelete,
