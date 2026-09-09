@@ -7,7 +7,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{error, info, warn};
 
-use crate::message::ReceivedMessage;
+use crate::message::Delivery;
 use crate::session::Session;
 
 const MAX_CONCURRENT_SESSIONS: usize = 100;
@@ -53,12 +53,12 @@ impl Default for SmtpServerConfig {
 /// and one that keeps delivering is not disconnected mid-send.
 pub struct SmtpServer {
   config: SmtpServerConfig,
-  sender: mpsc::Sender<ReceivedMessage>,
+  sender: mpsc::Sender<Delivery>,
 }
 
 impl SmtpServer {
   /// Creates a new server with the given configuration and broadcast sender.
-  pub fn new(config: SmtpServerConfig, sender: mpsc::Sender<ReceivedMessage>) -> Self {
+  pub fn new(config: SmtpServerConfig, sender: mpsc::Sender<Delivery>) -> Self {
     Self { config, sender }
   }
 

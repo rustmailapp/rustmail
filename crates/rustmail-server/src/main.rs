@@ -11,8 +11,8 @@ use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
 use rustmail_api::{AppState, WsEvent};
-use rustmail_smtp::{ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig};
-use rustmail_storage::{MessageRepository, format_iso8601, initialize_database};
+use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
+use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
 
 #[derive(Parser)]
 #[command(
@@ -245,7 +245,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
   initialize_database(&pool).await?;
 
   let repo = MessageRepository::new(pool);
-  let (smtp_tx, mut smtp_rx) = mpsc::channel::<ReceivedMessage>(256);
+  let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
 
   let smtp_config = SmtpServerConfig {
     host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
@@ -269,28 +269,21 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
   let checker = {
     let repo = repo.clone();
     tokio::spawn(async move {
-      while let Some(received) = smtp_rx.recv().await {
-        match repo
-          .insert(&received.sender, &received.recipients, &received.raw)
+      while let Some(delivery) = smtp_rx.recv().await {
+        if store_delivery(&repo, delivery).await.is_none() {
+          continue;
+        }
+        let count = repo
+          .count_matching(
+            subject_filter.as_deref(),
+            sender_filter.as_deref(),
+            recipient_filter.as_deref(),
+          )
           .await
-        {
-          Ok(_) => {
-            let count = repo
-              .count_matching(
-                subject_filter.as_deref(),
-                sender_filter.as_deref(),
-                recipient_filter.as_deref(),
-              )
-              .await
-              .unwrap_or(0);
-            if count as u64 >= min_count {
-              info!(count, "Assert criteria met");
-              return true;
-            }
-          }
-          Err(e) => {
-            tracing::error!(error = %e, "Dropped a message: the SMTP session was already accepted and storing it failed")
-          }
+          .unwrap_or(0);
+        if count as u64 >= min_count {
+          info!(count, "Assert criteria met");
+          return true;
         }
       }
       false
@@ -335,6 +328,31 @@ fn default_db_path() -> PathBuf {
 
 const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
 const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+
+/// Stores a captured message and tells the waiting SMTP session what happened.
+///
+/// The session holds its reply until this answers, so the acknowledgement goes
+/// out the moment the write settles and ahead of anything downstream. Only a
+/// stored message yields a summary; a refused one is reported to the sender as
+/// a temporary failure, which is the whole point of waiting — a catcher that
+/// answered on the hand-off would lose it instead.
+async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<MessageSummary> {
+  let (received, ack) = delivery.into_parts();
+  match repo
+    .insert(&received.sender, &received.recipients, &received.raw)
+    .await
+  {
+    Ok(summary) => {
+      ack.stored();
+      Some(summary)
+    }
+    Err(e) => {
+      ack.rejected();
+      tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
+      None
+    }
+  }
+}
 
 /// Opens a SQLite connection pool for `db_url`.
 ///
@@ -582,7 +600,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let release_port: Option<u16> = release_port.flatten();
 
   let repo = MessageRepository::new(pool);
-  let (smtp_tx, mut smtp_rx) = mpsc::channel::<ReceivedMessage>(256);
+  let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
   let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
 
   let state = AppState::new(repo.clone(), ws_tx, release_host, release_port);
@@ -607,39 +625,32 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     let repo = repo.clone();
     let state = state.clone();
     tokio::spawn(async move {
-      while let Some(received) = smtp_rx.recv().await {
-        match repo
-          .insert(&received.sender, &received.recipients, &received.raw)
-          .await
-        {
-          Ok(summary) => {
-            state.broadcast(WsEvent::MessageNew(summary.clone()));
+      while let Some(delivery) = smtp_rx.recv().await {
+        let Some(summary) = store_delivery(&repo, delivery).await else {
+          continue;
+        };
+        state.broadcast(WsEvent::MessageNew(summary.clone()));
 
-            if let (Some(client), Some(url)) = (&webhook_client, &webhook_url) {
-              let client = client.clone();
-              let url = url.clone();
-              let payload = summary;
-              let sem = webhook_semaphore.clone();
-              tokio::spawn(async move {
-                let _permit = match sem.acquire().await {
-                  Ok(p) => p,
-                  Err(_) => return,
-                };
-                if let Err(e) = client
-                  .post(&url)
-                  .json(&payload)
-                  .timeout(std::time::Duration::from_secs(5))
-                  .send()
-                  .await
-                {
-                  tracing::warn!(error = %e, "Webhook delivery failed");
-                }
-              });
+        if let (Some(client), Some(url)) = (&webhook_client, &webhook_url) {
+          let client = client.clone();
+          let url = url.clone();
+          let payload = summary;
+          let sem = webhook_semaphore.clone();
+          tokio::spawn(async move {
+            let _permit = match sem.acquire().await {
+              Ok(p) => p,
+              Err(_) => return,
+            };
+            if let Err(e) = client
+              .post(&url)
+              .json(&payload)
+              .timeout(std::time::Duration::from_secs(5))
+              .send()
+              .await
+            {
+              tracing::warn!(error = %e, "Webhook delivery failed");
             }
-          }
-          Err(e) => {
-            tracing::error!(error = %e, "Dropped a message: the SMTP session was already accepted and storing it failed");
-          }
+          });
         }
       }
     })
@@ -736,6 +747,56 @@ mod version_tests {
   #[test]
   fn resolves_a_non_empty_version() {
     assert!(!env!("RUSTMAIL_BUILD_VERSION").is_empty());
+  }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+  use super::*;
+  use rustmail_smtp::{DeliveryOutcome, ReceivedMessage};
+
+  fn sample() -> ReceivedMessage {
+    ReceivedMessage {
+      sender: "alice@test.com".to_string(),
+      recipients: vec!["bob@test.com".to_string()],
+      raw: b"Subject: Hello\r\n\r\nbody\r\n".to_vec(),
+    }
+  }
+
+  #[tokio::test]
+  async fn a_stored_message_lets_the_session_accept_it() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+
+    let (delivery, verdict) = Delivery::new(sample());
+    let summary = store_delivery(&repo, delivery).await;
+
+    assert!(summary.is_some(), "a healthy store must yield a summary");
+    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
+  }
+
+  /// A write the store will not take must reach the sender as a refusal.
+  ///
+  /// Closing the pool is the fast stand-in for the cases that produce this in
+  /// the wild — a lock outlasting the retry budget, a full disk, an I/O error.
+  /// Before the session waited on this verdict, the message was accepted over
+  /// SMTP and then lost with only a log line to show for it.
+  #[tokio::test]
+  async fn a_refused_message_is_not_accepted_over_smtp() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+    pool.close().await;
+
+    let (delivery, verdict) = Delivery::new(sample());
+    let summary = store_delivery(&repo, delivery).await;
+
+    assert!(
+      summary.is_none(),
+      "a refused write must not yield a summary"
+    );
+    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Rejected);
   }
 }
 
