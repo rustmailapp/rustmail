@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
-use rustmail_api::{AppState, WsEvent};
+use rustmail_api::{AppState, Origin, WsEvent};
 use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
 
@@ -81,6 +81,14 @@ struct ServeArgs {
   #[arg(long, env = "RUSTMAIL_RELEASE_HOST")]
   release_host: Option<String>,
 
+  /// Extra origin allowed to open the WebSocket, e.g. https://mail.example.com
+  #[arg(
+    long = "allowed-origin",
+    env = "RUSTMAIL_ALLOWED_ORIGINS",
+    value_delimiter = ','
+  )]
+  allowed_origins: Vec<String>,
+
   #[arg(long)]
   config: Option<String>,
 }
@@ -137,6 +145,7 @@ struct TomlConfig {
   log_level: Option<String>,
   webhook_url: Option<String>,
   release_host: Option<String>,
+  allowed_origins: Option<Vec<String>>,
 }
 
 fn apply_toml_to_env(config: &TomlConfig) {
@@ -184,6 +193,9 @@ fn apply_toml_to_env(config: &TomlConfig) {
   }
   if let Some(v) = &config.release_host {
     set_if_absent("RUSTMAIL_RELEASE_HOST", v);
+  }
+  if let Some(v) = &config.allowed_origins {
+    set_if_absent("RUSTMAIL_ALLOWED_ORIGINS", &v.join(","));
   }
 }
 
@@ -495,6 +507,21 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
   }
 }
 
+/// Reads the configured WebSocket origins, refusing startup on a bad one.
+///
+/// A misspelled origin would otherwise fail silently at handshake time, which
+/// is the wrong place to learn about it. Blank entries are dropped rather than
+/// refused: an empty TOML list and an unset `RUSTMAIL_ALLOWED_ORIGINS` both
+/// reach clap as one empty value, and both mean no origin was configured.
+fn parse_allowed_origins(values: &[String]) -> Result<Vec<Origin>> {
+  values
+    .iter()
+    .map(|value| value.trim())
+    .filter(|value| !value.is_empty())
+    .map(|value| value.parse::<Origin>().context("invalid --allowed-origin"))
+    .collect()
+}
+
 fn parse_bind_addr(bind: &str) -> Result<std::net::IpAddr> {
   bind.parse().map_err(|_| {
     anyhow::anyhow!(
@@ -569,6 +596,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     .init();
 
   let bind_addr = parse_bind_addr(&args.bind)?;
+  let allowed_origins = parse_allowed_origins(&args.allowed_origins)?;
   let smtp_tls =
     build_smtp_tls_config(args.smtp_tls_cert.as_deref(), args.smtp_tls_key.as_deref())?;
 
@@ -603,7 +631,8 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
   let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
 
-  let state = AppState::new(repo.clone(), ws_tx, release_host, release_port);
+  let state = AppState::new(repo.clone(), ws_tx, release_host, release_port)
+    .with_allowed_origins(allowed_origins.clone());
 
   let smtp_config = SmtpServerConfig {
     host: bind_addr,
@@ -699,6 +728,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
   if let Some(ref host) = args.release_host {
     info!(host = %host, "Email release enabled");
+  }
+  if !allowed_origins.is_empty() {
+    let origins: Vec<String> = allowed_origins.iter().map(Origin::to_string).collect();
+    info!(
+      origins = %origins.join(", "),
+      "WebSocket accepts these origins besides the one it is served from"
+    );
   }
 
   let app = rustmail_api::router(state);
@@ -797,6 +833,41 @@ mod delivery_tests {
       "a refused write must not yield a summary"
     );
     assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Rejected);
+  }
+}
+
+#[cfg(test)]
+mod allowed_origin_tests {
+  use super::*;
+
+  #[test]
+  fn reads_every_configured_origin() {
+    let origins = parse_allowed_origins(&[
+      "https://mail.example.com".to_string(),
+      "http://ui.test:3000".to_string(),
+    ])
+    .unwrap();
+
+    let spelled: Vec<String> = origins.iter().map(Origin::to_string).collect();
+    assert_eq!(spelled, ["https://mail.example.com", "http://ui.test:3000"]);
+  }
+
+  #[test]
+  fn an_empty_list_configures_no_origin() {
+    assert!(
+      parse_allowed_origins(&[String::new()]).unwrap().is_empty(),
+      "an empty TOML list and an unset env var must not refuse startup"
+    );
+  }
+
+  #[test]
+  fn a_bad_origin_refuses_startup() {
+    let error = parse_allowed_origins(&["mail.example.com".to_string()]).unwrap_err();
+
+    assert!(
+      format!("{error:#}").contains("must start with http:// or https://"),
+      "the failure has to say what to write instead: {error:#}"
+    );
   }
 }
 

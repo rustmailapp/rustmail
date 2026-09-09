@@ -19,6 +19,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--webhook-url` | `RUSTMAIL_WEBHOOK_URL` | — | HTTP endpoint to POST to on every new message. |
 | `--log-level` | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`. |
 | `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
+| `--allowed-origin` | `RUSTMAIL_ALLOWED_ORIGINS` | — | Extra origin allowed to open the WebSocket, as `scheme://host[:port]`. Repeat the flag or comma-separate the variable. The origin RustMail is served on is always allowed. |
 | `--config` | — | — | Path to an optional TOML configuration file. |
 
 `STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured; setting only one fails startup. After the client upgrades the connection, it must send `EHLO` again before continuing the session.
@@ -40,4 +41,7 @@ rustmail serve --smtp-tls-cert ./certs/localhost.pem --smtp-tls-key ./certs/loca
 
 # Allow releasing emails to a specific SMTP server
 rustmail serve --release-host smtp.mailgun.org:587
+
+# Behind a reverse proxy that does not forward the public Host header
+rustmail serve --allowed-origin https://mail.example.com
 ```

@@ -1,12 +1,18 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rustmail_api::{AppState, WsEvent, router};
+use rustmail_api::{AppState, Origin, WsEvent, router};
 use rustmail_storage::{MessageRepository, initialize_database};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 async fn setup() -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+  setup_with_allowed_origins(Vec::new()).await
+}
+
+async fn setup_with_allowed_origins(
+  origins: Vec<Origin>,
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .connect("sqlite::memory:")
     .await
@@ -15,7 +21,7 @@ async fn setup() -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>
 
   let repo = MessageRepository::new(pool);
   let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
-  let state = AppState::new(repo.clone(), ws_tx.clone(), None, None);
+  let state = AppState::new(repo.clone(), ws_tx.clone(), None, None).with_allowed_origins(origins);
   let app = router(state);
 
   (app, repo, ws_tx)
@@ -1385,5 +1391,114 @@ async fn header_endpoint_reads_headers_longer_than_the_prefix_window() {
   assert!(
     names.contains(&"X-Last"),
     "a header past the prefix window was dropped"
+  );
+}
+
+const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const SWITCHING_PROTOCOLS: u16 = 101;
+const FORBIDDEN: u16 = 403;
+
+/// Serves `app` on a loopback port, since a WebSocket handshake only reaches
+/// its verdict over a real connection.
+async fn serve_router(app: axum::Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let server = tokio::spawn(async move {
+    let _ = axum::serve(listener, app).await;
+  });
+
+  (addr, server)
+}
+
+/// Opens a handshake against `/api/v1/ws` and reads back its status code.
+async fn ws_handshake_status(addr: std::net::SocketAddr, origin: Option<&str>) -> u16 {
+  use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+  let origin_header = origin
+    .map(|o| format!("Origin: {o}\r\n"))
+    .unwrap_or_default();
+  let request = format!(
+    "GET /api/v1/ws HTTP/1.1\r\n\
+     Host: {addr}\r\n\
+     Connection: Upgrade\r\n\
+     Upgrade: websocket\r\n\
+     Sec-WebSocket-Version: 13\r\n\
+     Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+     {origin_header}\r\n"
+  );
+
+  let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+  stream.write_all(request.as_bytes()).await.unwrap();
+
+  let mut status_line = String::new();
+  tokio::time::timeout(
+    HANDSHAKE_TIMEOUT,
+    BufReader::new(stream).read_line(&mut status_line),
+  )
+  .await
+  .expect("the server left the handshake unanswered")
+  .unwrap();
+
+  status_line
+    .split_whitespace()
+    .nth(1)
+    .and_then(|code| code.parse().ok())
+    .unwrap_or_else(|| panic!("not an HTTP status line: {status_line:?}"))
+}
+
+#[tokio::test]
+async fn ws_handshake_without_an_origin_upgrades() {
+  let (app, _, _) = setup().await;
+  let (addr, server) = serve_router(app).await;
+
+  let status = ws_handshake_status(addr, None).await;
+  server.abort();
+
+  assert_eq!(
+    status, SWITCHING_PROTOCOLS,
+    "the TUI, websocat and CI clients send no Origin at all"
+  );
+}
+
+#[tokio::test]
+async fn ws_handshake_from_the_served_origin_upgrades() {
+  let (app, _, _) = setup().await;
+  let (addr, server) = serve_router(app).await;
+
+  let status = ws_handshake_status(addr, Some(&format!("http://{addr}"))).await;
+  server.abort();
+
+  assert_eq!(
+    status, SWITCHING_PROTOCOLS,
+    "the bundled UI is served from this very origin"
+  );
+}
+
+#[tokio::test]
+async fn ws_handshake_from_a_foreign_origin_is_refused() {
+  let (app, _, _) = setup().await;
+  let (addr, server) = serve_router(app).await;
+
+  let status = ws_handshake_status(addr, Some("http://untrusted.example.test")).await;
+  server.abort();
+
+  assert_eq!(
+    status, FORBIDDEN,
+    "any page the browser has open could otherwise subscribe to inbox events"
+  );
+}
+
+#[tokio::test]
+async fn ws_handshake_from_a_configured_origin_upgrades() {
+  let (app, _, _) =
+    setup_with_allowed_origins(vec!["https://mail.example.com".parse().unwrap()]).await;
+  let (addr, server) = serve_router(app).await;
+
+  let status = ws_handshake_status(addr, Some("https://mail.example.com")).await;
+  server.abort();
+
+  assert_eq!(
+    status, SWITCHING_PROTOCOLS,
+    "behind a reverse proxy the browser's origin is the proxy's public one"
   );
 }

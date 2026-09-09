@@ -7,8 +7,10 @@
 //! - **WebSocket** — Real-time push for new messages, deletions, and read-state changes
 //! - **Embedded UI** — SolidJS frontend served as static files via [`rust_embed`]
 //!
-//! No CORS headers are sent, so browsers block all cross-origin access to the API;
-//! the bundled UI is served same-origin. Security layers include
+//! No CORS headers are sent, so a browser will not hand a cross-origin page the
+//! response to a REST call; the bundled UI is served same-origin. The WebSocket
+//! handshake is not governed by CORS, so it carries its own origin check —
+//! see [`Origin`] and `--allowed-origin`. Security layers include
 //! `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 //! `Referrer-Policy: no-referrer`, and semaphore-based WebSocket connection limits.
 //!
@@ -31,10 +33,12 @@
 //! ```
 
 mod handlers;
+mod origin;
 mod state;
 mod static_files;
 mod ws;
 
+pub use origin::{Origin, OriginError};
 pub use state::{AppState, WsEvent};
 
 use axum::Router;

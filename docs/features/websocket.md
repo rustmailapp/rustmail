@@ -90,6 +90,25 @@ Fired when all messages are deleted. This event has no `data` field.
 { "type": "messages:clear" }
 ```
 
+## Origin Check
+
+The WebSocket handshake is not covered by CORS, so RustMail checks it itself. A handshake that carries an `Origin` header is answered `403 Forbidden` unless the origin is either:
+
+- the one RustMail is reached at — the address in the browser's own `Host` header, which is what the bundled UI sends; or
+- one passed to `--allowed-origin` (repeatable, or comma-separated in `RUSTMAIL_ALLOWED_ORIGINS`).
+
+Without this, any page open in the same browser could subscribe to the event stream and read sender, recipients and subject of every incoming email.
+
+The comparison is against the address the browser dialled, so it does not by itself stop DNS rebinding — a page whose own hostname is re-pointed at the machine running RustMail keeps a matching origin. RustMail is a development tool and does not defend against that.
+
+Clients that send **no** `Origin` header at all — the TUI, `websocat`, CI scripts, anything that is not a browser — are unaffected. Browsers do not let a page omit or forge the header, so its absence is only ever a non-browser client.
+
+Behind a reverse proxy, name the public origin explicitly unless the proxy forwards the browser's `Host`:
+
+```sh
+rustmail serve --allowed-origin https://mail.example.com
+```
+
 ## Connection Limits
 
 A maximum of **50 concurrent WebSocket connections** is enforced. New connections beyond this limit receive `503 Service Unavailable`.
