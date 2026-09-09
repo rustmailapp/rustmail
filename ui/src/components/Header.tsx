@@ -1,7 +1,6 @@
 import { Show } from "solid-js";
-import { total, visibleMessages } from "../stores/messages";
+import { clearInbox, total, visibleMessages } from "../stores/messages";
 import { toggleSettings } from "../stores/settings";
-import * as api from "../lib/api";
 import { confirm } from "./ConfirmDialog";
 
 export default function Header() {
@@ -54,7 +53,7 @@ export default function Header() {
                 message: `All ${total()} messages will be permanently deleted.`,
                 confirmLabel: "Clear all",
               });
-              if (ok) await api.deleteAllMessages();
+              if (ok) await clearInbox();
             }}
             class="btn-destructive rounded-md border px-2.5 py-1 text-xs font-medium transition cursor-pointer"
           >

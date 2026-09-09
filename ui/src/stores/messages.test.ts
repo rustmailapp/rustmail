@@ -1,17 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageSummary } from "../lib/types";
+import { dismissNotice, notices } from "./notices";
 
-const { deleteMessage, listMessages, markRead } = vi.hoisted(() => ({
+const {
+  deleteAllMessages,
+  deleteMessage,
+  listMessages,
+  markRead,
+  markStarred,
+} = vi.hoisted(() => ({
+  deleteAllMessages: vi.fn(),
   deleteMessage: vi.fn(),
   listMessages: vi.fn(),
   markRead: vi.fn(),
+  markStarred: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({ deleteMessage, listMessages, markRead }));
+vi.mock("../lib/api", () => ({
+  deleteAllMessages,
+  deleteMessage,
+  listMessages,
+  markRead,
+  markStarred,
+}));
 
 const {
   UNDO_WINDOW_MS,
   clearFilters,
+  clearInbox,
   connectWebSocket,
   disconnectWebSocket,
   deleteWithUndo,
@@ -21,6 +37,7 @@ const {
   moveSelection,
   selectMessage,
   selectedId,
+  starMessage,
   setSearch,
   setSelectedId,
   toggleFilter,
@@ -59,9 +76,12 @@ function range(count: number): MessageSummary[] {
 
 beforeEach(async () => {
   undoDelete();
+  for (const notice of notices()) dismissNotice(notice.id);
   vi.clearAllMocks();
   markRead.mockResolvedValue(undefined);
+  markStarred.mockResolvedValue(undefined);
   deleteMessage.mockResolvedValue(undefined);
+  deleteAllMessages.mockResolvedValue(undefined);
   setSearch("");
   clearFilters();
   setSelectedId(null);
@@ -235,15 +255,17 @@ describe("selectMessage", () => {
     expect(markRead).not.toHaveBeenCalled();
   });
 
-  it("keeps the selection when the read write fails", async () => {
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("keeps the selection when the read write fails, and says so", async () => {
     markRead.mockRejectedValue(new Error("offline"));
 
     selectMessage(message(7));
-    await vi.waitFor(() => expect(logged).toHaveBeenCalled());
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not mark the message as read.",
+      ]),
+    );
 
     expect(selectedId()).toBe("id-7");
-    logged.mockRestore();
   });
 });
 
@@ -441,6 +463,18 @@ describe("deleteWithUndo", () => {
     expect(total()).toBe(2);
   });
 
+  it("says why the message came back when the DELETE fails", async () => {
+    deleteMessage.mockRejectedValue(new Error("unreachable"));
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not delete the message. It is back in the inbox.",
+    ]);
+  });
+
   it("does nothing once the undo window has closed", async () => {
     await seed(range(2));
 
@@ -550,5 +584,57 @@ describe("WebSocket events", () => {
     );
 
     expect(JSON.stringify(logged.mock.calls)).not.toContain("Board pack Q3");
+  });
+});
+
+describe("starMessage", () => {
+  it("says so when starring does not land", async () => {
+    markStarred.mockRejectedValue(new Error("offline"));
+
+    starMessage("id-0", true);
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not star the message.",
+      ]),
+    );
+  });
+
+  it("names unstarring when that is what failed", async () => {
+    markStarred.mockRejectedValue(new Error("offline"));
+
+    starMessage("id-0", false);
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not unstar the message.",
+      ]),
+    );
+  });
+
+  it("stays quiet when the write lands", async () => {
+    starMessage("id-0", true);
+
+    await vi.waitFor(() => expect(markStarred).toHaveBeenCalled());
+    expect(notices()).toEqual([]);
+  });
+});
+
+describe("clearInbox", () => {
+  it("says so when the whole-inbox delete does not land", async () => {
+    deleteAllMessages.mockRejectedValue(new Error("offline"));
+
+    await clearInbox();
+
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not clear the inbox. The messages are still here.",
+    ]);
+  });
+
+  it("stays quiet when the inbox clears", async () => {
+    await clearInbox();
+
+    expect(deleteAllMessages).toHaveBeenCalled();
+    expect(notices()).toEqual([]);
   });
 });

@@ -16,7 +16,9 @@ import {
   messages,
   selectedId,
   setSelectedId,
+  starMessage,
 } from "../stores/messages";
+import { notify } from "../stores/notices";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
@@ -202,11 +204,7 @@ export default function MessageDetail() {
                         false;
                       return (
                         <button
-                          onClick={() =>
-                            api
-                              .markStarred(msg().id, !starred())
-                              .catch(() => {})
-                          }
+                          onClick={() => starMessage(msg().id, !starred())}
                           class="rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-1.5 transition cursor-pointer"
                           classList={{
                             "text-amber-400 hover:text-amber-500": starred(),
@@ -664,7 +662,7 @@ function TagEditor(props: { messageId: string }) {
       await api.setTags(props.messageId, [...tags(), tag]);
       setInput("");
     } catch {
-      // WS event won't arrive; UI stays unchanged
+      notify(`Could not add the tag "${tag}".`);
     }
   }
 
@@ -675,7 +673,7 @@ function TagEditor(props: { messageId: string }) {
         tags().filter((t) => t !== tag),
       );
     } catch {
-      // WS event won't arrive; UI stays unchanged
+      notify(`Could not remove the tag "${tag}".`);
     }
   }
 

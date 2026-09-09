@@ -9,6 +9,7 @@ import ConfirmDialog, {
   confirmOpen,
 } from "./components/ConfirmDialog";
 import UndoToast from "./components/UndoToast";
+import Notices from "./components/Notices";
 import {
   fetchMessages,
   connectWebSocket,
@@ -18,6 +19,8 @@ import {
   selectedId,
   setSelectedId,
   selectMessage,
+  starMessage,
+  clearInbox,
   moveSelection,
   deleteWithUndo,
   flushPendingDelete,
@@ -25,7 +28,7 @@ import {
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
-import * as api from "./lib/api";
+import { notify } from "./stores/notices";
 import { settingsOpen } from "./stores/settings";
 import "./stores/theme";
 import "./stores/rusted";
@@ -77,13 +80,7 @@ export default function App() {
           message: `All ${count} messages will be permanently deleted.`,
           confirmLabel: "Clear all",
         }).then(async (ok) => {
-          if (ok) {
-            try {
-              await api.deleteAllMessages();
-            } catch {
-              console.error("Failed to clear messages");
-            }
-          }
+          if (ok) await clearInbox();
         });
         break;
       }
@@ -91,7 +88,7 @@ export default function App() {
         const id = selectedId();
         if (id) {
           const msg = filteredMessages().find((m) => m.id === id);
-          if (msg) api.markStarred(id, !msg.is_starred).catch(() => {});
+          if (msg) starMessage(id, !msg.is_starred);
         }
         break;
       }
@@ -116,10 +113,14 @@ export default function App() {
   }
 
   onMount(async () => {
-    await fetchMessages();
-    if (!selectedId()) {
-      const first = filteredMessages()[0];
-      if (first) setSelectedId(first.id);
+    try {
+      await fetchMessages();
+      if (!selectedId()) {
+        const first = filteredMessages()[0];
+        if (first) setSelectedId(first.id);
+      }
+    } catch {
+      notify("Could not load the inbox.");
     }
     connectWebSocket();
     document.addEventListener("keydown", handleKeydown);
@@ -147,7 +148,10 @@ export default function App() {
       </div>
       <Settings />
       <ConfirmDialog />
-      <UndoToast />
+      <div class="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
+        <Notices />
+        <UndoToast />
+      </div>
     </div>
   );
 }

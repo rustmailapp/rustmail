@@ -14,6 +14,7 @@ import {
   total,
   selectedId,
   selectMessage,
+  starMessage,
   moveSelection,
   type SelectionTarget,
   loading,
@@ -24,7 +25,6 @@ import {
   search,
 } from "../stores/messages";
 import { formatDate, formatSize } from "../lib/format";
-import * as api from "../lib/api";
 import type { MessageSummary } from "../lib/types";
 
 /**
@@ -272,7 +272,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
             tabIndex={-1}
             onClick={(e) => {
               e.stopPropagation();
-              api.markStarred(msg().id, !msg().is_starred).catch(() => {});
+              starMessage(msg().id, !msg().is_starred);
             }}
             class="cursor-pointer"
             title={msg().is_starred ? "Unstar" : "Star"}
