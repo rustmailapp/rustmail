@@ -1,17 +1,30 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rustmail_api::{AppState, Origin, WsEvent, router};
+use rustmail_api::{AppState, Hostname, Origin, WsEvent, router};
 use rustmail_storage::{MessageRepository, initialize_database};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 async fn setup() -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
-  setup_with_allowed_origins(Vec::new()).await
+  setup_with(Vec::new(), Vec::new()).await
+}
+
+async fn setup_with_allowed_hosts(
+  hosts: Vec<Hostname>,
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+  setup_with(Vec::new(), hosts).await
 }
 
 async fn setup_with_allowed_origins(
   origins: Vec<Origin>,
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+  setup_with(origins, Vec::new()).await
+}
+
+async fn setup_with(
+  origins: Vec<Origin>,
+  hosts: Vec<Hostname>,
 ) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .connect("sqlite::memory:")
@@ -21,7 +34,9 @@ async fn setup_with_allowed_origins(
 
   let repo = MessageRepository::new(pool);
   let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
-  let state = AppState::new(repo.clone(), ws_tx.clone(), None, None).with_allowed_origins(origins);
+  let state = AppState::new(repo.clone(), ws_tx.clone(), None, None)
+    .with_allowed_origins(origins)
+    .with_allowed_hosts(hosts);
   let app = router(state);
 
   (app, repo, ws_tx)
@@ -1411,7 +1426,7 @@ async fn serve_router(app: axum::Router) -> (std::net::SocketAddr, tokio::task::
 }
 
 /// Opens a handshake against `/api/v1/ws` and reads back its status code.
-async fn ws_handshake_status(addr: std::net::SocketAddr, origin: Option<&str>) -> u16 {
+async fn ws_handshake_status(addr: std::net::SocketAddr, host: &str, origin: Option<&str>) -> u16 {
   use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
   let origin_header = origin
@@ -1419,7 +1434,7 @@ async fn ws_handshake_status(addr: std::net::SocketAddr, origin: Option<&str>) -
     .unwrap_or_default();
   let request = format!(
     "GET /api/v1/ws HTTP/1.1\r\n\
-     Host: {addr}\r\n\
+     Host: {host}\r\n\
      Connection: Upgrade\r\n\
      Upgrade: websocket\r\n\
      Sec-WebSocket-Version: 13\r\n\
@@ -1451,7 +1466,7 @@ async fn ws_handshake_without_an_origin_upgrades() {
   let (app, _, _) = setup().await;
   let (addr, server) = serve_router(app).await;
 
-  let status = ws_handshake_status(addr, None).await;
+  let status = ws_handshake_status(addr, &addr.to_string(), None).await;
   server.abort();
 
   assert_eq!(
@@ -1465,7 +1480,7 @@ async fn ws_handshake_from_the_served_origin_upgrades() {
   let (app, _, _) = setup().await;
   let (addr, server) = serve_router(app).await;
 
-  let status = ws_handshake_status(addr, Some(&format!("http://{addr}"))).await;
+  let status = ws_handshake_status(addr, &addr.to_string(), Some(&format!("http://{addr}"))).await;
   server.abort();
 
   assert_eq!(
@@ -1479,7 +1494,12 @@ async fn ws_handshake_from_a_foreign_origin_is_refused() {
   let (app, _, _) = setup().await;
   let (addr, server) = serve_router(app).await;
 
-  let status = ws_handshake_status(addr, Some("http://untrusted.example.test")).await;
+  let status = ws_handshake_status(
+    addr,
+    &addr.to_string(),
+    Some("http://untrusted.example.test"),
+  )
+  .await;
   server.abort();
 
   assert_eq!(
@@ -1494,11 +1514,143 @@ async fn ws_handshake_from_a_configured_origin_upgrades() {
     setup_with_allowed_origins(vec!["https://mail.example.com".parse().unwrap()]).await;
   let (addr, server) = serve_router(app).await;
 
-  let status = ws_handshake_status(addr, Some("https://mail.example.com")).await;
+  let status =
+    ws_handshake_status(addr, "mail.example.com", Some("https://mail.example.com")).await;
   server.abort();
 
   assert_eq!(
     status, SWITCHING_PROTOCOLS,
     "behind a reverse proxy the browser's origin is the proxy's public one"
   );
+}
+
+/// A browser request, as fetch metadata marks it, addressed to `host`.
+fn browser_request(host: &str, uri: &str) -> Request<Body> {
+  Request::builder()
+    .uri(uri)
+    .header("host", host)
+    .header("sec-fetch-site", "same-origin")
+    .header("sec-fetch-mode", "cors")
+    .body(Body::empty())
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_browser_on_a_rebound_name_is_refused() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(browser_request("evil.example:8025", "/api/v1/messages"))
+    .await
+    .unwrap();
+
+  assert_eq!(
+    response.status(),
+    StatusCode::FORBIDDEN,
+    "a rebound name reads as same-origin to the browser, so only the Host gives it away"
+  );
+}
+
+#[tokio::test]
+async fn a_browser_on_the_served_address_is_answered() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(browser_request("localhost:8025", "/api/v1/messages"))
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_client_without_fetch_metadata_keeps_any_host() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/messages")
+        .header("host", "rustmail:8025")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(
+    response.status(),
+    StatusCode::OK,
+    "CI harnesses reach the API by Docker service name and send no fetch metadata"
+  );
+}
+
+#[tokio::test]
+async fn a_configured_host_is_answered() {
+  let (app, _, _) = setup_with_allowed_hosts(vec!["mail.example.com".parse().unwrap()]).await;
+
+  let response = app
+    .oneshot(browser_request("mail.example.com", "/api/v1/messages"))
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn ws_handshake_on_a_rebound_name_is_refused() {
+  let (app, _, _) = setup().await;
+  let (addr, server) = serve_router(app).await;
+
+  let status =
+    ws_handshake_status(addr, "evil.example:8025", Some("http://evil.example:8025")).await;
+  server.abort();
+
+  assert_eq!(
+    status, FORBIDDEN,
+    "rebinding makes Origin and Host agree, so the origin check alone would upgrade this"
+  );
+}
+
+#[tokio::test]
+async fn a_browser_without_fetch_metadata_is_still_checked() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/messages")
+        .header("host", "evil.example:8025")
+        .header(
+          "user-agent",
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/16.3 Safari/605.1.15",
+        )
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(
+    response.status(),
+    StatusCode::FORBIDDEN,
+    "a same-origin GET from a pre-2023 browser carries neither Sec-Fetch-* nor Origin"
+  );
+}
+
+#[tokio::test]
+async fn a_refused_host_still_gets_the_security_headers() {
+  let (app, _, _) = setup().await;
+
+  let response = app
+    .oneshot(browser_request("evil.example:8025", "/api/v1/messages"))
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::FORBIDDEN);
+  assert_eq!(
+    response.headers().get("x-content-type-options").unwrap(),
+    "nosniff"
+  );
+  assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
 }

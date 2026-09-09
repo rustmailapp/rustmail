@@ -10,7 +10,10 @@
 //! No CORS headers are sent, so a browser will not hand a cross-origin page the
 //! response to a REST call; the bundled UI is served same-origin. The WebSocket
 //! handshake is not governed by CORS, so it carries its own origin check —
-//! see [`Origin`] and `--allowed-origin`. Security layers include
+//! see [`Origin`] and `--allowed-origin`. Browser requests are answered only on
+//! an address, on `localhost`, or on a name given to `--allowed-host`, which is
+//! what keeps DNS rebinding from turning either check into a formality — see
+//! [`Hostname`]. Security layers include
 //! `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 //! `Referrer-Policy: no-referrer`, and semaphore-based WebSocket connection limits.
 //!
@@ -33,11 +36,13 @@
 //! ```
 
 mod handlers;
+mod host;
 mod origin;
 mod state;
 mod static_files;
 mod ws;
 
+pub use host::{Hostname, HostnameError};
 pub use origin::{Origin, OriginError};
 pub use state::{AppState, WsEvent};
 
@@ -80,6 +85,10 @@ pub fn router(state: AppState) -> Router {
   Router::new()
     .nest("/api/v1", api)
     .fallback(static_files::static_handler)
+    .layer(axum::middleware::from_fn_with_state(
+      state.clone(),
+      host::guard_host,
+    ))
     .layer(CompressionLayer::new())
     .layer(TraceLayer::new_for_http())
     .layer(SetResponseHeaderLayer::if_not_present(

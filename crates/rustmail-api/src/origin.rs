@@ -30,8 +30,19 @@ pub enum OriginError {
 impl Origin {
   /// The `host[:port]` part, which is what the `Host` header of a request
   /// addressed to this origin carries.
-  fn authority(&self) -> &str {
+  pub(crate) fn authority(&self) -> &str {
     &self.authority
+  }
+}
+
+/// Splits the host out of an `authority`, dropping any port.
+///
+/// An IPv6 literal keeps its brackets, which is how both `Host` and `Origin`
+/// spell it.
+pub(crate) fn hostname_of(authority: &str) -> &str {
+  match authority.rfind(']') {
+    Some(close) => &authority[..=close],
+    None => authority.split(':').next().unwrap_or(authority),
   }
 }
 
@@ -231,6 +242,17 @@ mod tests {
       "http://example.com:0".parse::<Origin>().unwrap_err(),
       OriginError::InvalidPort("http://example.com:0".to_string())
     );
+  }
+
+  #[test]
+  fn hostname_drops_the_port_and_keeps_ipv6_brackets() {
+    assert_eq!(
+      super::hostname_of("mail.example.com:8025"),
+      "mail.example.com"
+    );
+    assert_eq!(super::hostname_of("mail.example.com"), "mail.example.com");
+    assert_eq!(super::hostname_of("[::1]:8025"), "[::1]");
+    assert_eq!(super::hostname_of("[::1]"), "[::1]");
   }
 
   #[test]

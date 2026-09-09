@@ -99,7 +99,7 @@ The WebSocket handshake is not covered by CORS, so RustMail checks it itself. A 
 
 Without this, any page open in the same browser could subscribe to the event stream and read sender, recipients and subject of every incoming email.
 
-The comparison is against the address the browser dialled, so it does not by itself stop DNS rebinding — a page whose own hostname is re-pointed at the machine running RustMail keeps a matching origin. RustMail is a development tool and does not defend against that.
+The comparison is against the address the browser dialled, which on its own would leave DNS rebinding open — a page whose hostname is re-pointed at the machine running RustMail keeps a matching origin. That is covered separately, by the `Host` check described in [Hosts and origins](/configuration/cli-flags#hosts-and-origins).
 
 Clients that send **no** `Origin` header at all — the TUI, `websocat`, CI scripts, anything that is not a browser — are unaffected. Browsers do not let a page omit or forge the header, so its absence is only ever a non-browser client.
 

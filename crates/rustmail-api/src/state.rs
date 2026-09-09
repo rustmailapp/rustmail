@@ -2,6 +2,7 @@ use rustmail_storage::MessageRepository;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, broadcast};
 
+use crate::host::Hostname;
 use crate::origin::Origin;
 
 const MAX_WS_CONNECTIONS: usize = 50;
@@ -47,6 +48,8 @@ pub struct AppState {
   pub ws_semaphore: Arc<Semaphore>,
   /// Origins allowed to open the WebSocket on top of the server's own.
   pub allowed_origins: Arc<[Origin]>,
+  /// Host names RustMail answers a browser on, besides addresses and `localhost`.
+  pub allowed_hosts: Arc<[Hostname]>,
 }
 
 impl AppState {
@@ -64,6 +67,7 @@ impl AppState {
       release_port,
       ws_semaphore: Arc::new(Semaphore::new(MAX_WS_CONNECTIONS)),
       allowed_origins: Arc::from([]),
+      allowed_hosts: Arc::from([]),
     }
   }
 
@@ -74,6 +78,16 @@ impl AppState {
   /// forward the public `Host`, or from a separate front-end origin.
   pub fn with_allowed_origins(mut self, origins: Vec<Origin>) -> Self {
     self.allowed_origins = Arc::from(origins);
+    self
+  }
+
+  /// Lets browsers reach RustMail on `hosts`.
+  ///
+  /// Addresses and `localhost` are always answered, so this is only needed for
+  /// a name — a reverse proxy's public name, a Docker service name, a `.local`
+  /// name — which is exactly what a DNS rebinding attack has to supply.
+  pub fn with_allowed_hosts(mut self, hosts: Vec<Hostname>) -> Self {
+    self.allowed_hosts = Arc::from(hosts);
     self
   }
 

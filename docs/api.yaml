@@ -8,6 +8,13 @@ info:
     All IDs are ULIDs (time-sortable). All timestamps are ISO 8601 UTC.
     Base path: /api/v1
 
+
+    Requests a browser made — carrying fetch metadata (`Sec-Fetch-*`), an
+    `Origin`, or a `Mozilla/` user agent — are answered only when addressed to
+    an IP address, to `localhost`, or to a name given to `--allowed-host`;
+    anything else gets `403`. Other clients — CI scripts, `curl`, the TUI —
+    are answered on any host.
+
 servers:
   - url: http://localhost:8025
     description: Default local server
