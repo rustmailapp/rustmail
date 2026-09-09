@@ -12,6 +12,8 @@ vi.mock("../lib/api", () => ({ deleteMessage, listMessages, markRead }));
 const {
   UNDO_WINDOW_MS,
   clearFilters,
+  connectWebSocket,
+  disconnectWebSocket,
   deleteWithUndo,
   flushPendingDelete,
   fetchMessages,
@@ -448,5 +450,105 @@ describe("deleteWithUndo", () => {
 
     expect(deleteMessage).toHaveBeenCalledTimes(1);
     expect(selectedId()).toBeNull();
+  });
+});
+
+/** A socket that opens nothing and hands frames straight to the store. */
+class FakeSocket {
+  static last: FakeSocket | null = null;
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor() {
+    FakeSocket.last = this;
+  }
+
+  close(): void {}
+}
+
+function deliver(frame: unknown): void {
+  const socket = FakeSocket.last;
+  if (socket?.onmessage == null) {
+    throw new Error("the store never opened a socket");
+  }
+  socket.onmessage({ data: frame });
+}
+
+describe("WebSocket events", () => {
+  let logged: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    FakeSocket.last = null;
+    logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    await seed(range(2));
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    logged.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
+  it("applies an event that matches its schema", () => {
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: "id-0", is_read: true },
+      }),
+    );
+
+    expect(filteredMessages().map((m) => m.is_read)).toEqual([true, false]);
+    expect(logged).not.toHaveBeenCalled();
+  });
+
+  it("adds a new message the server describes in full", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(9) }));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+  });
+
+  it("discards an event whose payload does not match its schema", () => {
+    deliver(
+      JSON.stringify({
+        type: "message:new",
+        data: { ...message(9), size: "2 kB" },
+      }),
+    );
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(logged).toHaveBeenCalled();
+  });
+
+  it("discards an event of a type the UI does not know", () => {
+    deliver(JSON.stringify({ type: "message:archived", data: { id: "id-0" } }));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(logged).toHaveBeenCalled();
+  });
+
+  it("discards a frame that is not JSON", () => {
+    deliver("<html>502</html>");
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(logged).toHaveBeenCalled();
+  });
+
+  it("keeps the frame it discarded out of the log", () => {
+    deliver(
+      JSON.stringify({
+        type: "message:new",
+        data: { ...message(9), subject: "Board pack Q3", size: "2 kB" },
+      }),
+    );
+
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("Board pack Q3");
   });
 });
