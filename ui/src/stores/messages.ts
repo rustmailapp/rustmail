@@ -7,6 +7,9 @@ import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
 
+/** How much of a subject a notice quotes before trimming it. */
+const NOTICE_SUBJECT_MAX = 50;
+
 /**
  * How long a deleted message can be brought back.
  *
@@ -131,6 +134,26 @@ function selectMessage(msg: MessageSummary): void {
   }
 }
 
+/**
+ * How a message reads inside a notice.
+ *
+ * Only writes the user aimed at one message name it. Marking read fires once
+ * per row while the selection walks, so naming the subject there would defeat
+ * the deduplication and bury the screen where one sentence does the job; a
+ * star or a delete is a single deliberate act, and "which one" is the part
+ * worth saying.
+ */
+function quoted(id: string): string {
+  const subject = messages()
+    .find((m) => m.id === id)
+    ?.subject?.trim();
+  if (!subject) return "the message";
+
+  const characters = [...subject];
+  if (characters.length <= NOTICE_SUBJECT_MAX) return `“${subject}”`;
+  return `“${characters.slice(0, NOTICE_SUBJECT_MAX).join("")}…”`;
+}
+
 /** What a whole-inbox delete asks before it runs. */
 function clearInboxPrompt(): ConfirmDialogOptions {
   return {
@@ -151,13 +174,12 @@ async function clearInbox(): Promise<void> {
 
 /** Stars or unstars a message, saying so when the write does not land. */
 function starMessage(id: string, starred: boolean): void {
+  const label = quoted(id);
   api
     .markStarred(id, starred)
     .catch(() =>
       notify(
-        starred
-          ? "Could not star the message."
-          : "Could not unstar the message.",
+        starred ? `Could not star ${label}.` : `Could not unstar ${label}.`,
       ),
     );
 }
@@ -201,11 +223,10 @@ function commitDelete(keepalive = false): void {
   setUndoableId(null);
   if (id === null) return;
 
+  const label = quoted(id);
   api
     .deleteMessage(id, { keepalive })
-    .catch(() =>
-      notify("Could not delete the message. It is back in the inbox."),
-    )
+    .catch(() => notify(`Could not delete ${label}. It is back in the inbox.`))
     .finally(() => unhide(id));
 }
 
@@ -424,6 +445,7 @@ function disconnectWebSocket() {
 
 export {
   UNDO_WINDOW_MS,
+  NOTICE_SUBJECT_MAX,
   flushPendingDelete,
   messages,
   visibleMessages,
