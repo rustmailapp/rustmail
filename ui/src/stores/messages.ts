@@ -2,6 +2,7 @@ import { createSignal, createMemo } from "solid-js";
 import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
 import * as api from "../lib/api";
 import * as schema from "../lib/schema";
+import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
 
@@ -125,8 +126,30 @@ function selectMessage(msg: MessageSummary): void {
   if (!msg.is_read) {
     api
       .markRead(msg.id, true)
-      .catch(() => console.error(`Failed to mark message ${msg.id} as read`));
+      .catch(() => notify("Could not mark the message as read."));
   }
+}
+
+/** Deletes every message, saying so when the write does not land. */
+async function clearInbox(): Promise<void> {
+  try {
+    await api.deleteAllMessages();
+  } catch {
+    notify("Could not clear the inbox. The messages are still here.");
+  }
+}
+
+/** Stars or unstars a message, saying so when the write does not land. */
+function starMessage(id: string, starred: boolean): void {
+  api
+    .markStarred(id, starred)
+    .catch(() =>
+      notify(
+        starred
+          ? "Could not star the message."
+          : "Could not unstar the message.",
+      ),
+    );
 }
 
 function clearUndoTimer(): void {
@@ -170,7 +193,9 @@ function commitDelete(keepalive = false): void {
 
   api
     .deleteMessage(id, { keepalive })
-    .catch(() => console.error(`Failed to delete message ${id}`))
+    .catch(() =>
+      notify("Could not delete the message. It is back in the inbox."),
+    )
     .finally(() => unhide(id));
 }
 
@@ -306,7 +331,7 @@ function connectWebSocket() {
     reconnectDelay = RECONNECT_BASE_DELAY;
     if (hasConnected) {
       fetchMessages().catch(() =>
-        console.error("Failed to resync inbox after reconnect"),
+        notify("Reconnected, but could not reload the inbox."),
       );
     }
     hasConnected = true;
@@ -397,6 +422,8 @@ export {
   selectedId,
   setSelectedId,
   selectMessage,
+  starMessage,
+  clearInbox,
   moveSelection,
   deleteWithUndo,
   undoDelete,
