@@ -192,16 +192,15 @@ export async function getMessage(
 /**
  * Deletes one message.
  *
- * `keepalive` lets the write outlive the document, for the deletion a closing
- * page still owes the server.
+ * `keepalive` is unconditional: a DELETE cancelled with the closing document
+ * leaves the message on the server, and the request is in flight for the whole
+ * round trip, not only at unload. It carries no body, so the size limit that
+ * makes `keepalive` awkward on larger writes does not reach this one.
  */
-export async function deleteMessage(
-  id: string,
-  options: { keepalive?: boolean } = {},
-): Promise<void> {
+export async function deleteMessage(id: string): Promise<void> {
   await fetchVoid(`${BASE}/messages/${enc(id)}`, {
     method: "DELETE",
-    keepalive: options.keepalive,
+    keepalive: true,
   });
 }
 
