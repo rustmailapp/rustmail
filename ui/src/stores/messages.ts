@@ -1,4 +1,4 @@
-import { createSignal, createMemo } from "solid-js";
+import { batch, createSignal, createMemo } from "solid-js";
 import type { ConfirmDialogOptions } from "../components/ConfirmDialog";
 import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
 import * as api from "../lib/api";
@@ -6,6 +6,18 @@ import * as schema from "../lib/schema";
 import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
+
+/**
+ * How many times a list read is retried when a deletion confirms mid-flight.
+ *
+ * A page read while a DELETE was in flight may have been served either side of
+ * the commit, and only a fresh read settles it. Retention purges a whole batch
+ * one event at a time, so the races can arrive in bursts and the retry needs a
+ * floor: the last attempt takes the page it got and leaves the count to
+ * {@link refreshTotal}, rather than reading again for as long as messages keep
+ * disappearing.
+ */
+const LIST_READ_ATTEMPTS = 3;
 
 /** How much of a subject a notice quotes before trimming it. */
 const NOTICE_SUBJECT_MAX = 50;
@@ -76,7 +88,13 @@ const visibleMessages = createMemo(() => {
   return messages().filter((m) => !hidden.includes(m.id));
 });
 
-const total = createMemo(() => Math.max(0, storedTotal() - hiddenIds().length));
+const total = createMemo(() => {
+  const hidden = new Set(hiddenIds());
+  const hiddenCount = messages().filter((message) =>
+    hidden.has(message.id),
+  ).length;
+  return Math.max(0, storedTotal() - hiddenCount);
+});
 
 /**
  * The inbox list: loaded messages narrowed by the active filters.
@@ -195,6 +213,111 @@ function unhide(id: string): void {
   setHiddenIds((ids) => ids.filter((hidden) => hidden !== id));
 }
 
+/** Identifies the latest server count applied to the list. */
+let snapshot = 0;
+/** Invalidates reads started before a confirmed deletion or an inbox clear. */
+let deletionRevision = 0;
+/** Distinguishes deletions made before the entire inbox was cleared. */
+let clearRevision = 0;
+let latestFetch = 0;
+let latestCountRead = 0;
+let countNeedsRefresh = false;
+
+/** A local deletion and the count against which it was issued. */
+type IssuedDelete = {
+  snapshot: number;
+  clearRevision: number;
+  confirmed: boolean;
+};
+
+/** Local deletions awaiting their HTTP response or WebSocket echo. */
+const issuedDeletes = new Map<string, IssuedDelete>();
+
+/** Removes a confirmed deletion without assuming the current total includes it. */
+function forgetMessage(id: string): void {
+  setMessages((prev) => prev.filter((m) => m.id !== id));
+  unhide(id);
+  if (selectedId() === id) setSelectedId(null);
+}
+
+/**
+ * Reconciles an ambiguous count without replacing the pages already loaded.
+ *
+ * A page fetched during a DELETE may have read before or after the commit.
+ * Only a new read after confirmation can settle that ambiguity. A newer
+ * snapshot, deletion, clear or search supersedes this count request.
+ */
+async function refreshTotal(): Promise<void> {
+  const request = ++latestCountRead;
+  const currentSnapshot = snapshot;
+  const currentRevision = deletionRevision;
+  const query = search();
+  try {
+    const response = await api.listMessages(1, 0, query || undefined);
+    if (
+      request !== latestCountRead ||
+      currentSnapshot !== snapshot ||
+      currentRevision !== deletionRevision ||
+      query !== search()
+    )
+      return;
+    snapshot += 1;
+    countNeedsRefresh = false;
+    setStoredTotal(response.total);
+  } catch {
+    if (
+      request === latestCountRead &&
+      currentSnapshot === snapshot &&
+      currentRevision === deletionRevision &&
+      query === search()
+    ) {
+      notify(
+        "The message was deleted, but the inbox count could not be refreshed.",
+      );
+    }
+  }
+}
+
+/** Applies either confirmation once, removing the row regardless of the snapshot. */
+function reconcileDeletion(id: string): void {
+  const issued = issuedDeletes.get(id);
+  if (issued?.confirmed === true) {
+    issuedDeletes.delete(id);
+    return;
+  }
+
+  const cleared =
+    issued !== undefined && issued.clearRevision !== clearRevision;
+  const countIsCurrent =
+    !countNeedsRefresh &&
+    (issued === undefined || issued.snapshot === snapshot);
+  if (issued) issued.confirmed = true;
+  if (!cleared) {
+    deletionRevision += 1;
+    if (!countIsCurrent) countNeedsRefresh = true;
+  }
+  batch(() => {
+    forgetMessage(id);
+    if (!cleared && countIsCurrent) {
+      setStoredTotal((current) => Math.max(0, current - 1));
+    }
+  });
+  if (!cleared && !countIsCurrent) void refreshTotal();
+}
+
+/**
+ * Drops the undo offer for a message the server has already deleted.
+ *
+ * Another client, or the retention sweep, can delete a message inside its undo
+ * window. Bringing it back is no longer possible, and the DELETE the timer
+ * would fire has nothing left to delete.
+ */
+function cancelUndo(id: string): void {
+  if (undoableId() !== id) return;
+  clearUndoTimer();
+  setUndoableId(null);
+}
+
 /**
  * Takes `id` out of the list, and deletes it once its undo window closes.
  *
@@ -212,33 +335,42 @@ function deleteWithUndo(id: string): void {
  * Issues the DELETE for the message waiting on one, closing its undo window.
  *
  * The message stays hidden until the write settles, so the row does not come
- * back for a round trip on the way out. Once it has settled the hiding has
- * nothing left to do either way: on success the `message:delete` event has
- * taken the message out of the list, and on failure the server still holds it,
- * so keeping it hidden would claim a deletion that never happened.
+ * back for a round trip on the way out. A settled write then removes it
+ * outright instead of trusting the event to arrive and do it: a message the
+ * server has confirmed gone must not reappear because its event is late or its
+ * socket is down. A failed write unhides instead, since the server still holds
+ * the message — unless the event got there first, which means the deletion did
+ * happen and only the response was lost.
  */
-function commitDelete(keepalive = false): void {
+function commitDelete(): void {
   const id = undoableId();
   clearUndoTimer();
   setUndoableId(null);
   if (id === null) return;
 
   const label = quoted(id);
-  api
-    .deleteMessage(id, { keepalive })
-    .catch(() => notify(`Could not delete ${label}. It is back in the inbox.`))
-    .finally(() => unhide(id));
+  issuedDeletes.set(id, { snapshot, clearRevision, confirmed: false });
+  api.deleteMessage(id).then(
+    () => reconcileDeletion(id),
+    () => {
+      const issued = issuedDeletes.get(id);
+      issuedDeletes.delete(id);
+      if (issued?.confirmed || issued?.clearRevision !== clearRevision) return;
+      unhide(id);
+      notify(`Could not delete ${label}. It is back in the inbox.`);
+    },
+  );
 }
 
 /**
- * Commits the pending deletion in a way that outlives the page.
+ * Commits the still-undoable deletion before the page goes away.
  *
- * A plain write is cancelled when the document goes away, so a message
- * deleted seconds before a tab closes would be back on the next visit —
- * `keepalive` is what makes the deletion mean what it said.
+ * A deletion already issued outlives the document on its own, because every
+ * DELETE carries `keepalive`. The one waiting out its undo window has not been
+ * sent yet, and this is its last chance to go.
  */
 function flushPendingDelete(): void {
-  commitDelete(true);
+  commitDelete();
 }
 
 /** Brings the last deleted message back, while its window is still open. */
@@ -252,11 +384,21 @@ function undoDelete(): void {
   setSelectedId(id);
 }
 
-/** Forgets every pending deletion, for when the whole store is gone anyway. */
+/**
+ * Forgets every pending deletion, for when the whole store is gone anyway.
+ *
+ * The issued deletions outlive this: their responses are still on the way, and
+ * the entry is what tells a late one that the count it would adjust is no
+ * longer the count it was issued against.
+ */
 function dropPendingDeletes(): void {
   clearUndoTimer();
   setUndoableId(null);
   setHiddenIds([]);
+  snapshot += 1;
+  deletionRevision += 1;
+  clearRevision += 1;
+  countNeedsRefresh = false;
 }
 
 function targetIndex(
@@ -296,28 +438,62 @@ function moveSelection(to: SelectionTarget): void {
 }
 
 async function fetchMessages() {
+  const request = ++latestFetch;
+  const query = search();
   setLoading(true);
   try {
-    const q = search() || undefined;
-    const res = await api.listMessages(PAGE_SIZE, 0, q);
-    setMessages(res.messages);
-    setStoredTotal(res.total);
+    for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
+      if (request !== latestFetch || query !== search()) return;
+      const revision = deletionRevision;
+      const res = await api.listMessages(PAGE_SIZE, 0, query || undefined);
+      if (request !== latestFetch || query !== search()) return;
+      const raced = revision !== deletionRevision;
+      const last = attempt === LIST_READ_ATTEMPTS - 1;
+      if (raced && !last) continue;
+      batch(() => {
+        snapshot += 1;
+        countNeedsRefresh = raced;
+        setMessages(res.messages);
+        setStoredTotal(res.total);
+      });
+      if (raced) void refreshTotal();
+      return;
+    }
   } finally {
-    setLoading(false);
+    if (request === latestFetch) setLoading(false);
   }
 }
 
 async function loadMore() {
   if (loading() || loadingMore() || !hasMore()) return;
+  const query = search();
+  const startedOn = latestFetch;
   setLoadingMore(true);
   try {
-    const q = search() || undefined;
-    const res = await api.listMessages(PAGE_SIZE, messages().length, q);
-    setMessages((prev) => {
-      const seen = new Set(prev.map((m) => m.id));
-      return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
-    });
-    setStoredTotal(res.total);
+    for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
+      if (query !== search() || startedOn !== latestFetch) return;
+      const revision = deletionRevision;
+      const res = await api.listMessages(
+        PAGE_SIZE,
+        messages().length,
+        query || undefined,
+      );
+      if (query !== search() || startedOn !== latestFetch) return;
+      const raced = revision !== deletionRevision;
+      const last = attempt === LIST_READ_ATTEMPTS - 1;
+      if (raced && !last) continue;
+      batch(() => {
+        snapshot += 1;
+        countNeedsRefresh = raced;
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
+        });
+        setStoredTotal(res.total);
+      });
+      if (raced) void refreshTotal();
+      return;
+    }
   } finally {
     setLoadingMore(false);
   }
@@ -382,12 +558,12 @@ function connectWebSocket() {
         } else {
           setMessages((prev) => [event.data, ...prev]);
           setStoredTotal((t) => t + 1);
+          if (countNeedsRefresh) void refreshTotal();
         }
         break;
       case "message:delete":
-        setMessages((prev) => prev.filter((m) => m.id !== event.data.id));
-        setStoredTotal((t) => Math.max(0, t - 1));
-        if (selectedId() === event.data.id) setSelectedId(null);
+        cancelUndo(event.data.id);
+        reconcileDeletion(event.data.id);
         break;
       case "message:read":
         setMessages((prev) =>
@@ -413,10 +589,12 @@ function connectWebSocket() {
         );
         break;
       case "messages:clear":
-        dropPendingDeletes();
-        setMessages([]);
-        setStoredTotal(0);
-        setSelectedId(null);
+        batch(() => {
+          dropPendingDeletes();
+          setMessages([]);
+          setStoredTotal(0);
+          setSelectedId(null);
+        });
         break;
     }
   };
@@ -446,6 +624,7 @@ function disconnectWebSocket() {
 export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
+  LIST_READ_ATTEMPTS,
   flushPendingDelete,
   messages,
   visibleMessages,

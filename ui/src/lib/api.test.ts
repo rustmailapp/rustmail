@@ -220,4 +220,13 @@ describe("response shape", () => {
 
     await read;
   });
+
+  it("lets a body stream that broke stay the transport error it is", async () => {
+    const res = new Response("");
+    const broken = new TypeError("network error");
+    vi.spyOn(res, "json").mockRejectedValue(broken);
+    fetchMock.mockResolvedValue(res);
+
+    await expect(getMessage("msg-0000")).rejects.toBe(broken);
+  });
 });

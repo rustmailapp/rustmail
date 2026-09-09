@@ -25,6 +25,7 @@ vi.mock("../lib/api", () => ({
 }));
 
 const {
+  LIST_READ_ATTEMPTS,
   NOTICE_SUBJECT_MAX,
   UNDO_WINDOW_MS,
   clearFilters,
@@ -36,6 +37,7 @@ const {
   fetchMessages,
   filteredMessages,
   moveSelection,
+  loadMore,
   selectMessage,
   selectedId,
   starMessage,
@@ -64,6 +66,16 @@ function message(
     created_at: "2026-01-01T00:00:00Z",
     ...over,
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 async function seed(msgs: MessageSummary[]): Promise<void> {
@@ -375,7 +387,7 @@ describe("deleteWithUndo", () => {
     deleteWithUndo("id-0");
     await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
 
-    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
     expect(undoableId()).toBeNull();
   });
 
@@ -394,15 +406,10 @@ describe("deleteWithUndo", () => {
     deleteWithUndo("id-0");
     flushPendingDelete();
 
-    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: true });
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
     expect(undoableId()).toBeNull();
   });
 
-  /**
-   * The row is taken out by the `message:delete` event, not by the response,
-   * and this harness has no socket to deliver one: the message coming back is
-   * what "the hiding is over" looks like here.
-   */
   it("hides the message for as long as the DELETE is in flight", async () => {
     let settle = () => {};
     deleteMessage.mockReturnValue(
@@ -414,14 +421,28 @@ describe("deleteWithUndo", () => {
 
     deleteWithUndo("id-0");
     await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
-    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
+
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
     expect(total()).toBe(1);
 
     settle();
-    await vi.advanceTimersByTimeAsync(0);
+  });
 
-    expect(total()).toBe(2);
+  /**
+   * The response and the `message:delete` event travel on separate
+   * connections, and this harness has no socket to deliver one: a row that
+   * comes back here is a row that comes back on screen whenever the event is
+   * late or the socket is down.
+   */
+  it("keeps the message out once the DELETE settles, event or not", async () => {
+    await seed(range(2));
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
   });
 
   it("brings the message back on undo, and reselects it", async () => {
@@ -448,7 +469,7 @@ describe("deleteWithUndo", () => {
     deleteWithUndo("id-1");
 
     expect(deleteMessage).toHaveBeenCalledTimes(1);
-    expect(deleteMessage).toHaveBeenCalledWith("id-0", { keepalive: false });
+    expect(deleteMessage).toHaveBeenCalledWith("id-0");
     expect(undoableId()).toBe("id-1");
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-2"]);
   });
@@ -585,6 +606,350 @@ describe("WebSocket events", () => {
     );
 
     expect(JSON.stringify(logged.mock.calls)).not.toContain("Board pack Q3");
+  });
+});
+
+/**
+ * A deletion is reported twice, over two connections that do not order
+ * themselves: once by the DELETE response, once by the `message:delete` event.
+ * These cover both arrival orders, and the case where the event is about a
+ * message this client never asked to delete.
+ */
+describe("a deletion reported over both connections", () => {
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    await seed(range(2));
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function deletion(id: string): string {
+    return JSON.stringify({ type: "message:delete", data: { id } });
+  }
+
+  it("counts the message out once when the response arrives first", async () => {
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    deliver(deletion("id-0"));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+  });
+
+  it("counts the message out once when the event arrives first", async () => {
+    let settle = () => {};
+    deleteMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    deliver(deletion("id-0"));
+    expect(total()).toBe(1);
+
+    settle();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+  });
+
+  it("gives up the undo when the server deletes that message first", async () => {
+    deleteWithUndo("id-0");
+
+    deliver(deletion("id-0"));
+
+    expect(undoableId()).toBeNull();
+    expect(total()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
+
+  it("leaves a cleared inbox alone when an older DELETE settles", async () => {
+    let settle = () => {};
+    deleteMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    deliver(JSON.stringify({ type: "messages:clear" }));
+    deliver(JSON.stringify({ type: "message:new", data: message(9) }));
+
+    settle();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-9"]);
+    expect(total()).toBe(1);
+  });
+
+  it("leaves a refetched list alone when an older DELETE settles", async () => {
+    let settle = () => {};
+    deleteMessage.mockReturnValue(
+      new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    );
+
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed([message(1), message(2)]);
+
+    settle();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1", "id-2"]);
+    expect(total()).toBe(2);
+  });
+
+  it.each(["http", "socket"])(
+    "removes a deleted row after a refresh still containing it, with %s first",
+    async (first) => {
+      const pending = deferred<void>();
+      deleteMessage.mockReturnValue(pending.promise);
+      deleteWithUndo("id-0");
+      flushPendingDelete();
+      await seed(range(2));
+      listMessages.mockResolvedValue({ messages: [message(1)], total: 1 });
+
+      if (first === "socket") deliver(deletion("id-0"));
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      if (first === "http") deliver(deletion("id-0"));
+
+      expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+      expect(total()).toBe(1);
+      expect(listMessages).toHaveBeenLastCalledWith(1, 0, undefined);
+    },
+  );
+
+  it.each([3, 4])(
+    "keeps all loaded pages when their total during the DELETE was %i",
+    async (pageTotal) => {
+      listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+      await fetchMessages();
+      const pending = deferred<void>();
+      deleteMessage.mockReturnValue(pending.promise);
+      deleteWithUndo("id-0");
+      flushPendingDelete();
+      listMessages.mockResolvedValue({
+        messages: [message(2), message(3)],
+        total: pageTotal,
+      });
+      await loadMore();
+      listMessages.mockResolvedValue({ messages: [message(1)], total: 3 });
+
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      deliver(deletion("id-0"));
+
+      expect(filteredMessages().map((m) => m.id)).toEqual([
+        "id-1",
+        "id-2",
+        "id-3",
+      ]);
+      expect(total()).toBe(3);
+    },
+  );
+
+  it("does not subtract a hidden message already absent from a refreshed list", async () => {
+    const pending = deferred<void>();
+    deleteMessage.mockReturnValue(pending.promise);
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed([message(1)]);
+
+    expect(total()).toBe(1);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+    expect(total()).toBe(1);
+  });
+
+  it("retries a refresh whose response predates a confirmed deletion", async () => {
+    const read = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(read.promise);
+    const refreshing = fetchMessages();
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+    listMessages.mockResolvedValue({ messages: [message(1)], total: 1 });
+
+    read.resolve({ messages: range(2), total: 2 });
+    await refreshing;
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+  });
+
+  it("retries an old page using the offset after deletion", async () => {
+    listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+    await fetchMessages();
+    const read = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(read.promise);
+    const paging = loadMore();
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+    listMessages.mockResolvedValue({
+      messages: [message(2), message(3)],
+      total: 3,
+    });
+
+    read.resolve({ messages: [message(2), message(3)], total: 4 });
+    await paging;
+
+    expect(listMessages).toHaveBeenLastCalledWith(100, 1, undefined);
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-1",
+      "id-2",
+      "id-3",
+    ]);
+    expect(total()).toBe(3);
+  });
+
+  it("ignores an old count response after clear and new arrivals", async () => {
+    const pending = deferred<void>();
+    deleteMessage.mockReturnValue(pending.promise);
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed(range(2));
+    const count = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValue(count.promise);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+    deliver(JSON.stringify({ type: "messages:clear" }));
+    deliver(JSON.stringify({ type: "message:new", data: message(9) }));
+
+    count.resolve({ messages: [], total: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-9"]);
+    expect(total()).toBe(1);
+  });
+
+  it("does not let an older count overwrite a second confirmed deletion", async () => {
+    await seed(range(3));
+    const pending = deferred<void>();
+    deleteMessage.mockReturnValue(pending.promise);
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed(range(3));
+    const oldCount = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(oldCount.promise);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    listMessages.mockResolvedValue({ messages: [message(2)], total: 1 });
+    deleteMessage.mockResolvedValue(undefined);
+    deleteWithUndo("id-1");
+    flushPendingDelete();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+    deliver(deletion("id-1"));
+    oldCount.resolve({ messages: [message(1)], total: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-2"]);
+    expect(total()).toBe(1);
+  });
+
+  it("preserves a new arrival while an ambiguous count is being refreshed", async () => {
+    const pending = deferred<void>();
+    deleteMessage.mockReturnValue(pending.promise);
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed(range(2));
+    const oldCount = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(oldCount.promise);
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+
+    listMessages.mockResolvedValue({ messages: [message(9)], total: 2 });
+    deliver(JSON.stringify({ type: "message:new", data: message(9) }));
+    await vi.advanceTimersByTimeAsync(0);
+    oldCount.resolve({ messages: [message(1)], total: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-9", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("keeps a confirmed deletion removed if refreshing the count fails", async () => {
+    const pending = deferred<void>();
+    deleteMessage.mockReturnValue(pending.promise);
+    deleteWithUndo("id-0");
+    flushPendingDelete();
+    await seed(range(2));
+    listMessages.mockRejectedValue(new Error("offline"));
+    pending.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    deliver(deletion("id-0"));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(notices().map((notice) => notice.text)).toEqual([
+      "The message was deleted, but the inbox count could not be refreshed.",
+    ]);
+  });
+
+  /**
+   * Retention purges a batch one `message:delete` at a time, so a list read
+   * can lose every race it retries. The read has to stop asking and leave the
+   * count to a refresh.
+   */
+  it("stops re-reading the list when deletions keep confirming", async () => {
+    const COUNT_ONLY_READ = 1;
+    let pageReads = 0;
+    listMessages.mockImplementation(async (limit: number) => {
+      if (limit === COUNT_ONLY_READ) return { messages: [], total: 1 };
+      pageReads += 1;
+      deliver(deletion(`purged-${pageReads}`));
+      return { messages: [message(1)], total: 1 };
+    });
+
+    await fetchMessages();
+
+    expect(pageReads).toBe(LIST_READ_ATTEMPTS);
+  });
+
+  it("stays quiet when the deletion landed and only the response did not", async () => {
+    let fail: (reason: unknown) => void = () => {};
+    deleteMessage.mockReturnValue(
+      new Promise<void>((_resolve, reject) => {
+        fail = reject;
+      }),
+    );
+
+    deleteWithUndo("id-0");
+    await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS);
+    deliver(deletion("id-0"));
+
+    fail(new Error("connection reset"));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(notices()).toEqual([]);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
   });
 });
 

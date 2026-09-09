@@ -109,9 +109,40 @@ jobs:
           name: rustmail-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/rustmail
 
+  # The version reaches the binary through the environment, and six of the
+  # eight targets are built inside a cross container that forwards only what
+  # Cross.toml names. A binary stamped with the fallback version must not reach
+  # users, and the images are published in parallel with the GitHub release, so
+  # this gate is a job of its own that both of them wait on. It runs the
+  # x86_64 musl build: static, so the runner can execute it, and one of the
+  # three binaries the images actually ship.
+  verify-version:
+    name: Verify version
+    needs: build-binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the amd64 musl binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: rustmail-x86_64-unknown-linux-musl
+          path: .
+
+      - name: Verify the built binary carries the release version
+        env:
+          EXPECTED: ${{ github.ref_name }}
+        run: |
+          chmod +x rustmail
+          reported=$(./rustmail --version)
+          expected="rustmail ${EXPECTED#v}"
+          echo "reported: ${reported}"
+          if [ "$reported" != "$expected" ]; then
+            echo "::error::binary reports '${reported}', expected '${expected}'"
+            exit 1
+          fi
+
   docker:
     name: Docker
-    needs: build-binaries
+    needs: [build-binaries, verify-version]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -178,7 +209,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: build-binaries
+    needs: [build-binaries, verify-version]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -201,23 +232,6 @@ jobs:
             chmod +x "$dir/rustmail"
             tar -czf "release/rustmail-${target}.tar.gz" -C "$dir" rustmail
           done
-
-      # The version reaches the binary through the environment, and six of the
-      # eight targets are built inside a cross container that forwards only
-      # what Cross.toml names. A binary stamped with the fallback version
-      # must not reach the release, so this checks one cross-built target
-      # before anything is published.
-      - name: Verify the built binary carries the release version
-        env:
-          EXPECTED: ${{ github.ref_name }}
-        run: |
-          reported=$(artifacts/rustmail-x86_64-unknown-linux-gnu/rustmail --version)
-          expected="rustmail ${EXPECTED#v}"
-          echo "reported: ${reported}"
-          if [ "$reported" != "$expected" ]; then
-            echo "::error::binary reports '${reported}', expected '${expected}'"
-            exit 1
-          fi
 
       - name: Get previous tag
         id: prev_tag

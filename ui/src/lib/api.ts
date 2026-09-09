@@ -105,6 +105,13 @@ function parse<S extends z.ZodMiniType>(
   throw new ResponseShapeError(route, detail);
 }
 
+/**
+ * Decodes the body, or reports that the route did not return JSON.
+ *
+ * Only a parse failure is a drifted response. A body stream that breaks after
+ * the headers arrived rejects here too, and calling that a shape mismatch
+ * would offer the user a reload for a read a retry would have completed.
+ */
 async function readJson(
   route: string,
   res: Response,
@@ -114,7 +121,10 @@ async function readJson(
     return await res.json();
   } catch (cause) {
     signal.throwIfAborted();
-    throw new ResponseShapeError(route, "the body is not JSON", { cause });
+    if (cause instanceof SyntaxError) {
+      throw new ResponseShapeError(route, "the body is not JSON", { cause });
+    }
+    throw cause;
   }
 }
 
@@ -192,16 +202,15 @@ export async function getMessage(
 /**
  * Deletes one message.
  *
- * `keepalive` lets the write outlive the document, for the deletion a closing
- * page still owes the server.
+ * `keepalive` is unconditional: a DELETE cancelled with the closing document
+ * leaves the message on the server, and the request is in flight for the whole
+ * round trip, not only at unload. It carries no body, so the size limit that
+ * makes `keepalive` awkward on larger writes does not reach this one.
  */
-export async function deleteMessage(
-  id: string,
-  options: { keepalive?: boolean } = {},
-): Promise<void> {
+export async function deleteMessage(id: string): Promise<void> {
   await fetchVoid(`${BASE}/messages/${enc(id)}`, {
     method: "DELETE",
-    keepalive: options.keepalive,
+    keepalive: true,
   });
 }
 
