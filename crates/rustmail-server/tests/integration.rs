@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_rustls::TlsConnector;
 
 use rustmail_api::{AppState, WsEvent, router};
-use rustmail_smtp::{ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
+use rustmail_smtp::{Delivery, ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, initialize_database};
 
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
@@ -110,16 +110,32 @@ async fn test_repo() -> MessageRepository {
   MessageRepository::new(pool)
 }
 
-fn spawn_smtp_with_real_session(
-  listener: tokio::net::TcpListener,
-  tx: mpsc::Sender<ReceivedMessage>,
-) {
+/// Answers every delivery as stored, forwarding the messages for inspection.
+///
+/// The session now holds its SMTP reply until a verdict comes back, so a test
+/// that reads `250` before it touches the channel needs something else
+/// answering in the meantime.
+fn accept_deliveries(mut rx: mpsc::Receiver<Delivery>) -> mpsc::Receiver<ReceivedMessage> {
+  let (tx, out) = mpsc::channel(256);
+  tokio::spawn(async move {
+    while let Some(delivery) = rx.recv().await {
+      let (message, ack) = delivery.into_parts();
+      ack.stored();
+      if tx.send(message).await.is_err() {
+        break;
+      }
+    }
+  });
+  out
+}
+
+fn spawn_smtp_with_real_session(listener: tokio::net::TcpListener, tx: mpsc::Sender<Delivery>) {
   spawn_smtp_with_real_session_and_tls(listener, tx, None);
 }
 
 fn spawn_smtp_with_real_session_and_tls(
   listener: tokio::net::TcpListener,
-  tx: mpsc::Sender<ReceivedMessage>,
+  tx: mpsc::Sender<Delivery>,
   tls: Option<TlsConfig>,
 ) {
   tokio::spawn(async move {
@@ -249,11 +265,13 @@ async fn smtp_to_api_pipeline() {
 
   let repo_clone = repo.clone();
   tokio::spawn(async move {
-    while let Some(msg) = smtp_rx.recv().await {
+    while let Some(delivery) = smtp_rx.recv().await {
+      let (msg, ack) = delivery.into_parts();
       repo_clone
         .insert(&msg.sender, &msg.recipients, &msg.raw)
         .await
         .unwrap();
+      ack.stored();
     }
   });
 
@@ -365,11 +383,13 @@ async fn smtp_multiple_messages() {
 
   let repo_clone = repo.clone();
   tokio::spawn(async move {
-    while let Some(msg) = smtp_rx.recv().await {
+    while let Some(delivery) = smtp_rx.recv().await {
+      let (msg, ack) = delivery.into_parts();
       repo_clone
         .insert(&msg.sender, &msg.recipients, &msg.raw)
         .await
         .unwrap();
+      ack.stored();
     }
   });
 
@@ -494,7 +514,8 @@ async fn smtp_ehlo_advertises_starttls_when_tls_configured() {
 async fn smtp_starttls_upgrades_connection_and_accepts_message() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, mut rx) = mpsc::channel(256);
+  let (tx, rx) = mpsc::channel(256);
+  let mut rx = accept_deliveries(rx);
   spawn_smtp_with_real_session_and_tls(listener, tx, Some(load_test_tls_config()));
 
   let stream = TcpStream::connect(addr).await.unwrap();
@@ -643,7 +664,8 @@ async fn smtp_send_and_receive_via_channel() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
 
-  let (tx, mut rx) = mpsc::channel(256);
+  let (tx, rx) = mpsc::channel(256);
+  let mut rx = accept_deliveries(rx);
   spawn_smtp_with_real_session(listener, tx);
 
   smtp_send(
@@ -670,7 +692,8 @@ async fn smtp_rset_clears_envelope() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
 
-  let (tx, mut rx) = mpsc::channel(256);
+  let (tx, rx) = mpsc::channel(256);
+  let mut rx = accept_deliveries(rx);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = TcpStream::connect(addr).await.unwrap();
@@ -761,11 +784,13 @@ async fn webhook_fires_on_new_message() {
   let repo_clone = repo.clone();
   let state = AppState::new(repo.clone(), ws_tx, None, None);
   tokio::spawn(async move {
-    while let Some(received) = smtp_rx.recv().await {
+    while let Some(delivery) = smtp_rx.recv().await {
+      let (received, ack) = delivery.into_parts();
       if let Ok(summary) = repo_clone
         .insert(&received.sender, &received.recipients, &received.raw)
         .await
       {
+        ack.stored();
         state.broadcast(WsEvent::MessageNew(summary.clone()));
 
         let client = webhook_client.clone();
@@ -966,7 +991,7 @@ async fn cli_assert_filters_by_subject() {
 #[tokio::test]
 async fn smtp_session_limit_rejects_excess() {
   let smtp_port = portpicker::pick_unused_port().expect("no free port");
-  let (tx, _) = mpsc::channel::<ReceivedMessage>(256);
+  let (tx, _) = mpsc::channel::<Delivery>(256);
 
   let config = SmtpServerConfig {
     host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
@@ -1010,7 +1035,7 @@ async fn smtp_session_limit_rejects_excess() {
   drop(held_connections);
 }
 
-async fn spawn_smtp_only(tx: mpsc::Sender<ReceivedMessage>) -> std::net::SocketAddr {
+async fn spawn_smtp_only(tx: mpsc::Sender<Delivery>) -> std::net::SocketAddr {
   let smtp_port = portpicker::pick_unused_port().expect("no free port");
   let config = SmtpServerConfig {
     host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
@@ -1034,15 +1059,17 @@ const BULK_MESSAGES_ON_ONE_CONNECTION: usize = 400;
 
 #[tokio::test]
 async fn smtp_accepts_a_long_bulk_send_over_one_connection() {
-  let (tx, mut rx) = mpsc::channel::<ReceivedMessage>(1024);
+  let (tx, mut rx) = mpsc::channel::<Delivery>(1024);
   // Stops at the expected count: the listener holds a sender for as long as it
   // runs, so the channel never closes on its own.
   let drain = tokio::spawn(async move {
     let mut seen = 0usize;
     while seen < BULK_MESSAGES_ON_ONE_CONNECTION {
-      if rx.recv().await.is_none() {
+      let Some(delivery) = rx.recv().await else {
         break;
-      }
+      };
+      let (_, ack) = delivery.into_parts();
+      ack.stored();
       seen += 1;
     }
     seen
@@ -1114,7 +1141,7 @@ async fn smtp_accepts_a_long_bulk_send_over_one_connection() {
 /// eventually happens; CI catches it on the job timeout.
 #[tokio::test(start_paused = true)]
 async fn smtp_disconnects_a_client_that_goes_silent() {
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   let addr = spawn_smtp_only(tx).await;
 
   let stream = TcpStream::connect(addr).await.unwrap();
@@ -1134,7 +1161,7 @@ async fn smtp_disconnects_a_client_that_goes_silent() {
 
 #[tokio::test]
 async fn smtp_still_cuts_off_a_client_that_never_delivers() {
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   let addr = spawn_smtp_only(tx).await;
 
   let stream = TcpStream::connect(addr).await.unwrap();
@@ -1501,7 +1528,7 @@ where
 async fn smtp_rejects_mail_from_before_ehlo() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1513,7 +1540,7 @@ async fn smtp_rejects_mail_from_before_ehlo() {
 async fn smtp_rejects_rcpt_to_before_mail_from() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1526,7 +1553,7 @@ async fn smtp_rejects_rcpt_to_before_mail_from() {
 async fn smtp_rejects_data_before_mail_from() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1539,7 +1566,7 @@ async fn smtp_rejects_data_before_mail_from() {
 async fn smtp_rejects_data_without_recipients() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1554,7 +1581,7 @@ async fn smtp_rejects_data_without_recipients() {
 async fn smtp_rejects_excess_recipients() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1575,7 +1602,7 @@ async fn smtp_rejects_excess_recipients() {
 async fn smtp_unknown_command_returns_500() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;
@@ -1583,11 +1610,85 @@ async fn smtp_unknown_command_returns_500() {
   assert_eq!(resp, "500 Unknown command\r\n");
 }
 
+const LOCAL_ERROR: &str = "451 Requested action aborted: local error in processing\r\n";
+
+/// Walks a session up to the terminating dot and returns the reply it draws.
+async fn send_one_message(addr: std::net::SocketAddr) -> String {
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  assert_eq!(
+    send_line(&mut stream, "MAIL FROM:<alice@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert_eq!(
+    send_line(&mut stream, "RCPT TO:<bob@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert!(send_line(&mut stream, "DATA").await.starts_with("354 "));
+
+  stream
+    .write_all(b"Subject: Verdict\r\n\r\nbody\r\n.\r\n")
+    .await
+    .unwrap();
+  read_smtp_response_line(&mut stream).await
+}
+
+/// A message the store refuses must not leave the sender thinking it landed.
+///
+/// The session used to answer `250` the moment the message reached the
+/// in-process channel, so a write that failed afterwards lost it with nothing
+/// but a log line to show for it. `451` is what asks for the retry.
+#[tokio::test]
+async fn smtp_refuses_a_message_the_consumer_could_not_store() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, mut rx) = mpsc::channel::<Delivery>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  tokio::spawn(async move {
+    while let Some(delivery) = rx.recv().await {
+      let (_, ack) = delivery.into_parts();
+      ack.rejected();
+    }
+  });
+
+  assert_eq!(send_one_message(addr).await, LOCAL_ERROR);
+}
+
+/// A consumer that goes away mid-write cannot vouch for the message either.
+#[tokio::test]
+async fn smtp_refuses_a_message_left_unanswered() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, mut rx) = mpsc::channel::<Delivery>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  tokio::spawn(async move {
+    while let Some(delivery) = rx.recv().await {
+      drop(delivery);
+    }
+  });
+
+  assert_eq!(send_one_message(addr).await, LOCAL_ERROR);
+}
+
+#[tokio::test]
+async fn smtp_accepts_a_message_the_consumer_stored() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, rx) = mpsc::channel::<Delivery>(16);
+  let mut messages = accept_deliveries(rx);
+  spawn_smtp_with_real_session(listener, tx);
+
+  assert_eq!(send_one_message(addr).await, "250 OK\r\n");
+  assert_eq!(messages.recv().await.unwrap().sender, "alice@test.com");
+}
+
 #[tokio::test]
 async fn smtp_noop_allowed_before_ehlo() {
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
-  let (tx, _rx) = mpsc::channel::<ReceivedMessage>(16);
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
   spawn_smtp_with_real_session(listener, tx);
 
   let mut stream = connect_smtp_and_greet(addr).await;

@@ -15,10 +15,11 @@ use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 use tracing::{debug, warn};
 
-use crate::message::ReceivedMessage;
+use crate::message::{Delivery, DeliveryOutcome, ReceivedMessage};
 use crate::server::TlsConfig;
 
 const OK: &str = "250 OK\r\n";
+const LOCAL_ERROR: &str = "451 Requested action aborted: local error in processing\r\n";
 const DATA_START: &str = "354 Start mail input; end with <CRLF>.<CRLF>\r\n";
 const QUIT_RESPONSE: &str = "221 Bye\r\n";
 const RSET_OK: &str = "250 Reset OK\r\n";
@@ -42,6 +43,14 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 /// peer from holding a session open while still allowing a large message to
 /// arrive over a slow link.
 const DATA_PHASE_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the session waits to hear whether the message was stored.
+///
+/// The reply is held until the consumer answers, so this is the cap on a
+/// consumer that stops answering at all. It sits well above the storage
+/// budget — SQLite waits out a lock for `busy_timeout` and the repository
+/// retries for as long again — because answering `451` on a write that was
+/// about to succeed invites the sender to deliver the message twice.
+const STORE_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum SmtpStream {
   Plain(TcpStream),
@@ -103,7 +112,7 @@ pub enum SessionError {
 pub struct Session {
   stream: Option<BufReader<SmtpStream>>,
   peer: SocketAddr,
-  sender: mpsc::Sender<ReceivedMessage>,
+  sender: mpsc::Sender<Delivery>,
   max_message_size: usize,
   tls: Option<Arc<RustlsServerConfig>>,
   greeted: bool,
@@ -115,7 +124,7 @@ impl Session {
   pub fn new(
     stream: TcpStream,
     peer: SocketAddr,
-    sender: mpsc::Sender<ReceivedMessage>,
+    sender: mpsc::Sender<Delivery>,
     max_message_size: usize,
     tls: Option<TlsConfig>,
   ) -> Self {
@@ -196,7 +205,13 @@ impl Session {
         } else {
           self.write(DATA_START).await?;
           match timeout(DATA_PHASE_TIMEOUT, self.receive_data()).await {
-            Ok(Ok(())) => command_count = 0,
+            Ok(Ok(message)) => {
+              if let Some(message) = message {
+                self.deliver(message).await?;
+              }
+              self.reset_transaction();
+              command_count = 0;
+            }
             Ok(Err(SessionError::MessageTooLarge)) => {
               self.write("552 Message exceeds maximum size\r\n").await?;
             }
@@ -330,7 +345,11 @@ impl Session {
     Ok(())
   }
 
-  async fn receive_data(&mut self) -> Result<(), SessionError> {
+  /// Reads the DATA phase, returning the message once the terminating dot lands.
+  ///
+  /// Returns `None` when the peer disconnects mid-transfer, which leaves
+  /// nothing to deliver and nobody to answer.
+  async fn receive_data(&mut self) -> Result<Option<ReceivedMessage>, SessionError> {
     let mut data = Vec::with_capacity(8192);
     let mut line_buf = Vec::new();
 
@@ -338,7 +357,7 @@ impl Session {
       line_buf.clear();
       let bytes_read = self.read_line_untimed(&mut line_buf).await?;
       if bytes_read == 0 {
-        return Ok(());
+        return Ok(None);
       }
 
       let trimmed = line_buf
@@ -362,22 +381,41 @@ impl Session {
       data.extend_from_slice(content);
     }
 
-    let message = ReceivedMessage {
+    Ok(Some(ReceivedMessage {
       sender: self.mail_from.clone().unwrap_or_default(),
       recipients: self.rcpt_to.clone(),
       raw: data,
-    };
+    }))
+  }
 
-    if self.sender.send(message).await.is_err() {
+  /// Hands the message over and answers for whatever the consumer reports.
+  ///
+  /// `250` is reserved for a message that reached storage. Every other outcome
+  /// — a closed channel, a refused write, a consumer that dropped the delivery
+  /// or never answered — is a `451`, which tells the sender to try again
+  /// rather than leaving it believing a lost message was accepted.
+  async fn deliver(&mut self, message: ReceivedMessage) -> Result<(), SessionError> {
+    let (delivery, verdict) = Delivery::new(message);
+    if self.sender.send(delivery).await.is_err() {
       warn!(peer = %self.peer, "Channel closed, message not stored");
-      self
-        .write("451 Requested action aborted: local error in processing\r\n")
-        .await?;
-    } else {
-      self.write(OK).await?;
+      return self.write(LOCAL_ERROR).await;
     }
-    self.reset_transaction();
-    Ok(())
+
+    match timeout(STORE_ACK_TIMEOUT, verdict).await {
+      Ok(Ok(DeliveryOutcome::Stored)) => self.write(OK).await,
+      Ok(Ok(DeliveryOutcome::Rejected)) => {
+        warn!(peer = %self.peer, "Storing the message failed, asking the sender to retry");
+        self.write(LOCAL_ERROR).await
+      }
+      Ok(Err(_)) => {
+        warn!(peer = %self.peer, "Message dropped before it was stored, asking the sender to retry");
+        self.write(LOCAL_ERROR).await
+      }
+      Err(_) => {
+        warn!(peer = %self.peer, "Timed out waiting for the message to be stored");
+        self.write(LOCAL_ERROR).await
+      }
+    }
   }
 
   async fn drain_data(&mut self) {
