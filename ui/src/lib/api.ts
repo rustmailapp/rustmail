@@ -65,12 +65,9 @@ async function withDeadline<T>(
  * and, for a write, the screen.
  */
 export class ResponseShapeError extends Error {
-  readonly route: string;
-
   constructor(route: string, detail: string, options?: ErrorOptions) {
     super(`${route} returned an unexpected shape: ${detail}`, options);
     this.name = "ResponseShapeError";
-    this.route = route;
   }
 }
 
@@ -97,7 +94,9 @@ function parse<S extends z.ZodMiniType>(
   if (result.success) return result.data;
 
   const issue = result.error.issues[0];
-  if (issue === undefined) throw new ResponseShapeError(route, "the body");
+  if (issue === undefined) {
+    throw new ResponseShapeError(route, "the body did not match");
+  }
   const where = issue.path.length === 0 ? "the body" : fieldPath(issue.path);
   const detail =
     "expected" in issue
