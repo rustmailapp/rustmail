@@ -17,7 +17,8 @@ const PAGE_SIZE = 100;
  *
  * Each arrival pushes the oldest loaded row out past this, and scrolling down
  * reads it back from the server, so memory and every per-frame pass over the
- * list stay bounded however long the traffic runs.
+ * list stay bounded however long the traffic runs. Only the reader scrolling
+ * down loads past it.
  */
 const MAX_LIVE_ROWS = 5 * PAGE_SIZE;
 
@@ -167,6 +168,7 @@ function revealArrivals(): void {
 }
 
 function replaceRows(rows: MessageSummary[]): void {
+  letGoWhileHidden.clear();
   positions.clear();
   headPosition = 0;
   rows.forEach((m, i) => positions.set(m.id, i));
@@ -199,6 +201,14 @@ function removeRow(id: string): void {
 }
 
 /**
+ * Rows awaiting deletion that {@link trimRows} let go.
+ *
+ * The server still holds them, so its total still counts them, and the list
+ * must keep counting them out until the deletion settles or is undone.
+ */
+const letGoWhileHidden = new Set<string>();
+
+/**
  * Lets the rows past {@link MAX_LIVE_ROWS} go, and pages on from the last kept.
  *
  * The cursor stays in the view it was read under, since the rows let go
@@ -207,7 +217,11 @@ function removeRow(id: string): void {
 function trimRows(): void {
   const rows = messages();
   if (rows.length <= MAX_LIVE_ROWS) return;
-  for (const m of rows.slice(MAX_LIVE_ROWS)) positions.delete(m.id);
+  const hidden = hiddenIds();
+  for (const m of rows.slice(MAX_LIVE_ROWS)) {
+    positions.delete(m.id);
+    if (hidden.includes(m.id)) letGoWhileHidden.add(m.id);
+  }
   const kept = rows.slice(0, MAX_LIVE_ROWS);
   setMessages(kept);
   setNextCursor(kept[kept.length - 1].id);
@@ -346,7 +360,9 @@ const total = createMemo(() => {
   const hidden = hiddenIds();
   if (hidden.length === 0) return storedTotal();
   messages();
-  const hiddenCount = hidden.filter((id) => indexOfRow(id) >= 0).length;
+  const hiddenCount = hidden.filter(
+    (id) => indexOfRow(id) >= 0 || letGoWhileHidden.has(id),
+  ).length;
   return Math.max(0, storedTotal() - hiddenCount);
 });
 
@@ -490,6 +506,7 @@ function clearUndoTimer(): void {
 }
 
 function unhide(id: string): void {
+  letGoWhileHidden.delete(id);
   setHiddenIds((ids) => ids.filter((hidden) => hidden !== id));
 }
 

@@ -1122,6 +1122,15 @@ describe("the live list's length", () => {
     expect(ids.at(-1)).toBe(`id-${LAST_KEPT}`);
   });
 
+  it("keeps a row awaiting deletion counted out after letting it go", () => {
+    deleteWithUndo(`id-${MAX_LIVE_ROWS - 1}`);
+    expect(total()).toBe(2 * MAX_LIVE_ROWS - 1);
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    expect(total()).toBe(2 * MAX_LIVE_ROWS);
+  });
+
   it("still counts the rows it let go", () => {
     deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
 
