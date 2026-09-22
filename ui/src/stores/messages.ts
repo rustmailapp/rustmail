@@ -1,11 +1,19 @@
 import { batch, createSignal, createMemo } from "solid-js";
 import type { ConfirmDialogOptions } from "../components/ConfirmDialog";
-import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
+import type {
+  FilterState,
+  ListResponse,
+  MessageSummary,
+  WsEvent,
+} from "../lib/types";
 import * as api from "../lib/api";
 import * as schema from "../lib/schema";
 import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
+
+/** The status `GET /messages` answers with for a `before` it does not know. */
+const UNKNOWN_CURSOR_STATUS = 400;
 
 /**
  * How many times a list read is retried when a deletion confirms mid-flight.
@@ -45,6 +53,13 @@ const [selectedId, setSelectedId] = createSignal<string | null>(null);
 const [loading, setLoading] = createSignal(false);
 const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
+/**
+ * Where the next older page starts, or `null` once the oldest one is loaded.
+ *
+ * It is always the id of the last loaded row: the server hands it back with
+ * each page, and a deletion of that row moves it back to the row before.
+ */
+const [nextCursor, setNextCursor] = createSignal<string | null>(null);
 
 /**
  * Messages kept out of the list while their deletion is still pending.
@@ -141,7 +156,7 @@ const allTags = createMemo(() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
 });
 
-const hasMore = createMemo(() => messages().length < storedTotal());
+const hasMore = createMemo(() => nextCursor() !== null);
 
 /** Where {@link moveSelection} should land, relative to the current selection. */
 type SelectionTarget = "next" | "prev" | "first" | "last";
@@ -249,6 +264,11 @@ const issuedDeletes = new Map<string, IssuedDelete>();
 
 /** Removes a confirmed deletion without assuming the current total includes it. */
 function forgetMessage(id: string): void {
+  if (nextCursor() === id) {
+    const rows = messages();
+    const index = rows.findIndex((m) => m.id === id);
+    setNextCursor(rows[index - 1]?.id ?? null);
+  }
   setMessages((prev) => prev.filter((m) => m.id !== id));
   unhide(id);
   if (selectedId() === id) setSelectedId(null);
@@ -267,7 +287,10 @@ async function refreshTotal(): Promise<void> {
   const currentRevision = deletionRevision;
   const query = search();
   try {
-    const response = await api.listMessages(1, 0, query || undefined);
+    const response = await api.listMessages({
+      limit: 1,
+      q: query || undefined,
+    });
     if (
       request !== latestCountRead ||
       currentSnapshot !== snapshot ||
@@ -478,9 +501,7 @@ async function readFirstPage(): Promise<boolean> {
       const revision = deletionRevision;
       eventsDuringRead = [];
       const res = await api.listMessages(
-        PAGE_SIZE,
-        0,
-        query || undefined,
+        { limit: PAGE_SIZE, q: query || undefined },
         controller.signal,
       );
       if (request !== latestFetch || query !== search()) return false;
@@ -491,6 +512,7 @@ async function readFirstPage(): Promise<boolean> {
         snapshot += 1;
         countNeedsRefresh = raced;
         setMessages(res.messages);
+        setNextCursor(res.next_cursor);
         setStoredTotal(res.total);
         searchStale = false;
         for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
@@ -532,7 +554,14 @@ function scheduleSearchRefresh(): void {
   }, SEARCH_REFRESH_WINDOW_MS);
 }
 
-async function loadMore() {
+/**
+ * Reads the page older than the last loaded row, and appends it.
+ *
+ * A cursor the server no longer knows belongs to a message deleted before its
+ * event got here, so the row goes and the read starts again from the one
+ * before it.
+ */
+async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
   const query = search();
   const startedOn = latestFetch;
@@ -540,12 +569,22 @@ async function loadMore() {
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
       if (query !== search() || startedOn !== latestFetch) return;
+      const before = nextCursor();
+      if (before === null) return;
       const revision = deletionRevision;
-      const res = await api.listMessages(
-        PAGE_SIZE,
-        messages().length,
-        query || undefined,
-      );
+      let res: ListResponse;
+      try {
+        res = await api.listMessages({
+          limit: PAGE_SIZE,
+          q: query || undefined,
+          before,
+        });
+      } catch (error) {
+        if (!isUnknownCursor(error)) throw error;
+        if (query !== search() || startedOn !== latestFetch) return;
+        forgetMessage(before);
+        continue;
+      }
       if (query !== search() || startedOn !== latestFetch) return;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
@@ -557,6 +596,7 @@ async function loadMore() {
           const seen = new Set(prev.map((m) => m.id));
           return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
         });
+        setNextCursor(res.next_cursor);
         setStoredTotal(res.total);
       });
       if (raced) void refreshTotal();
@@ -565,6 +605,12 @@ async function loadMore() {
   } finally {
     setLoadingMore(false);
   }
+}
+
+function isUnknownCursor(error: unknown): boolean {
+  return (
+    error instanceof api.ApiError && error.status === UNKNOWN_CURSOR_STATUS
+  );
 }
 
 const RECONNECT_BASE_DELAY = 2000;
@@ -761,6 +807,7 @@ function openSocket(): WebSocket {
         batch(() => {
           dropPendingDeletes();
           setMessages([]);
+          setNextCursor(null);
           setStoredTotal(0);
           setSelectedId(null);
         });
@@ -810,6 +857,7 @@ export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
   LIST_READ_ATTEMPTS,
+  PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,

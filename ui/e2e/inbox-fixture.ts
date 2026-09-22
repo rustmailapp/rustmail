@@ -10,6 +10,7 @@ const EPOCH = Date.UTC(2026, 0, 1);
 const MESSAGE_SIZE_BYTES = 2048;
 const NO_CONTENT = 204;
 const NOT_FOUND = 404;
+const BAD_REQUEST = 400;
 /** Mirrors the clamp the real handler applies to `limit`. */
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 200;
@@ -145,11 +146,23 @@ export async function mockInbox(
     }
     if (path === "/messages") {
       const limit = clampLimit(Number(url.searchParams.get("limit")));
-      const offset = Number(url.searchParams.get("offset"));
+      const before = url.searchParams.get("before");
+      const start =
+        before === null ? 0 : all.findIndex((m) => m.id === before) + 1;
+      if (start === 0 && before !== null) {
+        return route.fulfill({
+          status: BAD_REQUEST,
+          json: { error: "unknown cursor" },
+        });
+      }
+      const rows = all.slice(start, start + limit);
+      const older = start + rows.length < all.length;
       return route.fulfill({
         json: {
-          messages: all.slice(offset, offset + limit),
+          messages: rows,
           total: all.length,
+          limit,
+          next_cursor: older ? (rows.at(-1)?.id ?? null) : null,
         },
       });
     }

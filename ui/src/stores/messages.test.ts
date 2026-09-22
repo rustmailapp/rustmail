@@ -16,7 +16,9 @@ const {
   markStarred: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({
+vi.mock("../lib/api", async () => ({
+  ApiError: (await vi.importActual<typeof import("../lib/api")>("../lib/api"))
+    .ApiError,
   deleteAllMessages,
   deleteMessage,
   listMessages,
@@ -24,9 +26,11 @@ vi.mock("../lib/api", () => ({
   markStarred,
 }));
 
+const { ApiError } = await import("../lib/api");
 const {
   LIST_READ_ATTEMPTS,
   NOTICE_SUBJECT_MAX,
+  PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   UNDO_WINDOW_MS,
@@ -38,6 +42,7 @@ const {
   flushPendingDelete,
   fetchMessages,
   filteredMessages,
+  hasMore,
   loading,
   moveSelection,
   loadMore,
@@ -81,8 +86,24 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+type Page = {
+  messages: MessageSummary[];
+  total: number;
+  limit: number;
+  next_cursor: string | null;
+};
+
+/** A list response as the server shapes one, older pages behind `cursor`. */
+function page(
+  msgs: MessageSummary[],
+  total = msgs.length,
+  cursor: string | null = null,
+): Page {
+  return { messages: msgs, total, limit: PAGE_SIZE, next_cursor: cursor };
+}
+
 async function seed(msgs: MessageSummary[]): Promise<void> {
-  listMessages.mockResolvedValue({ messages: msgs, total: msgs.length });
+  listMessages.mockResolvedValue(page(msgs));
   await fetchMessages();
 }
 
@@ -111,6 +132,74 @@ describe("store reactivity", () => {
     await seed(range(2));
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+});
+
+describe("paging by cursor", () => {
+  it("reads the next page from the cursor the last page returned", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockResolvedValue(page([message(2), message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: "id-1",
+    });
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+      "id-3",
+    ]);
+  });
+
+  it("stops paging once the server has no older page", async () => {
+    await seed(range(2));
+    listMessages.mockClear();
+
+    await loadMore();
+
+    expect(hasMore()).toBe(false);
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("moves the cursor back a row when its message is deleted", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    deleteWithUndo("id-2");
+    flushPendingDelete();
+    await vi.waitFor(() => expect(total()).toBe(4));
+    listMessages.mockResolvedValue(page([message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: "id-1",
+    });
+  });
+
+  it("reads on from the row before a cursor the server no longer knows", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    listMessages.mockRejectedValueOnce(
+      new ApiError(new Response(null, { status: 400 })),
+    );
+    listMessages.mockResolvedValueOnce(page([message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: "id-1",
+    });
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-3",
+    ]);
   });
 });
 
@@ -875,9 +964,7 @@ describe("live traffic during a search", () => {
     await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
 
     expect(listMessages).toHaveBeenCalledExactlyOnceWith(
-      100,
-      0,
-      "invoice",
+      { limit: PAGE_SIZE, q: "invoice" },
       expect.any(AbortSignal),
     );
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
@@ -980,14 +1067,12 @@ describe("live traffic during a search", () => {
 describe("a superseded list read", () => {
   it("is aborted when a newer read starts", async () => {
     const signals: AbortSignal[] = [];
-    listMessages.mockImplementation(
-      (_limit: number, _offset: number, _q: unknown, signal: AbortSignal) => {
-        signals.push(signal);
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener("abort", () => reject(signal.reason)),
-        );
-      },
-    );
+    listMessages.mockImplementation((_query: unknown, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      );
+    });
 
     const first = fetchMessages();
     const second = fetchMessages();
@@ -1137,14 +1222,14 @@ describe("a deletion reported over both connections", () => {
 
       expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
       expect(total()).toBe(1);
-      expect(listMessages).toHaveBeenLastCalledWith(1, 0, undefined);
+      expect(listMessages).toHaveBeenLastCalledWith({ limit: 1 });
     },
   );
 
   it.each([3, 4])(
     "keeps all loaded pages when their total during the DELETE was %i",
     async (pageTotal) => {
-      listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+      listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
       await fetchMessages();
       const pending = deferred<void>();
       deleteMessage.mockReturnValue(pending.promise);
@@ -1201,8 +1286,8 @@ describe("a deletion reported over both connections", () => {
     expect(total()).toBe(1);
   });
 
-  it("retries an old page using the offset after deletion", async () => {
-    listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+  it("re-reads an older page that raced a deletion from the same cursor", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
     await fetchMessages();
     const read = deferred<{ messages: MessageSummary[]; total: number }>();
     listMessages.mockReturnValueOnce(read.promise);
@@ -1219,7 +1304,10 @@ describe("a deletion reported over both connections", () => {
     read.resolve({ messages: [message(2), message(3)], total: 4 });
     await paging;
 
-    expect(listMessages).toHaveBeenLastCalledWith(100, 1, undefined);
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: "id-1",
+    });
     expect(filteredMessages().map((m) => m.id)).toEqual([
       "id-1",
       "id-2",
@@ -1322,7 +1410,7 @@ describe("a deletion reported over both connections", () => {
   it("stops re-reading the list when deletions keep confirming", async () => {
     const COUNT_ONLY_READ = 1;
     let pageReads = 0;
-    listMessages.mockImplementation(async (limit: number) => {
+    listMessages.mockImplementation(async ({ limit }: { limit: number }) => {
       if (limit === COUNT_ONLY_READ) return { messages: [], total: 1 };
       pageReads += 1;
       deliver(deletion(`purged-${pageReads}`));

@@ -30,6 +30,8 @@ export const message = z.extend(messageSummary, {
 export const listResponse = z.object({
   messages: z.array(messageSummary),
   total: z.number(),
+  limit: z.number(),
+  next_cursor: z.nullable(z.string()),
 });
 
 export const attachment = z.object({

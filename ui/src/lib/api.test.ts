@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiError,
   BULK_REQUEST_TIMEOUT_MS,
   deleteAllMessages,
   getMessage,
@@ -122,7 +123,7 @@ describe("request deadline", () => {
     const caller = new AbortController();
 
     const read = expect(
-      listMessages(100, 0, "invoice", caller.signal),
+      listMessages({ limit: 100, q: "invoice" }, caller.signal),
     ).rejects.toMatchObject({ name: "AbortError" });
     caller.abort(new DOMException("superseded", "AbortError"));
 
@@ -190,10 +191,15 @@ describe("response shape", () => {
 
   it("names the row a list response drifted in", async () => {
     fetchMock.mockResolvedValue(
-      Response.json({ messages: [messageBody({ size: "1024" })], total: 1 }),
+      Response.json({
+        messages: [messageBody({ size: "1024" })],
+        total: 1,
+        limit: 1,
+        next_cursor: null,
+      }),
     );
 
-    await expect(listMessages()).rejects.toThrow(
+    await expect(listMessages({ limit: 1 })).rejects.toThrow(
       "GET /messages returned an unexpected shape: messages[0].size should be number",
     );
   });
@@ -242,5 +248,49 @@ describe("response shape", () => {
     fetchMock.mockResolvedValue(res);
 
     await expect(getMessage("msg-0000")).rejects.toBe(broken);
+  });
+});
+
+describe("list reads", () => {
+  function requested(): URL {
+    const [input] = fetchMock.mock.calls[0] ?? [];
+    return new URL(String(input), "http://inbox.test");
+  }
+
+  function listBody(): Record<string, unknown> {
+    return {
+      messages: [messageBody()],
+      total: 1,
+      limit: 100,
+      next_cursor: "msg-0000",
+    };
+  }
+
+  it("asks for the page older than a cursor, and no offset", async () => {
+    fetchMock.mockResolvedValue(Response.json(listBody()));
+
+    await listMessages({ limit: 100, before: "msg-0099" });
+
+    expect(requested().searchParams.get("before")).toBe("msg-0099");
+    expect(requested().searchParams.has("offset")).toBe(false);
+  });
+
+  it("returns the cursor the server hands back", async () => {
+    fetchMock.mockResolvedValue(Response.json(listBody()));
+
+    await expect(listMessages({ limit: 100 })).resolves.toMatchObject({
+      next_cursor: "msg-0000",
+    });
+  });
+
+  it("carries the status of a request the server rejected", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ error: "unknown cursor" }, { status: 400 }),
+    );
+
+    const read = listMessages({ limit: 100, before: "msg-gone" });
+
+    await expect(read).rejects.toBeInstanceOf(ApiError);
+    await expect(read).rejects.toMatchObject({ status: 400 });
   });
 });
