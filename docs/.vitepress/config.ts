@@ -72,6 +72,7 @@ const reference: DefaultTheme.SidebarItem[] = [
       ...openApiItems,
     ],
   },
+  { text: "Benchmarks", link: "/benchmarks" },
   { text: "Getting Started Guide", link: "/getting-started/introduction" },
 ];
 
@@ -117,7 +118,7 @@ export default defineConfig({
       {
         text: "Reference",
         link: "/configuration/cli-flags",
-        activeMatch: "/configuration/|/features/|/api/",
+        activeMatch: "/configuration/|/features/|/api/|/benchmarks",
       },
       {
         text: "Changelog",
@@ -132,6 +133,7 @@ export default defineConfig({
       "/configuration/": reference,
       "/features/": reference,
       "/api/": reference,
+      "/benchmarks": reference,
     },
 
     socialLinks: [

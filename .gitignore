@@ -25,6 +25,10 @@ reviews/
 docs/.vitepress/dist
 docs/.vitepress/cache
 
+# Benchmark harness output
+scripts/bench/results/
+scripts/bench/__pycache__/
+
 .hermes
 .serena
 .playwright-mcp/
