@@ -24,6 +24,12 @@ impl EventHandler {
       .await
       .ok_or_else(|| anyhow::anyhow!("Event channel closed"))
   }
+
+  /// Returns the next already-queued event without waiting, or `None` once
+  /// the queue is drained.
+  pub fn try_next(&mut self) -> Option<Event> {
+    self.rx.try_recv().ok()
+  }
 }
 
 pub fn create_event_handler() -> (EventHandler, mpsc::UnboundedSender<Event>) {
@@ -59,4 +65,21 @@ pub fn create_event_handler() -> (EventHandler, mpsc::UnboundedSender<Event>) {
   });
 
   (EventHandler { rx }, tx)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[tokio::test]
+  async fn try_next_drains_the_queue_without_blocking() {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let mut handler = EventHandler { rx };
+    tx.send(Event::Tick).unwrap();
+    tx.send(Event::Resize).unwrap();
+
+    assert!(matches!(handler.try_next(), Some(Event::Tick)));
+    assert!(matches!(handler.try_next(), Some(Event::Resize)));
+    assert!(handler.try_next().is_none());
+  }
 }

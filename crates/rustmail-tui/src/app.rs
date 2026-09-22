@@ -153,22 +153,37 @@ impl App {
     self.fetch_messages().await;
 
     while self.running {
-      terminal.draw(|frame| ui::render(frame, self))?;
+      let first = events.next().await?;
+      self.dispatch(first).await;
 
-      match events.next().await? {
-        Event::Key(key) => self.handle_key(key).await,
-        Event::Mouse(mouse) => self.handle_mouse(mouse).await,
-        Event::Resize => {}
-        Event::Tick => {
-          self.on_tick();
-          self.refetch_if_stale().await;
-        }
-        Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
-        Event::WsStatus(connected) => self.handle_ws_status(connected).await,
+      while self.running {
+        let Some(event) = events.try_next() else {
+          break;
+        };
+        self.dispatch(event).await;
       }
+
+      if !self.running {
+        break;
+      }
+      terminal.draw(|frame| ui::render(frame, self))?;
     }
 
     Ok(())
+  }
+
+  async fn dispatch(&mut self, event: Event) {
+    match event {
+      Event::Key(key) => self.handle_key(key).await,
+      Event::Mouse(mouse) => self.handle_mouse(mouse).await,
+      Event::Resize => {}
+      Event::Tick => {
+        self.on_tick();
+        self.refetch_if_stale().await;
+      }
+      Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
+      Event::WsStatus(connected) => self.handle_ws_status(connected).await,
+    }
   }
 
   fn connect_websocket(&self, tx: mpsc::UnboundedSender<Event>) {
