@@ -16,8 +16,9 @@ info:
     are answered on any host.
 
 
-    A request still running after 30 seconds is abandoned and answered
-    `503` with an empty body. The WebSocket is exempt.
+    A `GET` or `HEAD` still running after 30 seconds is abandoned and
+    answered `503` with an empty body. Writes are never cut short, so a
+    `503` never stands for a change that still lands. The WebSocket is exempt.
 
 servers:
   - url: http://localhost:8025
