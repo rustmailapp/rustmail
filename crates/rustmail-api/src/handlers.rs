@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{AppState, WsEvent};
-use rustmail_storage::StorageError;
+use rustmail_storage::{MessageFilter, PageStart, StorageError};
 
 /// Captured mail is immutable once stored, so anything derived from a
 /// message's bytes can be cached indefinitely. `private` keeps shared caches
@@ -21,11 +21,59 @@ const IMMUTABLE_MESSAGE_CACHE: &str = "private, max-age=31536000, immutable";
 /// responses must not be served from a cache.
 const MUTABLE_MESSAGE_CACHE: &str = "no-store";
 
-#[derive(Deserialize)]
-pub struct ListParams {
-  pub q: Option<String>,
-  pub limit: Option<i64>,
-  pub offset: Option<i64>,
+/// Page size when a list request names none.
+const DEFAULT_PAGE_LIMIT: i64 = 50;
+/// Largest page a list request is served, whatever it asks for.
+const MAX_PAGE_LIMIT: i64 = 200;
+
+/// A list request's query string, parsed.
+///
+/// Read from raw pairs rather than derived, because `tag` may repeat.
+/// Unknown keys are ignored, as they always were.
+#[derive(Default)]
+struct ListParams {
+  q: Option<String>,
+  limit: Option<i64>,
+  offset: Option<i64>,
+  before: Option<String>,
+  filter: MessageFilter,
+}
+
+impl ListParams {
+  fn parse(pairs: Vec<(String, String)>) -> Result<Self, AppError> {
+    let mut params = Self::default();
+    for (key, value) in pairs {
+      match key.as_str() {
+        "q" => params.q = Some(value),
+        "limit" => params.limit = Some(parse_integer(&key, &value)?),
+        "offset" => params.offset = Some(parse_integer(&key, &value)?),
+        "before" => params.before = Some(value),
+        "starred" => params.filter.starred = parse_flag(&key, &value)?,
+        "unread" => params.filter.unread = parse_flag(&key, &value)?,
+        "has_attachments" => params.filter.has_attachments = parse_flag(&key, &value)?,
+        "tag" => params.filter.tags.push(value),
+        _ => {}
+      }
+    }
+    if params.filter.tags.len() > MAX_TAGS {
+      return Err(AppError::BadRequest(format!(
+        "Too many tag filters (max {MAX_TAGS})"
+      )));
+    }
+    Ok(params)
+  }
+}
+
+fn parse_integer(key: &str, value: &str) -> Result<i64, AppError> {
+  value
+    .parse()
+    .map_err(|_| AppError::BadRequest(format!("{key} must be an integer")))
+}
+
+fn parse_flag(key: &str, value: &str) -> Result<bool, AppError> {
+  value
+    .parse()
+    .map_err(|_| AppError::BadRequest(format!("{key} must be true or false")))
 }
 
 #[derive(Deserialize)]
@@ -37,20 +85,48 @@ pub struct UpdateBody {
 
 pub async fn list_messages(
   State(state): State<AppState>,
-  Query(params): Query<ListParams>,
+  Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<impl IntoResponse, AppError> {
-  let limit = params.limit.unwrap_or(50).clamp(1, 200);
-  let offset = params.offset.unwrap_or(0).max(0);
+  let params = ListParams::parse(pairs)?;
+  let limit = params
+    .limit
+    .unwrap_or(DEFAULT_PAGE_LIMIT)
+    .clamp(1, MAX_PAGE_LIMIT);
+  let start = match (params.before.as_deref(), params.offset) {
+    (Some(_), Some(_)) => return Err(AppError::BadRequest(CURSOR_WITH_OFFSET.to_string())),
+    (Some(before), None) => PageStart::Before(state.repo.cursor(before).await.map_err(
+      |error| match error {
+        StorageError::NotFound(_) => AppError::BadRequest(UNKNOWN_CURSOR.to_string()),
+        other => AppError::Storage(other),
+      },
+    )?),
+    (None, offset) => PageStart::Offset(offset.unwrap_or(0).max(0)),
+  };
+  let lookahead = limit + 1;
 
-  let (messages, count) = if let Some(query) = &params.q {
-    let msgs = state.repo.search(query, limit, offset).await?;
-    let total = state.repo.search_count(query).await?;
+  let (mut messages, count) = if let Some(query) = &params.q {
+    let msgs = state
+      .repo
+      .search_page(query, &params.filter, start, lookahead)
+      .await?;
+    let total = state
+      .repo
+      .search_count_filtered(query, &params.filter)
+      .await?;
     (msgs, total)
   } else {
-    let msgs = state.repo.list(limit, offset).await?;
-    let total = state.repo.count().await?;
+    let msgs = state
+      .repo
+      .list_page(&params.filter, start, lookahead)
+      .await?;
+    let total = state.repo.count_filtered(&params.filter).await?;
     (msgs, total)
   };
+  let has_more = messages.len() as i64 > limit;
+  messages.truncate(limit as usize);
+  let next_cursor = has_more
+    .then(|| messages.last().map(|m| m.id.clone()))
+    .flatten();
 
   Ok((
     StatusCode::OK,
@@ -58,6 +134,8 @@ pub async fn list_messages(
     Json(serde_json::json!({
         "messages": messages,
         "total": count,
+        "next_cursor": next_cursor,
+        "limit": limit,
     })),
   ))
 }
@@ -184,7 +262,10 @@ pub async fn get_attachment(
   Ok((
     StatusCode::OK,
     [
-      (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+      (
+        header::CONTENT_TYPE,
+        crate::DOWNLOAD_CONTENT_TYPE.to_string(),
+      ),
       (
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}\"", filename),
@@ -778,19 +859,34 @@ fn sanitize_filename(name: &str) -> String {
     .collect()
 }
 
-pub struct AppError(StorageError);
+const CURSOR_WITH_OFFSET: &str =
+  "before and offset cannot be combined; page with next_cursor or with offset, not both";
+const UNKNOWN_CURSOR: &str =
+  "before does not name a stored message; it may have been deleted, so restart from the first page";
+const READ_TIMED_OUT: &str =
+  "the request ran past the server's time limit; retry it, or narrow it with limit or filters";
+
+pub enum AppError {
+  Storage(StorageError),
+  BadRequest(String),
+  TimedOut,
+}
 
 impl From<StorageError> for AppError {
   fn from(e: StorageError) -> Self {
-    Self(e)
+    Self::Storage(e)
   }
 }
 
 impl IntoResponse for AppError {
   fn into_response(self) -> axum::response::Response {
-    let (status, message) = match &self.0 {
-      StorageError::NotFound(_) => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
-      StorageError::Database(e) => {
+    let (status, message) = match &self {
+      AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, reason.clone()),
+      AppError::TimedOut => (StatusCode::SERVICE_UNAVAILABLE, READ_TIMED_OUT.to_string()),
+      AppError::Storage(StorageError::NotFound(_)) => {
+        (StatusCode::NOT_FOUND, "Resource not found".to_string())
+      }
+      AppError::Storage(StorageError::Database(e)) => {
         tracing::error!(error = %e, "Database error");
         (
           StatusCode::INTERNAL_SERVER_ERROR,

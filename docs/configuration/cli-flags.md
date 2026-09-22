@@ -21,6 +21,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
 | `--allowed-origin` | `RUSTMAIL_ALLOWED_ORIGINS` | — | Extra origin allowed to open the WebSocket, as `scheme://host[:port]`. Repeat the flag or comma-separate the variable. The origin RustMail is served on is always allowed. |
 | `--allowed-host` | `RUSTMAIL_ALLOWED_HOSTS` | — | Host name browsers may reach RustMail on, as a bare name. Repeat the flag or comma-separate the variable. IP addresses and `localhost` are always answered. |
+| `--ws-buffer` | `RUSTMAIL_WS_BUFFER` | `4096` | WebSocket events buffered for each client. A client that falls further behind is disconnected and resyncs when it reconnects. Must be at least `1`. |
 | `--config` | — | — | Path to an optional TOML configuration file. |
 
 `STARTTLS` is advertised on the normal SMTP port only when both TLS paths are configured; setting only one fails startup. After the client upgrades the connection, it must send `EHLO` again before continuing the session.

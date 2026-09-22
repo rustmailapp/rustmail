@@ -95,6 +95,15 @@ struct ServeArgs {
   )]
   allowed_origins: Vec<String>,
 
+  /// WebSocket events buffered per client before a slow one is disconnected to resync
+  #[arg(
+    long,
+    env = "RUSTMAIL_WS_BUFFER",
+    default_value = "4096",
+    value_parser = clap::value_parser!(u32).range(1..)
+  )]
+  ws_buffer: u32,
+
   /// Host name browsers may reach RustMail on, e.g. mail.example.com
   #[arg(
     long = "allowed-host",
@@ -917,7 +926,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let release_port: Option<u16> = release_port.flatten();
 
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
-  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(args.ws_buffer as usize);
 
   let state = AppState::new(repo.clone(), ws_tx, release_host, release_port)
     .with_allowed_origins(allowed_origins.clone())
@@ -1123,6 +1132,30 @@ mod version_tests {
   #[test]
   fn resolves_a_non_empty_version() {
     assert!(!env!("RUSTMAIL_BUILD_VERSION").is_empty());
+  }
+}
+
+#[cfg(test)]
+mod ws_buffer_tests {
+  use super::*;
+
+  #[test]
+  fn the_ws_buffer_defaults_to_4096_events() {
+    let cli = Cli::try_parse_from(["rustmail"]).unwrap();
+
+    assert_eq!(cli.serve.ws_buffer, 4096);
+  }
+
+  #[test]
+  fn the_ws_buffer_flag_sets_the_broadcast_capacity() {
+    let cli = Cli::try_parse_from(["rustmail", "--ws-buffer", "16384"]).unwrap();
+
+    assert_eq!(cli.serve.ws_buffer, 16384);
+  }
+
+  #[test]
+  fn a_zero_ws_buffer_is_refused() {
+    assert!(Cli::try_parse_from(["rustmail", "--ws-buffer", "0"]).is_err());
   }
 }
 

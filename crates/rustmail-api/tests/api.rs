@@ -1654,3 +1654,481 @@ async fn a_refused_host_still_gets_the_security_headers() {
   );
   assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
 }
+
+async fn insert_numbered(repo: &MessageRepository, count: usize) -> Vec<String> {
+  let mut ids = Vec::new();
+  for i in 0..count {
+    let stored = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email(&format!("M{i}"), "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+    ids.push(stored.id);
+  }
+  ids
+}
+
+async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
+  app
+    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    .await
+    .unwrap()
+}
+
+fn listed_ids(body: &Value) -> Vec<String> {
+  body["messages"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|m| m["id"].as_str().unwrap().to_string())
+    .collect()
+}
+
+#[tokio::test]
+async fn before_returns_the_messages_older_than_the_cursor() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let response = get(app, &format!("/api/v1/messages?before={}", ids[2])).await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+}
+
+#[tokio::test]
+async fn total_ignores_the_cursor() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let body = json_body(get(app, &format!("/api/v1/messages?before={}", ids[2])).await).await;
+
+  assert_eq!(body["total"], 5);
+}
+
+#[tokio::test]
+async fn next_cursor_names_the_last_message_when_more_remain() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let body = json_body(get(app, "/api/v1/messages?limit=2").await).await;
+
+  assert_eq!(body["next_cursor"], ids[3].as_str());
+}
+
+#[tokio::test]
+async fn next_cursor_is_null_on_the_last_page() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+
+  let body =
+    json_body(get(app, &format!("/api/v1/messages?limit=2&before={}", ids[2])).await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+  assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn following_next_cursor_walks_every_message_once() {
+  let (app, repo, _) = setup().await;
+  let mut ids = insert_numbered(&repo, 7).await;
+  ids.reverse();
+
+  let mut seen = Vec::new();
+  let mut uri = "/api/v1/messages?limit=3".to_string();
+  loop {
+    let body = json_body(get(app.clone(), &uri).await).await;
+    seen.extend(listed_ids(&body));
+    match body["next_cursor"].as_str() {
+      Some(cursor) => uri = format!("/api/v1/messages?limit=3&before={cursor}"),
+      None => break,
+    }
+  }
+
+  assert_eq!(seen, ids);
+}
+
+#[tokio::test]
+async fn before_pages_search_results() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+
+  let body =
+    json_body(get(app, &format!("/api/v1/messages?q=hello&before={}", ids[3])).await).await;
+
+  assert_eq!(
+    listed_ids(&body),
+    [ids[2].clone(), ids[1].clone(), ids[0].clone()]
+  );
+}
+
+#[tokio::test]
+async fn an_unknown_cursor_is_a_bad_request() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/api/v1/messages?before=01ARZ3NDEKTSV4RRFFQ69G5FAV").await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn before_and_offset_together_are_a_bad_request() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+
+  let response = get(app, &format!("/api/v1/messages?offset=1&before={}", ids[2])).await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn the_response_reports_the_clamped_limit() {
+  let (app, _, _) = setup().await;
+
+  let body = json_body(get(app, "/api/v1/messages?limit=1000").await).await;
+
+  assert_eq!(body["limit"], 200);
+}
+
+async fn star(repo: &MessageRepository, id: &str) {
+  repo
+    .update_message(id, None, Some(true), None)
+    .await
+    .unwrap();
+}
+
+async fn tag(repo: &MessageRepository, id: &str, tag: &str) {
+  repo
+    .update_message(id, None, None, Some(&[tag.to_string()]))
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn starred_true_lists_only_starred_messages() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+  star(&repo, &ids[1]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?starred=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone()]);
+}
+
+#[tokio::test]
+async fn total_counts_only_messages_passing_the_filter() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+  star(&repo, &ids[1]).await;
+  star(&repo, &ids[3]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?starred=true&limit=1").await).await;
+
+  assert_eq!(body["total"], 2);
+}
+
+#[tokio::test]
+async fn unread_true_drops_read_messages() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 2).await;
+  repo
+    .update_message(&ids[0], Some(true), None, None)
+    .await
+    .unwrap();
+
+  let body = json_body(get(app, "/api/v1/messages?unread=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone()]);
+}
+
+#[tokio::test]
+async fn has_attachments_true_lists_only_messages_with_attachments() {
+  let (app, repo, _) = setup().await;
+  insert_numbered(&repo, 1).await;
+  let with_file = repo
+    .insert("a@t.com", &["b@t.com".into()], &email_with_inline_image())
+    .await
+    .unwrap();
+
+  let body = json_body(get(app, "/api/v1/messages?has_attachments=true").await).await;
+
+  assert_eq!(listed_ids(&body), [with_file.id]);
+}
+
+#[tokio::test]
+async fn repeated_tags_match_messages_carrying_any_of_them() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+  tag(&repo, &ids[0], "a").await;
+  tag(&repo, &ids[2], "b").await;
+
+  let body = json_body(get(app, "/api/v1/messages?tag=a&tag=b").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[2].clone(), ids[0].clone()]);
+}
+
+#[tokio::test]
+async fn filters_narrow_a_search_and_its_total() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+  star(&repo, &ids[0]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?q=hello&starred=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[0].clone()]);
+  assert_eq!(body["total"], 1);
+}
+
+#[tokio::test]
+async fn more_tags_than_a_message_can_carry_are_a_bad_request() {
+  let (app, _, _) = setup().await;
+  let tags: String = (0..21).map(|i| format!("&tag=t{i}")).collect();
+
+  let response = get(app, &format!("/api/v1/messages?limit=1{tags}")).await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn a_malformed_filter_value_is_a_bad_request() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/api/v1/messages?starred=yes").await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn before_combines_with_starred_unread_and_tag() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 6).await;
+  for id in &ids {
+    tag(&repo, id, "a").await;
+  }
+  for id in [&ids[0], &ids[1], &ids[2], &ids[4], &ids[5]] {
+    star(&repo, id).await;
+  }
+  tag(&repo, &ids[2], "b").await;
+  repo
+    .update_message(&ids[4], Some(true), None, None)
+    .await
+    .unwrap();
+
+  let body = json_body(
+    get(
+      app,
+      &format!(
+        "/api/v1/messages?before={}&starred=true&unread=true&tag=a",
+        ids[5]
+      ),
+    )
+    .await,
+  )
+  .await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+}
+
+const COMPRESSIBLE_ATTACHMENT_BYTES: usize = 4096;
+
+fn email_with_compressible_attachment() -> Vec<u8> {
+  let content = "a".repeat(COMPRESSIBLE_ATTACHMENT_BYTES);
+  format!(
+    concat!(
+      "From: a@t.com\r\n",
+      "To: b@t.com\r\n",
+      "Subject: Archive\r\n",
+      "MIME-Version: 1.0\r\n",
+      "Content-Type: multipart/mixed; boundary=\"B\"\r\n",
+      "\r\n",
+      "--B\r\n",
+      "Content-Type: text/plain\r\n",
+      "\r\n",
+      "See attached\r\n",
+      "--B\r\n",
+      "Content-Type: application/zip\r\n",
+      "Content-Disposition: attachment; filename=\"archive.zip\"\r\n",
+      "\r\n",
+      "{}\r\n",
+      "--B--\r\n",
+    ),
+    content
+  )
+  .into_bytes()
+}
+
+async fn get_gzip(app: axum::Router, uri: &str) -> axum::response::Response {
+  app
+    .oneshot(
+      Request::builder()
+        .uri(uri)
+        .header("accept-encoding", "gzip")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn attachment_downloads_are_not_gzipped() {
+  let (app, repo, _) = setup().await;
+  let message = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &email_with_compressible_attachment(),
+    )
+    .await
+    .unwrap();
+  let attachment = repo.get_attachments(&message.id).await.unwrap().remove(0);
+
+  let response = get_gzip(
+    app,
+    &format!(
+      "/api/v1/messages/{}/attachments/{}",
+      message.id, attachment.id
+    ),
+  )
+  .await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "application/octet-stream"
+  );
+  assert!(response.headers().get("content-encoding").is_none());
+}
+
+#[tokio::test]
+async fn json_responses_are_still_gzipped() {
+  let (app, repo, _) = setup().await;
+  insert_numbered(&repo, 20).await;
+
+  let response = get_gzip(app, "/api/v1/messages").await;
+
+  assert_eq!(response.headers()["content-encoding"], "gzip");
+}
+
+#[tokio::test]
+async fn a_missing_hashed_asset_is_not_found() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/assets/index-0000dead.js").await;
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_unknown_client_route_serves_the_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/messages/some-client-route").await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "text/html; charset=utf-8"
+  );
+}
+
+async fn get_with_if_none_match(
+  app: axum::Router,
+  uri: &str,
+  etag: &str,
+) -> axum::response::Response {
+  app
+    .oneshot(
+      Request::builder()
+        .uri(uri)
+        .header("if-none-match", etag)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_ui_shell_carries_an_etag() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/").await;
+
+  let etag = response.headers()["etag"].to_str().unwrap();
+  assert!(
+    etag.starts_with("W/\"") && etag.ends_with('"'),
+    "not a weak ETag, though gzip changes the bytes it is served as: {etag}"
+  );
+}
+
+#[tokio::test]
+async fn a_current_etag_revalidates_the_ui_shell_without_a_body() {
+  let (app, _, _) = setup().await;
+  let first = get(app.clone(), "/").await;
+  let etag = first.headers()["etag"].to_str().unwrap().to_string();
+
+  let response = get_with_if_none_match(app, "/", &etag).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+  assert_eq!(response.headers()["etag"], etag.as_str());
+  let body = axum::body::to_bytes(response.into_body(), 1024)
+    .await
+    .unwrap();
+  assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn a_stale_etag_gets_the_whole_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get_with_if_none_match(app, "/", "\"stale\"").await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "text/html; charset=utf-8"
+  );
+}
+
+async fn ui_shell_etag(app: axum::Router) -> String {
+  let response = get(app, "/").await;
+  response.headers()["etag"].to_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_starred_if_none_match_revalidates_the_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get_with_if_none_match(app, "/", "*").await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn a_later_entry_in_an_if_none_match_list_revalidates_the_ui_shell() {
+  let (app, _, _) = setup().await;
+  let etag = ui_shell_etag(app.clone()).await;
+
+  let response = get_with_if_none_match(app, "/", &format!("\"stale\", {etag}")).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn a_strong_if_none_match_matches_the_weak_ui_shell_etag() {
+  let (app, _, _) = setup().await;
+  let etag = ui_shell_etag(app.clone()).await;
+  let strong = etag.trim_start_matches("W/");
+
+  let response = get_with_if_none_match(app, "/", strong).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}

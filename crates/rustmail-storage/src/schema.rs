@@ -58,6 +58,10 @@ pub fn connect_options(db_url: &str) -> Result<SqliteConnectOptions, StorageErro
 /// Sets up the `messages` table, `attachments` table, FTS5 virtual table,
 /// WAL journal mode, and foreign key enforcement.
 ///
+/// Starred messages get a partial index. Without it the starred filter reads
+/// every row, each one past its raw blob to reach `is_starred`; with it, only
+/// a user's star adds an entry, so capturing mail pays nothing for it.
+///
 /// # Errors
 ///
 /// Returns [`StorageError::Database`] if any SQL statement fails.
@@ -132,6 +136,16 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
     r#"
         CREATE INDEX IF NOT EXISTS idx_messages_created_at
         ON messages(created_at)
+        "#,
+  )
+  .execute(pool)
+  .await?;
+
+  sqlx::query(
+    r#"
+        CREATE INDEX IF NOT EXISTS idx_messages_starred
+        ON messages(is_starred)
+        WHERE is_starred = 1
         "#,
   )
   .execute(pool)
@@ -312,6 +326,32 @@ mod tests {
     assert!(
       plan.contains("idx_attachments_message_id"),
       "attachment lookup by message is not using its index: {plan}"
+    );
+  }
+
+  #[tokio::test]
+  async fn starred_messages_are_listed_from_their_own_index() {
+    let pool = SqlitePoolOptions::new()
+      .connect_with(connect_options("sqlite::memory:").unwrap())
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+
+    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+      "EXPLAIN QUERY PLAN SELECT m.id FROM messages m WHERE 1=1 AND m.is_starred = 1 AND m.rowid < 10 ORDER BY m.rowid DESC LIMIT 50",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let plan = rows
+      .into_iter()
+      .map(|(_, _, _, detail)| detail)
+      .collect::<Vec<_>>()
+      .join(" ");
+    assert!(
+      plan.contains("idx_messages_starred"),
+      "the starred listing scans every message: {plan}"
     );
   }
 }

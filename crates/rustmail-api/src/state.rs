@@ -1,6 +1,7 @@
 use axum::extract::ws::Utf8Bytes;
 use rustmail_storage::MessageRepository;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Semaphore, broadcast};
 
 use crate::host::Hostname;
@@ -8,6 +9,12 @@ use crate::origin::Origin;
 use crate::ws::WsTimings;
 
 const MAX_WS_CONNECTIONS: usize = 50;
+/// Longest an API request may run before it is answered `503`.
+///
+/// Well past any read or bulk delete on a 100k mailbox, so it only cuts off a
+/// request stuck behind a busy writer, and past the 15 s the UI waits, so the
+/// server stops working for a client that has already given up.
+const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Events sent to WebSocket clients in real time.
 ///
@@ -88,6 +95,7 @@ pub struct AppState {
   /// Host names RustMail answers a browser on, besides addresses and `localhost`.
   pub allowed_hosts: Arc<[Hostname]>,
   pub(crate) ws_timings: WsTimings,
+  pub(crate) api_timeout: Duration,
 }
 
 impl AppState {
@@ -107,6 +115,7 @@ impl AppState {
       allowed_origins: Arc::from([]),
       allowed_hosts: Arc::from([]),
       ws_timings: WsTimings::default(),
+      api_timeout: API_REQUEST_TIMEOUT,
     }
   }
 
