@@ -232,6 +232,8 @@ let latestFetch = 0;
 let currentListRead: AbortController | null = null;
 let searchStale = false;
 let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+/** Live events received while the current list read is in flight. */
+let eventsDuringRead: ReplayableEvent[] | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
 
@@ -452,6 +454,8 @@ function moveSelection(to: SelectionTarget): void {
 /**
  * Reads the first page again, replacing the list.
  *
+ * Live events that arrive while the read is in flight are replayed over the
+ * page it returns, since the server may have answered from before them.
  * Starting a read aborts the one before it, which then resolves quietly: its
  * answer would be dropped anyway, and only the current read's failure is worth
  * reporting.
@@ -468,6 +472,7 @@ async function fetchMessages(): Promise<void> {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
       if (request !== latestFetch || query !== search()) return;
       const revision = deletionRevision;
+      eventsDuringRead = [];
       const res = await api.listMessages(
         PAGE_SIZE,
         0,
@@ -483,6 +488,7 @@ async function fetchMessages(): Promise<void> {
         countNeedsRefresh = raced;
         setMessages(res.messages);
         setStoredTotal(res.total);
+        for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
       });
       if (raced) void refreshTotal();
       return;
@@ -492,6 +498,7 @@ async function fetchMessages(): Promise<void> {
   } finally {
     if (request === latestFetch) {
       currentListRead = null;
+      eventsDuringRead = null;
       setLoading(false);
       if (searchStale) scheduleSearchRefresh();
     }
@@ -558,7 +565,6 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectDelay = RECONNECT_BASE_DELAY;
 let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let hasConnected = false;
 
 /**
  * The event a frame carries, or `undefined` if it carries nothing usable.
@@ -597,7 +603,75 @@ function prependArrival(arrival: MessageSummary): void {
   if (countNeedsRefresh) void refreshTotal();
 }
 
-function connectWebSocket() {
+/** The events a list read may have been served without. */
+type ReplayableEvent = Extract<
+  WsEvent,
+  { type: "message:new" | "message:read" | "message:starred" | "message:tags" }
+>;
+
+function isReplayable(event: WsEvent): event is ReplayableEvent {
+  return (
+    event.type === "message:new" ||
+    event.type === "message:read" ||
+    event.type === "message:starred" ||
+    event.type === "message:tags"
+  );
+}
+
+/**
+ * Applies an event that only adds a message or changes one.
+ *
+ * Applying one twice is harmless, which is what lets {@link fetchMessages}
+ * replay the ones that arrived while its read was in flight.
+ */
+function applyLiveEvent(event: ReplayableEvent): void {
+  switch (event.type) {
+    case "message:new":
+      if (search()) {
+        scheduleSearchRefresh();
+      } else {
+        prependArrival(event.data);
+      }
+      break;
+    case "message:read":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id ? { ...m, is_read: event.data.is_read } : m,
+        ),
+      );
+      break;
+    case "message:starred":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id
+            ? { ...m, is_starred: event.data.is_starred }
+            : m,
+        ),
+      );
+      break;
+    case "message:tags":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id ? { ...m, tags: event.data.tags } : m,
+        ),
+      );
+      break;
+  }
+}
+
+/**
+ * Opens the live connection, and reads the list each time it opens.
+ *
+ * The read comes after the open, the first time included: anything stored
+ * before the socket subscribed is only in the list the server returns, and
+ * anything after it is on the socket. `onSynced` runs once that first read
+ * has landed.
+ */
+function connectWebSocket(onSynced?: () => void): WebSocket {
+  return openSocket("Could not load the inbox.", onSynced);
+}
+
+function openSocket(failure: string, onSynced?: () => void): WebSocket {
   disconnectWebSocket();
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
@@ -606,12 +680,10 @@ function connectWebSocket() {
 
   ws.onopen = () => {
     reconnectDelay = RECONNECT_BASE_DELAY;
-    if (hasConnected) {
-      fetchMessages().catch(() =>
-        notify("Reconnected, but could not reload the inbox."),
-      );
-    }
-    hasConnected = true;
+    fetchMessages().then(
+      () => onSynced?.(),
+      () => notify(failure),
+    );
   };
 
   ws.onmessage = (e) => {
@@ -621,40 +693,16 @@ function connectWebSocket() {
       return;
     }
 
+    if (isReplayable(event)) {
+      eventsDuringRead?.push(event);
+      applyLiveEvent(event);
+      return;
+    }
+
     switch (event.type) {
-      case "message:new":
-        if (search()) {
-          scheduleSearchRefresh();
-        } else {
-          prependArrival(event.data);
-        }
-        break;
       case "message:delete":
         cancelUndo(event.data.id);
         reconcileDeletion(event.data.id);
-        break;
-      case "message:read":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id ? { ...m, is_read: event.data.is_read } : m,
-          ),
-        );
-        break;
-      case "message:starred":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id
-              ? { ...m, is_starred: event.data.is_starred }
-              : m,
-          ),
-        );
-        break;
-      case "message:tags":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id ? { ...m, tags: event.data.tags } : m,
-          ),
-        );
         break;
       case "messages:clear":
         batch(() => {
@@ -670,7 +718,10 @@ function connectWebSocket() {
   ws.onclose = () => {
     currentWs = null;
     const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
-    reconnectTimer = setTimeout(connectWebSocket, jitter);
+    reconnectTimer = setTimeout(
+      () => openSocket("Reconnected, but could not reload the inbox."),
+      jitter,
+    );
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 

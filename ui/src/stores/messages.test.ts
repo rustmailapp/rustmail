@@ -632,6 +632,123 @@ describe("WebSocket events", () => {
   });
 });
 
+function openSocket(): void {
+  const socket = FakeSocket.last;
+  if (socket?.onopen == null) {
+    throw new Error("the store never opened a socket");
+  }
+  socket.onopen();
+}
+
+describe("resync when the socket opens", () => {
+  type Page = { messages: MessageSummary[]; total: number };
+
+  beforeEach(() => {
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+  });
+
+  function arrival(n: number): string {
+    return JSON.stringify({ type: "message:new", data: message(n) });
+  }
+
+  it("reads the list on the first open, not only on a reopen", async () => {
+    connectWebSocket();
+    listMessages.mockResolvedValue({ messages: range(2), total: 2 });
+
+    openSocket();
+
+    await vi.waitFor(() =>
+      expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]),
+    );
+  });
+
+  it("tells the caller once the first read has landed", async () => {
+    const synced = vi.fn();
+    connectWebSocket(synced);
+    listMessages.mockResolvedValue({ messages: range(2), total: 2 });
+
+    openSocket();
+
+    await vi.waitFor(() => expect(synced).toHaveBeenCalledOnce());
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+
+  it("says so when the first read fails", async () => {
+    connectWebSocket();
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    openSocket();
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not load the inbox.",
+      ]),
+    );
+  });
+
+  it("keeps a message that arrives while the read is in flight", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+
+    deliver(arrival(9));
+    read.resolve({ messages: range(2), total: 2 });
+
+    await vi.waitFor(() =>
+      expect(filteredMessages().map((m) => m.id)).toEqual([
+        "id-9",
+        "id-0",
+        "id-1",
+      ]),
+    );
+    expect(total()).toBe(3);
+  });
+
+  it("counts an arrival the read already holds once", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+
+    deliver(arrival(9));
+    read.resolve({ messages: [message(9), ...range(2)], total: 3 });
+
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+    expect(total()).toBe(3);
+  });
+
+  it("keeps a flag change made while the read is in flight", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: "id-0", is_read: true },
+      }),
+    );
+    read.resolve({ messages: range(2), total: 2 });
+
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    expect(filteredMessages().map((m) => m.is_read)).toEqual([true, false]);
+  });
+});
+
 describe("live traffic during a search", () => {
   const ROUND_TRIP_MS = 50;
   const ARRIVAL_INTERVAL_MS = 10;

@@ -11,7 +11,6 @@ import ConfirmDialog, {
 import UndoToast from "./components/UndoToast";
 import Notices from "./components/Notices";
 import {
-  fetchMessages,
   connectWebSocket,
   disconnectWebSocket,
   filteredMessages,
@@ -29,7 +28,6 @@ import {
   hasActiveFilters,
   clearFilters,
 } from "./stores/messages";
-import { notify } from "./stores/notices";
 import { settingsOpen } from "./stores/settings";
 import "./stores/theme";
 import "./stores/rusted";
@@ -108,17 +106,14 @@ export default function App() {
     }
   }
 
-  onMount(async () => {
-    try {
-      await fetchMessages();
-      if (!selectedId()) {
-        const first = filteredMessages()[0];
-        if (first) setSelectedId(first.id);
-      }
-    } catch {
-      notify("Could not load the inbox.");
-    }
-    connectWebSocket();
+  function selectFirstMessage() {
+    if (selectedId()) return;
+    const first = filteredMessages()[0];
+    if (first) setSelectedId(first.id);
+  }
+
+  onMount(() => {
+    connectWebSocket(selectFirstMessage);
     document.addEventListener("keydown", handleKeydown);
     window.addEventListener("pagehide", flushPendingDelete);
   });
