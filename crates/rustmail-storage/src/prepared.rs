@@ -59,11 +59,6 @@ impl PreparedMessage {
       attachments,
     }
   }
-
-  /// Size of the raw message in bytes.
-  pub fn size(&self) -> usize {
-    self.raw.len()
-  }
 }
 
 fn stored_parts(parsed: &mail_parser::Message<'_>) -> Vec<PreparedAttachment> {
@@ -133,7 +128,7 @@ mod tests {
     assert_eq!(attachment.filename.as_deref(), Some("report.pdf"));
     assert_eq!(attachment.content_type.as_deref(), Some("application/pdf"));
     assert_eq!(attachment.content, b"fake-pdf-content");
-    assert_eq!(prepared.size(), MULTIPART.len());
+    assert_eq!(prepared.raw, MULTIPART.as_bytes());
   }
 
   #[test]
