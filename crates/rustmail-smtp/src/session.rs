@@ -58,7 +58,7 @@ const DATA_PHASE_TIMEOUT: Duration = Duration::from_secs(120);
 /// budget — SQLite waits out a lock for `busy_timeout` and the repository
 /// retries for as long again — because answering `451` on a write that was
 /// about to succeed invites the sender to deliver the message twice.
-const STORE_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+pub const STORE_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum SmtpStream {
   Plain(TcpStream),

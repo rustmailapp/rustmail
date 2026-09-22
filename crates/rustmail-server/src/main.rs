@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -12,7 +13,8 @@ use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
 use rustmail_smtp::{
-  Delivery, DeliveryAck, ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig,
+  Delivery, DeliveryAck, ReceivedMessage, STORE_ACK_TIMEOUT, SmtpServer, SmtpServerConfig,
+  TlsConfig,
 };
 use rustmail_storage::{
   MessageRepository, MessageSummary, PreparedMessage, format_iso8601, initialize_database,
@@ -463,6 +465,18 @@ fn transactions(deliveries: Vec<Delivery>) -> Vec<Vec<(ReceivedMessage, Delivery
   groups
 }
 
+/// How long after a batch is taken off the queue it may still fall back to
+/// storing its messages one at a time.
+///
+/// A session answers `451` once [`STORE_ACK_TIMEOUT`] passes without a
+/// verdict, and a message committed after that is captured twice once the
+/// sender retries. Half the timeout leaves the other half for the insert
+/// already running when the budget runs out, which SQLite's `busy_timeout`
+/// and the repository's retries can stretch to ten seconds, and for the time
+/// the delivery waited in the queue before its batch was taken.
+const FALLBACK_BUDGET: std::time::Duration =
+  std::time::Duration::from_secs(STORE_ACK_TIMEOUT.as_secs() / 2);
+
 /// Stores a batch of captured messages and tells each waiting SMTP session
 /// what happened.
 ///
@@ -473,9 +487,10 @@ fn transactions(deliveries: Vec<Delivery>) -> Vec<Vec<(ReceivedMessage, Delivery
 /// answered on the hand-off would lose it instead. Returns the stored
 /// messages in arrival order.
 async fn store_batch(repo: &MessageRepository, deliveries: Vec<Delivery>) -> Vec<MessageSummary> {
+  let fallback_deadline = Instant::now() + FALLBACK_BUDGET;
   let mut stored = Vec::with_capacity(deliveries.len());
   for group in transactions(deliveries) {
-    stored.extend(store_group(repo, group).await);
+    stored.extend(store_group(repo, group, fallback_deadline).await);
   }
   stored
 }
@@ -497,6 +512,7 @@ async fn process_batch(
 async fn store_group(
   repo: &MessageRepository,
   group: Vec<(ReceivedMessage, DeliveryAck)>,
+  fallback_deadline: Instant,
 ) -> Vec<MessageSummary> {
   let mut messages = Vec::with_capacity(group.len());
   let mut acks = Vec::with_capacity(group.len());
@@ -525,35 +541,57 @@ async fn store_group(
       acks.into_iter().for_each(DeliveryAck::stored);
       summaries
     }
-    Err(e) if messages.len() == 1 => {
+    Err(e) if messages.len() == 1 || e.is_store_wide() => {
       acks.into_iter().for_each(DeliveryAck::rejected);
-      tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
+      tracing::error!(error = %e, count = messages.len(), "Refused messages the store would not take; the senders were asked to retry");
       Vec::new()
     }
     Err(e) => {
       warn!(error = %e, count = messages.len(), "A batch failed to commit; storing its messages one at a time");
-      store_one_by_one(repo, messages, acks).await
+      store_one_by_one(repo, messages, acks, fallback_deadline).await
     }
   }
 }
 
 /// Stores each message in its own transaction, so a message the store
 /// refuses fails alone rather than taking its batch with it.
+///
+/// Refuses every message not yet tried once the store reports a failure that
+/// is not specific to one message, or once `deadline` has passed, since a
+/// message committed after its session answered `451` is captured again when
+/// the sender retries.
 async fn store_one_by_one(
   repo: &MessageRepository,
   messages: Vec<PreparedMessage>,
   acks: Vec<DeliveryAck>,
+  deadline: Instant,
 ) -> Vec<MessageSummary> {
   let mut stored = Vec::with_capacity(messages.len());
-  for (message, ack) in messages.iter().zip(acks) {
+  let mut pending = messages.iter().zip(acks);
+  while let Some((message, ack)) = pending.next() {
     if ack.is_abandoned() {
       warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
       continue;
+    }
+    if Instant::now() >= deadline {
+      ack.rejected();
+      let remaining = 1 + reject_rest(pending);
+      warn!(
+        count = remaining,
+        "A batch ran out of time to store its messages one at a time; the senders were asked to retry"
+      );
+      break;
     }
     match repo.insert_prepared(message).await {
       Ok(summary) => {
         ack.stored();
         stored.push(summary);
+      }
+      Err(e) if e.is_store_wide() => {
+        ack.rejected();
+        let remaining = 1 + reject_rest(pending);
+        tracing::error!(error = %e, count = remaining, "Refused messages the store would not take; the senders were asked to retry");
+        break;
       }
       Err(e) => {
         ack.rejected();
@@ -562,6 +600,11 @@ async fn store_one_by_one(
     }
   }
   stored
+}
+
+/// Refuses every delivery left in `pending`, returning how many there were.
+fn reject_rest<'a>(pending: impl Iterator<Item = (&'a PreparedMessage, DeliveryAck)>) -> usize {
+  pending.map(|(_, ack)| ack.rejected()).count()
 }
 
 /// Pool options for one connection that is never reaped or recycled.
@@ -1206,12 +1249,8 @@ mod delivery_tests {
     repo.close().await;
   }
 
-  /// One message the store refuses must not cost the rest of its batch.
-  ///
-  /// The trigger stands in for whatever makes a single row unwritable; it
-  /// aborts the shared transaction exactly as such a failure would.
-  #[tokio::test]
-  async fn a_poisoned_message_does_not_fail_its_neighbours() {
+  /// A store whose trigger refuses any message titled `poison`.
+  async fn poisoned_repo() -> MessageRepository {
     let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
     initialize_database(&pool).await.unwrap();
     sqlx::query(
@@ -1220,7 +1259,16 @@ mod delivery_tests {
     .execute(&pool)
     .await
     .unwrap();
-    let repo = MessageRepository::new(pool);
+    MessageRepository::new(pool)
+  }
+
+  /// One message the store refuses must not cost the rest of its batch.
+  ///
+  /// The trigger stands in for whatever makes a single row unwritable; it
+  /// aborts the shared transaction exactly as such a failure would.
+  #[tokio::test]
+  async fn a_poisoned_message_does_not_fail_its_neighbours() {
+    let repo = poisoned_repo().await;
 
     let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
     let stored = store_batch(&repo, batch).await;
@@ -1236,6 +1284,68 @@ mod delivery_tests {
     let subjects: Vec<_> = stored.iter().map(|s| s.subject.as_deref()).collect();
     assert_eq!(subjects, [Some("before"), Some("after")]);
     assert_eq!(repo.count().await.unwrap(), 2);
+  }
+
+  /// A lock outlasting the retry budget fails every message alike, so trying
+  /// them one at a time only holds each session longer.
+  ///
+  /// The sleep stands in for a concurrent writer's duration: it outlasts the
+  /// batch's own retries but ends well inside what retrying each of the
+  /// messages would take, so any per-message insert would store its message.
+  #[tokio::test]
+  async fn a_store_wide_failure_rejects_the_group_without_retrying_each_message() {
+    const MESSAGES: usize = 6;
+    const LOCK_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("locked.db").display());
+    let options = rustmail_storage::connect_options(&url)
+      .unwrap()
+      .busy_timeout(std::time::Duration::ZERO);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(2)
+      .connect_with(options)
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+    let releaser = tokio::spawn(async move {
+      tokio::time::sleep(LOCK_HOLD).await;
+      sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    });
+
+    let (batch, verdicts) = deliveries((0..MESSAGES).map(|_| sample()).collect());
+    let stored = store_batch(&repo, batch).await;
+    releaser.await.unwrap();
+
+    assert!(stored.is_empty());
+    assert_eq!(
+      outcomes(verdicts).await,
+      [DeliveryOutcome::Rejected; MESSAGES]
+    );
+    assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  /// Past its budget, a fallback would commit messages whose sessions are
+  /// about to answer `451`, and each of those is captured again on retry.
+  #[tokio::test]
+  async fn the_fallback_stops_once_the_batch_has_spent_its_budget() {
+    let repo = poisoned_repo().await;
+
+    let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
+    let group = transactions(batch).into_iter().next().unwrap();
+    let stored = store_group(&repo, group, Instant::now()).await;
+
+    assert!(stored.is_empty());
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Rejected; 3]);
+    assert_eq!(repo.count().await.unwrap(), 0);
   }
 
   /// The UI prepends each `message:new` as it arrives, so the events have to

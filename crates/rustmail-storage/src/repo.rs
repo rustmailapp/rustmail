@@ -7,7 +7,7 @@ use time::macros::format_description;
 use tracing::debug;
 use ulid::Ulid;
 
-use crate::error::StorageError;
+use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
 use crate::prepared::PreparedMessage;
 use crate::schema::BUSY_TIMEOUT;
@@ -15,12 +15,6 @@ use crate::schema::BUSY_TIMEOUT;
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
   format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
-/// SQLite primary result code for `SQLITE_BUSY`.
-const SQLITE_BUSY: i32 = 5;
-/// SQLite primary result code for `SQLITE_LOCKED`.
-const SQLITE_LOCKED: i32 = 6;
-/// Low byte of a SQLite result code, which carries the primary code.
-const PRIMARY_CODE_MASK: i32 = 0xFF;
 /// Total attempts a contended write gets, the first one included.
 const WRITE_ATTEMPTS: u32 = 5;
 /// Delay before the second attempt; doubles from there.
@@ -41,13 +35,9 @@ const WRITE_RETRY_BUDGET: Duration = BUSY_TIMEOUT;
 /// the cases where SQLite refuses to wait — promoting a transaction that would
 /// deadlock, for one — so the caller still has to be prepared to retry.
 fn is_retryable_lock(error: &StorageError) -> bool {
-  let StorageError::Database(sqlx::Error::Database(db_error)) = error else {
-    return false;
-  };
-  db_error
-    .code()
-    .and_then(|code| code.parse::<i32>().ok())
-    .is_some_and(|code| matches!(code & PRIMARY_CODE_MASK, SQLITE_BUSY | SQLITE_LOCKED))
+  error
+    .sqlite_primary_code()
+    .is_some_and(|code| matches!(code, SQLITE_BUSY | SQLITE_LOCKED))
 }
 
 /// Spread for a retry delay, so racing writers do not wake together.
@@ -1631,6 +1621,73 @@ mod tests {
         .await
         .unwrap();
     })
+  }
+
+  #[tokio::test]
+  async fn a_lock_that_outlasts_the_retries_is_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("blocked", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(error.is_store_wide(), "got {error:?}");
+    sqlx::query("ROLLBACK")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_closed_pool_is_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    pool.close().await;
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("closed", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(error.is_store_wide(), "got {error:?}");
+  }
+
+  #[tokio::test]
+  async fn a_row_the_schema_refuses_is_not_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    sqlx::query(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'poisoned'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("poison", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(!error.is_store_wide(), "got {error:?}");
   }
 
   const CONTENDED_HOLD: Duration = Duration::from_millis(60);
