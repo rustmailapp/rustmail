@@ -183,15 +183,16 @@ impl App {
       }
       Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
       Event::WsStatus(connected) => self.handle_ws_status(connected).await,
+      Event::WsOverflow => self.view_stale = true,
     }
   }
 
-  fn connect_websocket(&self, tx: mpsc::UnboundedSender<Event>) {
+  fn connect_websocket(&self, tx: mpsc::Sender<Event>) {
     let ws_url = self.ws_url.clone();
     tokio::spawn(async move {
       let mut delay = Duration::from_secs(2);
       loop {
-        let _ = tx.send(Event::WsStatus(false));
+        let _ = tx.send(Event::WsStatus(false)).await;
         if connect_ws(&ws_url, &tx).await.is_ok() {
           delay = Duration::from_secs(2);
         }
@@ -805,18 +806,18 @@ fn raw_truncation_notice(size: i64, export_url: &str) -> Option<String> {
   })
 }
 
-async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> {
+async fn connect_ws(url: &str, tx: &mpsc::Sender<Event>) -> Result<()> {
   use futures_util::StreamExt;
   use tokio_tungstenite::connect_async;
 
   let (ws_stream, _) = connect_async(url).await?;
-  let _ = tx.send(Event::WsStatus(true));
+  let _ = tx.send(Event::WsStatus(true)).await;
   let (_, mut read) = ws_stream.split();
 
   while let Some(msg) = read.next().await {
     match msg {
       Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-        let _ = tx.send(Event::WsMessage(text.to_string()));
+        forward_ws_frame(tx, text.to_string());
       }
       Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => break,
       Err(_) => break,
@@ -825,6 +826,17 @@ async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> 
   }
 
   Ok(())
+}
+
+/// Forwards a WebSocket frame without blocking the socket reader. If the
+/// bounded event queue is full, the frame is dropped and a single
+/// [`Event::WsOverflow`] marker is attempted in its place, so the app marks
+/// its view stale and resyncs once it catches up, instead of the reader
+/// stalling and the server treating this client as lagging.
+fn forward_ws_frame(tx: &mpsc::Sender<Event>, text: String) {
+  if tx.try_send(Event::WsMessage(text)).is_err() {
+    let _ = tx.try_send(Event::WsOverflow);
+  }
 }
 
 #[cfg(test)]
@@ -1170,5 +1182,41 @@ mod tests {
       notice,
       "Showing the first 128.0K of 25.0M. Full source: http://x/api/v1/messages/id-0/export"
     );
+  }
+
+  #[tokio::test]
+  async fn ws_overflow_marks_the_view_stale() {
+    let mut app = app_with_messages(1);
+    assert!(!app.view_stale);
+
+    app.dispatch(Event::WsOverflow).await;
+
+    assert!(app.view_stale);
+  }
+
+  #[tokio::test]
+  async fn ws_frame_forwarding_delivers_when_the_queue_has_room() {
+    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    forward_ws_frame(&tx, "first".into());
+
+    match rx.recv().await.unwrap() {
+      Event::WsMessage(text) => assert_eq!(text, "first"),
+      _ => panic!("expected a WsMessage event"),
+    }
+  }
+
+  #[tokio::test]
+  async fn ws_frame_forwarding_drops_the_frame_when_the_queue_stays_full() {
+    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    tx.try_send(Event::Tick).unwrap();
+
+    forward_ws_frame(&tx, "dropped".into());
+
+    let mut remaining = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+      remaining.push(event);
+    }
+    assert_eq!(remaining.len(), 1);
+    assert!(matches!(remaining[0], Event::Tick));
   }
 }

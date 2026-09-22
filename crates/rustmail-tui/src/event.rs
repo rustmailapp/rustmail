@@ -3,6 +3,18 @@ use futures_util::StreamExt;
 use ratatui::crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use tokio::sync::mpsc;
 
+/// Bound on the in-flight event queue. Sized for several seconds of live
+/// WebSocket traffic at the UI's draw cadence, so a burst cannot grow memory
+/// without limit.
+///
+/// A producer that can outrun the drain loop (WebSocket frames) uses
+/// `try_send` and drops the frame on overflow, forwarding a single
+/// [`Event::WsOverflow`] marker in its place so the app can resync once it
+/// catches up. Every other producer (keyboard, mouse, ticks) uses a
+/// blocking send, which backpressures the producer instead of dropping
+/// input.
+pub const EVENT_QUEUE_CAPACITY: usize = 1024;
+
 pub enum Event {
   Key(KeyEvent),
   Mouse(MouseEvent),
@@ -10,10 +22,11 @@ pub enum Event {
   Tick,
   WsMessage(String),
   WsStatus(bool),
+  WsOverflow,
 }
 
 pub struct EventHandler {
-  rx: mpsc::UnboundedReceiver<Event>,
+  rx: mpsc::Receiver<Event>,
 }
 
 impl EventHandler {
@@ -32,8 +45,8 @@ impl EventHandler {
   }
 }
 
-pub fn create_event_handler() -> (EventHandler, mpsc::UnboundedSender<Event>) {
-  let (tx, rx) = mpsc::unbounded_channel();
+pub fn create_event_handler() -> (EventHandler, mpsc::Sender<Event>) {
+  let (tx, rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
 
   let event_tx = tx.clone();
   tokio::spawn(async move {
@@ -43,22 +56,21 @@ pub fn create_event_handler() -> (EventHandler, mpsc::UnboundedSender<Event>) {
     loop {
       tokio::select! {
         maybe_event = reader.next() => {
-          match maybe_event {
-            Some(Ok(CrosstermEvent::Key(key))) => {
-              let _ = event_tx.send(Event::Key(key));
-            }
-            Some(Ok(CrosstermEvent::Mouse(mouse))) => {
-              let _ = event_tx.send(Event::Mouse(mouse));
-            }
-            Some(Ok(CrosstermEvent::Resize(_, _))) => {
-              let _ = event_tx.send(Event::Resize);
-            }
+          let event = match maybe_event {
+            Some(Ok(CrosstermEvent::Key(key))) => Event::Key(key),
+            Some(Ok(CrosstermEvent::Mouse(mouse))) => Event::Mouse(mouse),
+            Some(Ok(CrosstermEvent::Resize(_, _))) => Event::Resize,
             Some(Err(_)) | None => break,
-            _ => {}
+            _ => continue,
+          };
+          if event_tx.send(event).await.is_err() {
+            break;
           }
         }
         _ = tick_interval.tick() => {
-          let _ = event_tx.send(Event::Tick);
+          if event_tx.send(Event::Tick).await.is_err() {
+            break;
+          }
         }
       }
     }
@@ -73,13 +85,23 @@ mod tests {
 
   #[tokio::test]
   async fn try_next_drains_the_queue_without_blocking() {
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
     let mut handler = EventHandler { rx };
-    tx.send(Event::Tick).unwrap();
-    tx.send(Event::Resize).unwrap();
+    tx.send(Event::Tick).await.unwrap();
+    tx.send(Event::Resize).await.unwrap();
 
     assert!(matches!(handler.try_next(), Some(Event::Tick)));
     assert!(matches!(handler.try_next(), Some(Event::Resize)));
     assert!(handler.try_next().is_none());
+  }
+
+  #[tokio::test]
+  async fn channel_rejects_sends_past_its_capacity() {
+    let (tx, _rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
+    for _ in 0..EVENT_QUEUE_CAPACITY {
+      tx.try_send(Event::Tick)
+        .expect("capacity should not be exceeded yet");
+    }
+    assert!(tx.try_send(Event::Tick).is_err());
   }
 }
