@@ -43,15 +43,26 @@ pub enum WsEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WsFrame(Utf8Bytes);
 
+/// Why a [`WsFrame`] could not be encoded or decoded.
+#[derive(Debug, thiserror::Error)]
+pub enum WsFrameError {
+  #[error("WebSocket event could not be encoded: {0}")]
+  Encode(#[source] serde_json::Error),
+  #[error("WebSocket frame could not be decoded: {0}")]
+  Decode(#[source] serde_json::Error),
+}
+
 impl WsFrame {
   /// Encodes `event` in its wire format.
-  pub fn encode(event: &WsEvent) -> Result<Self, serde_json::Error> {
-    serde_json::to_string(event).map(|json| Self(json.into()))
+  pub fn encode(event: &WsEvent) -> Result<Self, WsFrameError> {
+    serde_json::to_string(event)
+      .map(|json| Self(json.into()))
+      .map_err(WsFrameError::Encode)
   }
 
   /// Decodes the event this frame carries.
-  pub fn decode(&self) -> Result<WsEvent, serde_json::Error> {
-    serde_json::from_str(self.0.as_str())
+  pub fn decode(&self) -> Result<WsEvent, WsFrameError> {
+    serde_json::from_str(self.0.as_str()).map_err(WsFrameError::Decode)
   }
 
   pub(crate) fn text(&self) -> Utf8Bytes {
@@ -136,7 +147,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-  use super::{WsEvent, WsFrame};
+  use super::{WsEvent, WsFrame, WsFrameError};
 
   fn wire(event: &WsEvent) -> String {
     WsFrame::encode(event).unwrap().text().as_str().to_owned()
@@ -187,5 +198,14 @@ mod tests {
     let decoded = WsFrame::encode(&event).unwrap().decode().unwrap();
 
     assert_eq!(wire(&decoded), wire(&event));
+  }
+
+  #[test]
+  fn a_malformed_frame_decodes_to_a_ws_frame_error() {
+    let frame = WsFrame(r#"{"type":"not-an-event"}"#.into());
+
+    let error = frame.decode().unwrap_err();
+
+    assert!(matches!(error, WsFrameError::Decode(_)));
   }
 }
