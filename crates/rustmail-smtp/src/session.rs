@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
+use std::num::IntErrorKind;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -26,6 +27,9 @@ const RSET_OK: &str = "250 Reset OK\r\n";
 const UNKNOWN_CMD: &str = "500 Unknown command\r\n";
 const BAD_SEQUENCE: &str = "503 Bad sequence of commands\r\n";
 const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
+const SIZE_EXCEEDED: &str = "552 5.3.4 Message size exceeds fixed maximum message size\r\n";
+const SIZE_MALFORMED: &str = "501 5.5.4 Malformed SIZE parameter\r\n";
+const SIZE_PARAM: &str = "SIZE=";
 const MAX_LINE_LENGTH: usize = 4096;
 /// Longest SMTP verb is `STARTTLS`; anything longer is not a command worth logging whole.
 const MAX_LOGGED_VERB_CHARS: usize = 8;
@@ -189,6 +193,8 @@ impl Session {
       } else if upper.starts_with("MAIL FROM:") {
         if !self.greeted {
           self.write(BAD_SEQUENCE).await?;
+        } else if let Some(refusal) = declared_size_refusal(trimmed, self.max_message_size) {
+          self.write(refusal).await?;
         } else {
           self.mail_from = Some(extract_address(trimmed));
           self.rcpt_to.clear();
@@ -539,6 +545,23 @@ fn redact_auth(cmd: &str) -> Cow<'_, str> {
   }
 }
 
+/// The reply that refuses a `MAIL FROM` whose `SIZE=` parameter is over `max_message_size`
+/// or not a number, or `None` when the command declares no size or one that fits.
+fn declared_size_refusal(line: &str, max_message_size: usize) -> Option<&'static str> {
+  let value = line.split_ascii_whitespace().skip(1).find_map(|param| {
+    param
+      .get(..SIZE_PARAM.len())
+      .filter(|name| name.eq_ignore_ascii_case(SIZE_PARAM))
+      .map(|_| &param[SIZE_PARAM.len()..])
+  })?;
+  match value.parse::<u64>() {
+    Ok(size) if usize::try_from(size).is_ok_and(|size| size <= max_message_size) => None,
+    Ok(_) => Some(SIZE_EXCEEDED),
+    Err(error) if *error.kind() == IntErrorKind::PosOverflow => Some(SIZE_EXCEEDED),
+    Err(_) => Some(SIZE_MALFORMED),
+  }
+}
+
 fn is_data_terminator(line: &[u8]) -> bool {
   let trimmed = line
     .strip_suffix(b"\r\n")
@@ -621,6 +644,23 @@ mod tests {
     assert!(is_data_terminator(b".\n"));
     assert!(!is_data_terminator(b"..\r\n"));
     assert!(!is_data_terminator(b".x\r\n"));
+  }
+
+  #[test]
+  fn ignores_a_mail_from_without_a_declared_size() {
+    assert_eq!(declared_size_refusal("MAIL FROM:<a@t.com>", 100), None);
+    assert_eq!(
+      declared_size_refusal("MAIL FROM:<a@t.com> BODY=8BITMIME", 100),
+      None
+    );
+  }
+
+  #[test]
+  fn refuses_a_declared_size_too_large_to_parse() {
+    assert_eq!(
+      declared_size_refusal("MAIL FROM:<a@t.com> SIZE=99999999999999999999999", 100),
+      Some(SIZE_EXCEEDED)
+    );
   }
 
   #[test]

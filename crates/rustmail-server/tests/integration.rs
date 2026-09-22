@@ -1853,3 +1853,56 @@ async fn smtp_drain_does_not_mistake_the_tail_of_a_cut_line_for_the_end() {
   );
   assert_eq!(send_line(&mut stream, "NOOP").await, "250 OK\r\n");
 }
+
+/// A sender that declares an oversized message is refused before it sends it.
+#[tokio::test]
+async fn smtp_refuses_a_declared_size_over_the_limit_at_mail_from() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let mail = send_line(
+    &mut stream,
+    &format!("MAIL FROM:<alice@test.com> SIZE={}", MAX_MESSAGE_SIZE + 1),
+  )
+  .await;
+  assert!(mail.starts_with("552 5.3.4 "), "got: {mail}");
+  assert_eq!(
+    send_line(&mut stream, "RCPT TO:<bob@test.com>").await,
+    "503 Bad sequence of commands\r\n",
+    "a refused MAIL FROM must not open a transaction"
+  );
+}
+
+#[tokio::test]
+async fn smtp_accepts_a_declared_size_within_the_limit() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let mail = send_line(
+    &mut stream,
+    &format!("MAIL FROM:<alice@test.com> size={MAX_MESSAGE_SIZE}"),
+  )
+  .await;
+  assert_eq!(mail, "250 OK\r\n");
+}
+
+#[tokio::test]
+async fn smtp_rejects_a_malformed_declared_size() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
+  spawn_smtp_with_real_session(listener, tx);
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  let mail = send_line(&mut stream, "MAIL FROM:<alice@test.com> SIZE=lots").await;
+  assert!(mail.starts_with("501 5.5.4 "), "got: {mail}");
+}
