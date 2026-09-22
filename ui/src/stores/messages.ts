@@ -171,10 +171,15 @@ function revealArrivals(): void {
 }
 
 function replaceRows(rows: MessageSummary[]): void {
+  letGoWhileHidden.clear();
+  setRows(rows);
+}
+
+/** Makes `rows` the loaded list, keeping the open message's row if it leaves. */
+function setRows(rows: MessageSummary[]): void {
   const selected = selectedId();
   const open = selected === null ? undefined : findMessage(selected);
   if (open !== undefined) setOpenRow(open);
-  letGoWhileHidden.clear();
   positions.clear();
   headPosition = 0;
   rows.forEach((m, i) => positions.set(m.id, i));
@@ -797,10 +802,123 @@ async function fetchMessages(): Promise<void> {
   await readFirstPage();
 }
 
+/** A list read that has landed: the count it read, and how to show it. */
+type LandedRead = { total: number; show: () => void };
+
+async function readTopPage(
+  view: View,
+  signal: AbortSignal,
+): Promise<LandedRead> {
+  const res = await api.listMessages(
+    { limit: PAGE_SIZE, ...viewQuery(view) },
+    signal,
+  );
+  return {
+    total: res.total,
+    show: () => {
+      replaceRows(res.messages);
+      dropHeldArrivals();
+      setPageCursor(res.next_cursor, view);
+    },
+  };
+}
+
+/**
+ * Reads the list down through the loaded rows, reconciling them in place.
+ *
+ * This is the read while live mail is held: the reader is scrolled into these
+ * rows, so replacing them with the first page would move the list under them.
+ * Rows above the first loaded one are arrivals and wait behind the pill. A
+ * loaded row the read meets takes the server's copy, and one it passes without
+ * meeting is gone from the view. The read stops at the loaded tail, at the end
+ * of the list, after {@link PAGE_SIZE} rows past the last loaded one it met,
+ * which is where a deleted tail leaves it, or once more has arrived than the
+ * pill keeps, which only a fresh read on the way back to the top can show.
+ */
+async function readLoadedWindow(
+  view: View,
+  signal: AbortSignal,
+): Promise<LandedRead> {
+  const tail = messages().at(-1)?.id;
+  const read: MessageSummary[] = [];
+  let metAny = false;
+  let sinceLoaded = 0;
+  let before: string | undefined;
+  for (;;) {
+    const res = await api.listMessages(
+      {
+        limit: PAGE_SIZE,
+        ...viewQuery(view),
+        ...(before === undefined ? {} : { before }),
+      },
+      signal,
+    );
+    let metTail = false;
+    for (const m of res.messages) {
+      read.push(m);
+      metTail ||= m.id === tail;
+      if (positions.has(m.id)) {
+        metAny = true;
+        sinceLoaded = 0;
+      } else if (metAny) {
+        sinceLoaded += 1;
+      }
+    }
+    const ended = res.next_cursor === null;
+    const passedAll = ended || metTail || sinceLoaded >= PAGE_SIZE;
+    if (passedAll || (!metAny && read.length > MAX_LIVE_ROWS)) {
+      return {
+        total: res.total,
+        show: () => reconcileWindow(read, passedAll, ended, view),
+      };
+    }
+    before = res.next_cursor ?? undefined;
+  }
+}
+
+/**
+ * Applies what {@link readLoadedWindow} read, `passedAll` saying whether it got
+ * past every loaded row and `ended` whether it reached the end of the list.
+ */
+function reconcileWindow(
+  read: readonly MessageSummary[],
+  passedAll: boolean,
+  ended: boolean,
+  view: View,
+): void {
+  const server = new Map(read.map((m) => [m.id, m]));
+  const loaded = messages();
+  const firstLoaded = read.findIndex((m) => positions.has(m.id));
+  const arrivals = firstLoaded < 0 ? read : read.slice(0, firstLoaded);
+  let passedUpTo = passedAll ? loaded.length - 1 : -1;
+  if (!passedAll) {
+    loaded.forEach((m, i) => {
+      if (server.has(m.id)) passedUpTo = i;
+    });
+  }
+  const kept = loaded.flatMap((m, i) => {
+    const fresh = server.get(m.id);
+    if (fresh !== undefined) return [fresh];
+    return i <= passedUpTo ? [] : [m];
+  });
+  const last = kept.at(-1) ?? arrivals.at(-1);
+  const lastRead =
+    last === undefined ? -1 : read.findIndex((m) => m.id === last.id);
+  const more = !ended || lastRead < read.length - 1;
+  setRows(kept);
+  dropHeldArrivals();
+  holdArrivals(arrivals.toReversed());
+  setPageCursor(more && last !== undefined ? last.id : null, view);
+  if (!liveHeld()) revealArrivals();
+}
+
 /** Does the work of {@link fetchMessages}, resolving whether its page landed. */
 async function readFirstPage(): Promise<boolean> {
   const request = ++latestFetch;
   const view = currentView();
+  const inPlace =
+    liveHeld() && isCurrentView(cursorView) && messages().length > 0;
+  const readList = inPlace ? readLoadedWindow : readTopPage;
   currentListRead?.abort();
   const controller = new AbortController();
   currentListRead = controller;
@@ -810,10 +928,7 @@ async function readFirstPage(): Promise<boolean> {
       if (request !== latestFetch || !isCurrentView(view)) return false;
       const revision = deletionRevision;
       eventsDuringRead = [];
-      const res = await api.listMessages(
-        { limit: PAGE_SIZE, ...viewQuery(view) },
-        controller.signal,
-      );
+      const landed = await readList(view, controller.signal);
       if (request !== latestFetch || !isCurrentView(view)) return false;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
@@ -821,10 +936,8 @@ async function readFirstPage(): Promise<boolean> {
       batch(() => {
         snapshot += 1;
         countNeedsRefresh = raced;
-        replaceRows(res.messages);
-        dropHeldArrivals();
-        setPageCursor(res.next_cursor, view);
-        setStoredTotal(res.total);
+        landed.show();
+        setStoredTotal(landed.total);
         searchStale = false;
         applyEvents(eventsDuringRead ?? []);
       });

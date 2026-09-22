@@ -1289,6 +1289,101 @@ describe("arrivals while the reader is scrolled away", () => {
     expect(total()).toBe(3);
   });
 
+  /** Answers list reads from `rows`, a page at a time, as the server would. */
+  function serve(rows: MessageSummary[]): void {
+    listMessages.mockImplementation(
+      async ({ limit, before }: { limit: number; before?: string }) => {
+        const start =
+          before === undefined ? 0 : rows.findIndex((m) => m.id === before) + 1;
+        const slice = rows.slice(start, start + limit);
+        const more = start + limit < rows.length;
+        return page(
+          slice,
+          rows.length,
+          more ? (slice.at(-1)?.id ?? null) : null,
+        );
+      },
+    );
+  }
+
+  async function resync(): Promise<void> {
+    openSocket();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+  }
+
+  it("holds what a resync finds new instead of moving the rows", async () => {
+    setLiveHeld(true);
+    serve([message(9), ...range(2)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(3);
+  });
+
+  it("shows what a held resync found once the reader is back on top", async () => {
+    setLiveHeld(true);
+    serve([message(9), ...range(2)]);
+    await resync();
+
+    setLiveHeld(false);
+
+    expect(ids()).toEqual(["id-9", "id-0", "id-1"]);
+  });
+
+  it("drops a loaded row a held resync finds deleted", async () => {
+    setLiveHeld(true);
+    serve([message(0)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0"]);
+    expect(total()).toBe(1);
+  });
+
+  it("updates a loaded row a held resync finds changed", async () => {
+    setLiveHeld(true);
+    serve([message(0), message(1, { is_starred: true })]);
+
+    await resync();
+
+    expect(filteredMessages().map((m) => m.is_starred)).toEqual([false, true]);
+  });
+
+  it("reconciles loaded rows past the first page on a held resync", async () => {
+    const rows = range(PAGE_SIZE + 50);
+    serve(rows);
+    await fetchMessages();
+    await loadMore();
+    setLiveHeld(true);
+    const gone = `id-${PAGE_SIZE + 20}`;
+    serve([message(-1), ...rows.filter((m) => m.id !== gone)]);
+
+    await resync();
+
+    expect(ids()).toEqual(rows.map((m) => m.id).filter((id) => id !== gone));
+    expect(heldArrivals()).toBe(1);
+    expect(hasMore()).toBe(false);
+  });
+
+  it("stops a held resync a page past a deleted tail", async () => {
+    listMessages.mockResolvedValue(page(range(3), 3 + 2 * PAGE_SIZE, "id-2"));
+    await fetchMessages();
+    setLiveHeld(true);
+    const older = Array.from({ length: 2 * PAGE_SIZE }, (_, i) =>
+      message(1000 + i),
+    );
+    serve([message(0), message(1), ...older]);
+    listMessages.mockClear();
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(hasMore()).toBe(true);
+  });
+
   it("puts the held arrivals on top once the reader is back there", () => {
     setLiveHeld(true);
     deliver(arrival(8));
