@@ -1695,3 +1695,76 @@ async fn smtp_noop_allowed_before_ehlo() {
   let resp = send_line(&mut stream, "NOOP").await;
   assert_eq!(resp, "250 OK\r\n");
 }
+
+/// Longer than the 4096-byte command cap, shorter than the 8 KiB read buffer.
+const LONG_BODY_LINE_LEN: usize = 6000;
+/// Longer than the read buffer, so the line always spans several reads.
+const BUFFER_SPANNING_BODY_LINE_LEN: usize = 20_000;
+
+/// Past the command cap, so a read that ends here used to trip it.
+const LONG_BODY_LINE_SPLIT_AT: usize = 5000;
+
+/// Sends one message whose body is a single `line_len`-byte line.
+///
+/// With `split_at`, the line goes out as two writes broken that many bytes in.
+async fn send_long_line_message(
+  addr: std::net::SocketAddr,
+  line_len: usize,
+  split_at: Option<usize>,
+) -> String {
+  let mut stream = connect_smtp_and_greet(addr).await;
+  stream.get_ref().set_nodelay(true).unwrap();
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  assert_eq!(
+    send_line(&mut stream, "MAIL FROM:<alice@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert_eq!(
+    send_line(&mut stream, "RCPT TO:<bob@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert!(send_line(&mut stream, "DATA").await.starts_with("354 "));
+
+  let headers = "Subject: Long\r\n\r\n";
+  let payload = format!("{headers}{}\r\n.\r\n", "X".repeat(line_len));
+  let (first, rest) = payload.split_at(split_at.map_or(payload.len(), |at| headers.len() + at));
+  for part in [first, rest] {
+    stream.write_all(part.as_bytes()).await.unwrap();
+    stream.flush().await.unwrap();
+  }
+  read_smtp_response_line(&mut stream).await
+}
+
+async fn assert_long_line_is_stored(line_len: usize, split_at: Option<usize>) {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, rx) = mpsc::channel::<Delivery>(16);
+  let mut messages = accept_deliveries(rx);
+  spawn_smtp_with_real_session(listener, tx);
+
+  assert_eq!(
+    send_long_line_message(addr, line_len, split_at).await,
+    "250 OK\r\n"
+  );
+  let message = messages.recv().await.unwrap();
+  let expected_line = format!("{}\r\n", "X".repeat(line_len));
+  assert!(
+    message.raw.ends_with(expected_line.as_bytes()),
+    "the {line_len}-byte body line must be stored intact"
+  );
+}
+
+#[tokio::test]
+async fn smtp_stores_a_long_body_line_sent_in_one_write() {
+  assert_long_line_is_stored(LONG_BODY_LINE_LEN, None).await;
+}
+
+#[tokio::test]
+async fn smtp_stores_a_long_body_line_split_across_writes() {
+  assert_long_line_is_stored(LONG_BODY_LINE_LEN, Some(LONG_BODY_LINE_SPLIT_AT)).await;
+}
+
+#[tokio::test]
+async fn smtp_stores_a_body_line_longer_than_the_read_buffer() {
+  assert_long_line_is_stored(BUFFER_SPANNING_BODY_LINE_LEN, None).await;
+}

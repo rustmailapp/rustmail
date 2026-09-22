@@ -27,6 +27,8 @@ const UNKNOWN_CMD: &str = "500 Unknown command\r\n";
 const BAD_SEQUENCE: &str = "503 Bad sequence of commands\r\n";
 const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
 const MAX_LINE_LENGTH: usize = 4096;
+/// The line that ends the DATA phase, which is not part of the message.
+const DATA_TERMINATOR: &[u8] = b".\r\n";
 const MAX_RECIPIENTS: usize = 100;
 /// Commands a client may issue without ever completing a mail transaction.
 ///
@@ -355,7 +357,15 @@ impl Session {
 
     loop {
       line_buf.clear();
-      let bytes_read = self.read_line_untimed(&mut line_buf).await?;
+      let budget = self.max_message_size.saturating_sub(data.len()) + DATA_TERMINATOR.len();
+      let bytes_read = match self.read_line_untimed(&mut line_buf, budget).await {
+        Ok(bytes_read) => bytes_read,
+        Err(SessionError::LineTooLong) => {
+          self.drain_data().await;
+          return Err(SessionError::MessageTooLarge);
+        }
+        Err(e) => return Err(e),
+      };
       if bytes_read == 0 {
         return Ok(None);
       }
@@ -422,7 +432,7 @@ impl Session {
     let mut line = Vec::new();
     loop {
       line.clear();
-      match self.read_line_untimed(&mut line).await {
+      match self.read_line_untimed(&mut line, MAX_LINE_LENGTH).await {
         Ok(0) => return,
         Ok(_) => {
           let trimmed = line
@@ -443,19 +453,26 @@ impl Session {
   }
 
   async fn read_bounded_line_raw(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
-    timeout(IO_TIMEOUT, self.read_line_untimed(buf))
+    timeout(IO_TIMEOUT, self.read_line_untimed(buf, MAX_LINE_LENGTH))
       .await
       .map_err(|_| SessionError::Timeout)?
   }
 
-  /// Reads one line, arming no timer of its own.
+  /// Reads one line of at most `max_len` bytes, arming no timer of its own.
   ///
   /// A single large message is tens of thousands of lines, so timing each read
   /// individually spends most of the read path registering and dropping timers.
   /// Callers bound the whole phase instead: commands through
   /// [`Self::read_bounded_line_raw`], message bodies through the one timeout
   /// around the DATA phase.
-  async fn read_line_untimed(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
+  ///
+  /// The length check runs after every read, so whether a line is refused
+  /// never depends on how TCP happened to split it.
+  async fn read_line_untimed(
+    &mut self,
+    buf: &mut Vec<u8>,
+    max_len: usize,
+  ) -> Result<usize, SessionError> {
     loop {
       let available = self.stream_mut()?.fill_buf().await?;
       if available.is_empty() {
@@ -464,18 +481,15 @@ impl Session {
         }
         break;
       }
-      if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-        buf.extend_from_slice(&available[..=pos]);
-        let consumed = pos + 1;
-        self.stream_mut()?.consume(consumed);
-        break;
-      } else {
-        buf.extend_from_slice(available);
-        let len = available.len();
-        self.stream_mut()?.consume(len);
-      }
-      if buf.len() > MAX_LINE_LENGTH {
+      let newline = available.iter().position(|&b| b == b'\n');
+      let taken = newline.map_or(available.len(), |pos| pos + 1);
+      buf.extend_from_slice(&available[..taken]);
+      self.stream_mut()?.consume(taken);
+      if buf.len() > max_len {
         return Err(SessionError::LineTooLong);
+      }
+      if newline.is_some() {
+        break;
       }
     }
     Ok(buf.len())
