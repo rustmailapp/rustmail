@@ -69,7 +69,7 @@ fn render_raw_view(frame: &mut Frame, app: &App, theme: &theme::Theme) {
   let content: Vec<Line> = app
     .raw_notice
     .iter()
-    .map(|notice| Line::from(Span::styled(notice.as_str(), theme.status_err)))
+    .map(|notice| Line::from(Span::styled(notice.as_str(), theme.status_info)))
     .chain(raw.lines().map(Line::from))
     .collect();
 

@@ -230,7 +230,7 @@ fn render_raw_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
     Some(raw) => app
       .preview_raw_notice
       .iter()
-      .map(|notice| Line::from(Span::styled(notice.clone(), theme.status_err)))
+      .map(|notice| Line::from(Span::styled(notice.clone(), theme.status_info)))
       .chain(raw.lines().map(|l| Line::from(l.to_string())))
       .collect(),
     None => vec![Line::from(Span::styled(
