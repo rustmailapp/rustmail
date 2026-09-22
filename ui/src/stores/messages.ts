@@ -818,7 +818,8 @@ function scheduleSearchRefresh(): void {
  * event got here, so the row goes and the read starts again from the one
  * before it. A page read from a cursor that has since moved, because its row
  * was deleted or let go, would not join the rows above it, so it is read again
- * from where the list now ends.
+ * from where the list now ends. Any other failure is reported rather than
+ * thrown, since the list's scroll position is what calls this.
  */
 async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
@@ -859,6 +860,10 @@ async function loadMore(): Promise<void> {
       });
       if (raced) void refreshTotal();
       return;
+    }
+  } catch {
+    if (isCurrentView(view) && startedOn === latestFetch) {
+      notify("Could not load older messages.");
     }
   } finally {
     setLoadingMore(false);

@@ -236,6 +236,18 @@ describe("paging by cursor", () => {
     }
   });
 
+  it("says so when an older page does not load", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    await loadMore();
+
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
+    ]);
+  });
+
   it("stops paging once the server has no older page", async () => {
     await seed(range(2));
     listMessages.mockClear();
