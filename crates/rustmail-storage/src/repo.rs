@@ -358,8 +358,8 @@ impl MessageRepository {
 
   /// Atomically applies one or more metadata updates to a message.
   ///
-  /// Only fields that are `Some` are updated. Runs all UPDATEs inside a
-  /// single transaction so partial application cannot occur.
+  /// Only fields that are `Some` are updated, in a single `UPDATE` so partial
+  /// application cannot occur.
   pub async fn update_message(
     &self,
     id: &str,
@@ -367,40 +367,24 @@ impl MessageRepository {
     is_starred: Option<bool>,
     tags: Option<&[String]>,
   ) -> Result<(), StorageError> {
-    let mut txn = self.pool.begin().await?;
-
-    let exists: Option<(String,)> = sqlx::query_as("SELECT id FROM messages WHERE id = ?1")
+    let tags_json = tags.map(|tags| serde_json::to_string(tags).unwrap_or_default());
+    let result = retry_on_lock(|| async {
+      let result = sqlx::query(
+        "UPDATE messages SET is_read = COALESCE(?1, is_read), is_starred = COALESCE(?2, is_starred), tags = COALESCE(?3, tags) WHERE id = ?4",
+      )
+      .bind(is_read)
+      .bind(is_starred)
+      .bind(tags_json.as_deref())
       .bind(id)
-      .fetch_optional(&mut *txn)
+      .execute(&self.pool)
       .await?;
-    if exists.is_none() {
+      Ok(result)
+    })
+    .await?;
+
+    if result.rows_affected() == 0 {
       return Err(StorageError::NotFound(id.to_string()));
     }
-
-    if let Some(is_read) = is_read {
-      sqlx::query("UPDATE messages SET is_read = ?1 WHERE id = ?2")
-        .bind(is_read)
-        .bind(id)
-        .execute(&mut *txn)
-        .await?;
-    }
-    if let Some(is_starred) = is_starred {
-      sqlx::query("UPDATE messages SET is_starred = ?1 WHERE id = ?2")
-        .bind(is_starred)
-        .bind(id)
-        .execute(&mut *txn)
-        .await?;
-    }
-    if let Some(tags) = tags {
-      let tags_json = serde_json::to_string(tags).unwrap_or_default();
-      sqlx::query("UPDATE messages SET tags = ?1 WHERE id = ?2")
-        .bind(&tags_json)
-        .bind(id)
-        .execute(&mut *txn)
-        .await?;
-    }
-
-    txn.commit().await?;
     Ok(())
   }
 
@@ -574,17 +558,16 @@ impl MessageRepository {
   }
 
   /// Deletes messages older than the given ISO 8601 cutoff. Returns IDs of deleted messages.
+  ///
+  /// Opens with a write so the transaction takes the write lock before it
+  /// holds a snapshot: a read first would fail outright with
+  /// `SQLITE_BUSY_SNAPSHOT` whenever an insert commits in between.
   pub async fn delete_older_than(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
+    retry_on_lock(|| self.delete_older_than_once(iso_cutoff)).await
+  }
+
+  async fn delete_older_than_once(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
     let mut txn = self.pool.begin().await?;
-
-    let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM messages WHERE created_at < ?1")
-      .bind(iso_cutoff)
-      .fetch_all(&mut *txn)
-      .await?;
-
-    if ids.is_empty() {
-      return Ok(Vec::new());
-    }
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE created_at < ?1)",
@@ -593,10 +576,11 @@ impl MessageRepository {
     .execute(&mut *txn)
     .await?;
 
-    sqlx::query("DELETE FROM messages WHERE created_at < ?1")
-      .bind(iso_cutoff)
-      .execute(&mut *txn)
-      .await?;
+    let ids: Vec<(String,)> =
+      sqlx::query_as("DELETE FROM messages WHERE created_at < ?1 RETURNING id")
+        .bind(iso_cutoff)
+        .fetch_all(&mut *txn)
+        .await?;
 
     txn.commit().await?;
     Ok(ids.into_iter().map(|(id,)| id).collect())
@@ -605,19 +589,14 @@ impl MessageRepository {
   /// Trims stored messages to at most `max`, deleting oldest first. Returns IDs of deleted messages.
   ///
   /// Ordered by `rowid` to match [`Self::list`], so the rows dropped here are
-  /// exactly the ones the UI shows as oldest.
+  /// exactly the ones the UI shows as oldest. Opens with a write for the same
+  /// reason as [`Self::delete_older_than`].
   pub async fn trim_to_max(&self, max: i64) -> Result<Vec<String>, StorageError> {
+    retry_on_lock(|| self.trim_to_max_once(max)).await
+  }
+
+  async fn trim_to_max_once(&self, max: i64) -> Result<Vec<String>, StorageError> {
     let mut txn = self.pool.begin().await?;
-
-    let ids: Vec<(String,)> =
-      sqlx::query_as("SELECT id FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1")
-        .bind(max)
-        .fetch_all(&mut *txn)
-        .await?;
-
-    if ids.is_empty() {
-      return Ok(Vec::new());
-    }
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
@@ -626,11 +605,11 @@ impl MessageRepository {
     .execute(&mut *txn)
     .await?;
 
-    sqlx::query(
-      "DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
+    let ids: Vec<(String,)> = sqlx::query_as(
+      "DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1) RETURNING id",
     )
     .bind(max)
-    .execute(&mut *txn)
+    .fetch_all(&mut *txn)
     .await?;
 
     txn.commit().await?;
@@ -1439,6 +1418,129 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  /// Holds the write lock on `pool` for `hold`, then releases it.
+  ///
+  /// The sleep stands in for a concurrent writer's duration, as in
+  /// [`insert_waits_out_a_writer_holding_the_lock`].
+  async fn hold_write_lock(pool: &SqlitePool, hold: Duration) -> tokio::task::JoinHandle<()> {
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+    tokio::spawn(async move {
+      tokio::time::sleep(hold).await;
+      sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    })
+  }
+
+  const CONTENDED_HOLD: Duration = Duration::from_millis(60);
+
+  #[tokio::test]
+  async fn delete_older_than_waits_out_a_writer_holding_the_lock() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("old", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    let releaser = hold_write_lock(&pool, CONTENDED_HOLD).await;
+    let deleted = repo
+      .delete_older_than("2099-01-01T00:00:00Z")
+      .await
+      .expect("a contended retention purge should be retried, not surfaced");
+
+    releaser.await.unwrap();
+    assert_eq!(deleted.len(), 1);
+    assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  #[tokio::test]
+  async fn trim_to_max_waits_out_a_writer_holding_the_lock() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    for i in 0..3 {
+      repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(&format!("M{i}"), "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+    }
+
+    let releaser = hold_write_lock(&pool, CONTENDED_HOLD).await;
+    let deleted = repo
+      .trim_to_max(1)
+      .await
+      .expect("a contended trim should be retried, not surfaced");
+
+    releaser.await.unwrap();
+    assert_eq!(deleted.len(), 2);
+    assert_eq!(repo.count().await.unwrap(), 1);
+  }
+
+  #[tokio::test]
+  async fn update_message_waits_out_a_writer_holding_the_lock() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    let summary = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("flag me", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    let releaser = hold_write_lock(&pool, CONTENDED_HOLD).await;
+    repo
+      .update_message(&summary.id, Some(true), None, None)
+      .await
+      .expect("a contended update should be retried, not surfaced");
+
+    releaser.await.unwrap();
+    assert!(repo.get(&summary.id).await.unwrap().is_read);
+  }
+
+  #[tokio::test]
+  async fn update_message_leaves_unset_fields_alone() {
+    let repo = test_repo().await;
+    let summary = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("partial", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+    let tags = vec!["keep".to_string()];
+    repo
+      .update_message(&summary.id, Some(true), Some(true), Some(&tags))
+      .await
+      .unwrap();
+
+    repo
+      .update_message(&summary.id, None, Some(false), None)
+      .await
+      .unwrap();
+
+    let msg = repo.get(&summary.id).await.unwrap();
+    assert!(msg.is_read);
+    assert!(!msg.is_starred);
+    let stored_tags: Vec<String> = serde_json::from_str(&msg.tags).unwrap();
+    assert_eq!(stored_tags, tags);
   }
 
   #[tokio::test]
