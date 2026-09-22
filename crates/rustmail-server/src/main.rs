@@ -362,6 +362,12 @@ const FILE_DB_MAX_CONNECTIONS: u32 = 5;
 /// answered on the hand-off would lose it instead.
 async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<MessageSummary> {
   let (received, ack) = delivery.into_parts();
+  if ack.is_abandoned() {
+    tracing::warn!(
+      "Skipped a message whose session gave up waiting; the sender was asked to retry"
+    );
+    return None;
+  }
   match repo
     .insert(&received.sender, &received.recipients, &received.raw)
     .await
@@ -867,6 +873,27 @@ mod delivery_tests {
       "a refused write must not yield a summary"
     );
     assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Rejected);
+  }
+
+  /// A session that stopped waiting has already told the sender to retry.
+  ///
+  /// Storing the message anyway would capture it a second time once the
+  /// retry lands.
+  #[tokio::test]
+  async fn a_delivery_its_session_gave_up_on_is_not_stored() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+
+    let (delivery, verdict) = Delivery::new(sample());
+    drop(verdict);
+    let summary = store_delivery(&repo, delivery).await;
+
+    assert!(
+      summary.is_none(),
+      "an abandoned delivery must not be stored"
+    );
+    assert_eq!(repo.count().await.unwrap(), 0);
   }
 }
 
