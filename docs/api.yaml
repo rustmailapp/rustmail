@@ -15,6 +15,10 @@ info:
     anything else gets `403`. Other clients — CI scripts, `curl`, the TUI —
     are answered on any host.
 
+
+    A request still running after 30 seconds is abandoned and answered
+    `503` with an empty body. The WebSocket is exempt.
+
 servers:
   - url: http://localhost:8025
     description: Default local server

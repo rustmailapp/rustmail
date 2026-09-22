@@ -30,7 +30,7 @@ ulid = { version = "1.2", features = ["serde"] }
 mail-parser = "0.11"
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "compression-gzip"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "set-header", "compression-gzip", "timeout"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 clap = { version = "4.6", features = ["derive", "env"] }
 toml = "0.8"

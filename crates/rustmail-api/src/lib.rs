@@ -47,14 +47,18 @@ pub use origin::{Origin, OriginError};
 pub use state::{AppState, WsEvent, WsFrame, WsFrameError};
 
 use axum::Router;
-use axum::http::HeaderValue;
+use axum::http::{HeaderValue, StatusCode};
 use axum::routing::{delete, get, patch, post};
 use tower_http::compression::CompressionLayer;
 use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 /// Builds the complete axum router with all API routes, static file serving,
 /// compression, tracing, and security headers.
+///
+/// Every `/api/v1` route but the WebSocket is answered `503` once it runs
+/// past the request timeout; a WebSocket is meant to stay open.
 pub fn router(state: AppState) -> Router {
   let api = Router::new()
     .route("/messages", get(handlers::list_messages))
@@ -80,6 +84,10 @@ pub fn router(state: AppState) -> Router {
     .route("/messages/{id}/export", get(handlers::export_message))
     .route("/messages/{id}/release", post(handlers::release_message))
     .route("/assert/count", get(handlers::assert_count))
+    .layer(TimeoutLayer::with_status_code(
+      StatusCode::SERVICE_UNAVAILABLE,
+      state.api_timeout,
+    ))
     .route("/ws", get(ws::ws_handler));
 
   Router::new()
@@ -110,4 +118,45 @@ pub fn router(state: AppState) -> Router {
       HeaderValue::from_static("no-referrer"),
     ))
     .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use axum::body::Body;
+  use axum::http::{Request, StatusCode};
+  use rustmail_storage::{MessageRepository, initialize_database};
+  use std::time::Duration;
+  use tokio::sync::broadcast;
+  use tower::ServiceExt;
+
+  const SHORT_TIMEOUT: Duration = Duration::from_millis(50);
+  const POOL_WAIT: Duration = Duration::from_secs(30);
+
+  #[tokio::test]
+  async fn an_api_request_that_outlasts_the_timeout_is_answered_503() {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(1)
+      .acquire_timeout(POOL_WAIT)
+      .connect("sqlite::memory:")
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    let _only_connection = pool.acquire().await.unwrap();
+    let (ws_tx, _) = broadcast::channel::<WsFrame>(1);
+    let mut state = AppState::new(MessageRepository::new(pool.clone()), ws_tx, None, None);
+    state.api_timeout = SHORT_TIMEOUT;
+
+    let response = router(state)
+      .oneshot(
+        Request::builder()
+          .uri("/api/v1/messages")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+  }
 }
