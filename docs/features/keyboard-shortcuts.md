@@ -18,7 +18,7 @@ These work anywhere in the UI.
 | `Esc` | Clear active filters, or close the message detail panel |
 
 `d` leaves the message out of the list straight away, but waits a few seconds
-before deleting it, so `u` — or the **Undo** button on the notice that appears —
+before deleting it, so `u`, or the **Undo** button on the notice that appears,
 brings it back. Deleting another message closes the previous one's window, and
 so does the window running out; after that the message is gone for good. `D`
 asks for confirmation instead, because clearing the inbox cannot be undone.

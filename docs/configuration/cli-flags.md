@@ -51,7 +51,7 @@ rustmail serve --allowed-origin https://mail.example.com
 
 RustMail is a development tool with no authentication, so it takes care not to answer pages it was not opened by.
 
-- **`Host`** decides whether a browser gets an answer at all. An IP address, `localhost` and `*.localhost` always do: neither can be pointed at another machine by someone else's DNS. Any other name — a reverse proxy's public name, a Docker service name, a `.local` name — has to be named with `--allowed-host`, otherwise the request is refused with `403`. This is what closes DNS rebinding, where an attacker's domain is re-pointed at the machine running RustMail and every other check sees a same-origin request.
+- **`Host`** decides whether a browser gets an answer at all. An IP address, `localhost` and `*.localhost` always do: neither can be pointed at another machine by someone else's DNS. Any other name (a reverse proxy's public name, a Docker service name, a `.local` name) has to be named with `--allowed-host`, otherwise the request is refused with `403`. This is what closes DNS rebinding, where an attacker's domain is re-pointed at the machine running RustMail and every other check sees a same-origin request.
 - **`Origin`** decides whether a browser may open the WebSocket. The origin RustMail is served on may; others need `--allowed-origin`. See [WebSocket](/features/websocket).
 
 Naming an origin also allows its host, so a reverse-proxy deployment does not have to write the same name twice:
