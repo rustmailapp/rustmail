@@ -857,9 +857,7 @@ describe("live traffic during a search", () => {
     listMessages.mockClear();
   });
 
-  afterEach(async () => {
-    setSearch("");
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+  afterEach(() => {
     disconnectWebSocket();
     vi.unstubAllGlobals();
     vi.useRealTimers();
@@ -936,6 +934,32 @@ describe("live traffic during a search", () => {
     await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
 
     expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("cancels a scheduled refresh on disconnect", async () => {
+    deliver(arrival(100));
+
+    disconnectWebSocket();
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS * 2);
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("aborts an in-flight read on disconnect and never applies its result", async () => {
+    const read = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(read.promise);
+
+    deliver(arrival(100));
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+
+    disconnectWebSocket();
+    read.resolve({ messages: [message(5)], total: 1 });
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS * 2);
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(loading()).toBe(false);
+    expect(filteredMessages().map((m) => m.id)).not.toEqual(["id-5"]);
   });
 });
 

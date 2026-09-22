@@ -794,6 +794,16 @@ function closeSocket(): void {
 function disconnectWebSocket(): void {
   stopHttpFallback();
   closeSocket();
+  latestFetch += 1;
+  currentListRead?.abort();
+  currentListRead = null;
+  eventsDuringRead = null;
+  setLoading(false);
+  if (searchRefreshTimer !== null) {
+    clearTimeout(searchRefreshTimer);
+    searchRefreshTimer = null;
+  }
+  searchStale = false;
 }
 
 export {
