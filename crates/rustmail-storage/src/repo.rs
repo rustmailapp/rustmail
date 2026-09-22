@@ -589,28 +589,36 @@ impl MessageRepository {
   /// Trims stored messages to at most `max`, deleting oldest first. Returns IDs of deleted messages.
   ///
   /// Ordered by `rowid` to match [`Self::list`], so the rows dropped here are
-  /// exactly the ones the UI shows as oldest. Opens with a write for the same
-  /// reason as [`Self::delete_older_than`].
+  /// exactly the ones the UI shows as oldest. The newest doomed rowid is found
+  /// once and both deletes run by range below it, instead of repeating the
+  /// same offset scan per statement. The transaction starts `IMMEDIATE`
+  /// because that lookup is a read: taking the write lock up front keeps an
+  /// insert from committing between it and the deletes.
   pub async fn trim_to_max(&self, max: i64) -> Result<Vec<String>, StorageError> {
     retry_on_lock(|| self.trim_to_max_once(max)).await
   }
 
   async fn trim_to_max_once(&self, max: i64) -> Result<Vec<String>, StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
-    sqlx::query(
-      "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1)",
-    )
-    .bind(max)
-    .execute(&mut *txn)
-    .await?;
+    let threshold: Option<(i64,)> =
+      sqlx::query_as("SELECT rowid FROM messages ORDER BY rowid DESC LIMIT 1 OFFSET ?1")
+        .bind(max)
+        .fetch_optional(&mut *txn)
+        .await?;
+    let Some((threshold,)) = threshold else {
+      return Ok(Vec::new());
+    };
 
-    let ids: Vec<(String,)> = sqlx::query_as(
-      "DELETE FROM messages WHERE rowid IN (SELECT rowid FROM messages ORDER BY rowid DESC LIMIT -1 OFFSET ?1) RETURNING id",
-    )
-    .bind(max)
-    .fetch_all(&mut *txn)
-    .await?;
+    sqlx::query("DELETE FROM messages_fts WHERE rowid <= ?1")
+      .bind(threshold)
+      .execute(&mut *txn)
+      .await?;
+
+    let ids: Vec<(String,)> = sqlx::query_as("DELETE FROM messages WHERE rowid <= ?1 RETURNING id")
+      .bind(threshold)
+      .fetch_all(&mut *txn)
+      .await?;
 
     txn.commit().await?;
     Ok(ids.into_iter().map(|(id,)| id).collect())
@@ -1175,6 +1183,50 @@ mod tests {
 
     let remaining = repo.list(50, 0).await.unwrap();
     assert_eq!(remaining.len(), 3);
+  }
+
+  #[tokio::test]
+  async fn trim_to_max_removes_the_oldest_rows_and_their_index_entries() {
+    let repo = test_repo().await;
+    let mut ids = Vec::new();
+    for i in 0..5 {
+      let summary = repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(&format!("trimmed{i}"), "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+      ids.push(summary.id);
+    }
+
+    let mut deleted = repo.trim_to_max(2).await.unwrap();
+
+    let mut oldest = ids[..3].to_vec();
+    oldest.sort();
+    deleted.sort();
+    assert_eq!(deleted, oldest);
+    sqlx::query("INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)")
+      .execute(&repo.pool)
+      .await
+      .expect("the index must hold no entries for trimmed rows");
+  }
+
+  #[tokio::test]
+  async fn trim_to_max_under_the_cap_deletes_nothing() {
+    let repo = test_repo().await;
+    repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("kept", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    assert!(repo.trim_to_max(1).await.unwrap().is_empty());
+    assert_eq!(repo.count().await.unwrap(), 1);
   }
 
   #[tokio::test]
