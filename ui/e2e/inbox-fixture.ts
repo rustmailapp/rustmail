@@ -11,6 +11,8 @@ const MESSAGE_SIZE_BYTES = 2048;
 const NO_CONTENT = 204;
 const NOT_FOUND = 404;
 const BAD_REQUEST = 400;
+/** Mirrors the most `tag` filters the real handler accepts. */
+export const MAX_TAG_FILTERS = 20;
 /** Mirrors the clamp the real handler applies to `limit`. */
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 200;
@@ -167,6 +169,12 @@ export async function mockInbox(
     }
     if (path === "/messages") {
       calls.listed.push(url.search);
+      if (url.searchParams.getAll("tag").length > MAX_TAG_FILTERS) {
+        return route.fulfill({
+          status: BAD_REQUEST,
+          json: { error: `Too many tag filters (max ${MAX_TAG_FILTERS})` },
+        });
+      }
       const limit = clampLimit(Number(url.searchParams.get("limit")));
       const before = url.searchParams.get("before");
       const cursorAt =
@@ -174,7 +182,7 @@ export async function mockInbox(
       if (before !== null && cursorAt < 0) {
         return route.fulfill({
           status: BAD_REQUEST,
-          json: { error: "unknown cursor" },
+          json: { error: "unknown cursor", code: "unknown_cursor" },
         });
       }
       const older = matching(all.slice(cursorAt + 1), url.searchParams);

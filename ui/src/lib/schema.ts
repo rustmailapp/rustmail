@@ -64,6 +64,9 @@ export const authResults = z.object({
   arc: z.array(authCheck),
 });
 
+/** The part of an error body a client acts on: its machine-readable `code`. */
+export const errorCode = z.object({ code: z.string() });
+
 const identified = z.object({ id: z.string() });
 
 /** Every event the server broadcasts, discriminated by `type`. */

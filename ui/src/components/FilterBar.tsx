@@ -10,8 +10,10 @@ import {
   clearTagFilters,
   toggleFilter,
   toggleTagFilter,
+  tagFiltersFull,
   allTags,
   total,
+  MAX_TAG_FILTERS,
 } from "../stores/messages";
 
 const TAG_SEARCH_THRESHOLD = 8;
@@ -193,7 +195,8 @@ function TagDropdown() {
                       return (
                         <button
                           onClick={() => toggleTagFilter(tag)}
-                          class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                          disabled={!isSelected() && tagFiltersFull()}
+                          class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                         >
                           <div
                             class={`size-3.5 rounded border flex items-center justify-center transition-colors ${
@@ -233,6 +236,11 @@ function TagDropdown() {
                   </For>
                 </Show>
               </div>
+              <Show when={tagFiltersFull()}>
+                <div class="border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                  Up to {MAX_TAG_FILTERS} tags at a time
+                </div>
+              </Show>
               <Show when={filters().tags.length > 0}>
                 <div class="border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5">
                   <button

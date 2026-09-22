@@ -33,6 +33,7 @@ const {
   LIST_READ_ATTEMPTS,
   MAX_LIVE_ROWS,
   MAX_QUEUED_EVENTS,
+  MAX_TAG_FILTERS,
   NOTICE_SUBJECT_MAX,
   PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
@@ -46,6 +47,7 @@ const {
   flushPendingDelete,
   fetchMessages,
   filteredMessages,
+  filters,
   hasMore,
   loading,
   moveSelection,
@@ -278,7 +280,7 @@ describe("paging by cursor", () => {
     listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
     await fetchMessages();
     listMessages.mockRejectedValueOnce(
-      new ApiError(new Response(null, { status: 400 })),
+      new ApiError(new Response(null, { status: 400 }), "unknown_cursor"),
     );
     listMessages.mockResolvedValueOnce(page([message(3)], 4));
 
@@ -292,6 +294,26 @@ describe("paging by cursor", () => {
       "id-0",
       "id-1",
       "id-3",
+    ]);
+  });
+
+  it("keeps the last row when an older page is rejected for another reason", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    listMessages.mockRejectedValueOnce(
+      new ApiError(new Response(null, { status: 400 })),
+    );
+
+    await loadMore();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+    ]);
+    expect(total()).toBe(5);
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
     ]);
   });
 });
@@ -559,6 +581,18 @@ describe("filtering on the server", () => {
     await vi.waitFor(() => expect(filteredMessages()).toHaveLength(1));
 
     expect(allTags()).toEqual(["alpha", "beta"]);
+  });
+
+  it("does not filter by more tags than the server accepts", async () => {
+    const tags = Array.from({ length: MAX_TAG_FILTERS + 1 }, (_, i) => `t${i}`);
+    for (const tag of tags.slice(0, MAX_TAG_FILTERS)) toggleTagFilter(tag);
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+
+    toggleTagFilter(tags[MAX_TAG_FILTERS]);
+
+    expect(filters().tags).toEqual(tags.slice(0, MAX_TAG_FILTERS));
+    expect(listMessages).not.toHaveBeenCalled();
   });
 });
 

@@ -83,16 +83,40 @@ function fieldPath(path: readonly PropertyKey[]): string {
  * A response whose status says the request did not succeed.
  *
  * Carries the status so a caller can tell a request the server rejected from
- * one that never got an answer, without parsing the message.
+ * one that never got an answer, and the body's `code`, when it names one, so a
+ * caller can tell one rejection from another without parsing the message.
  */
 export class ApiError extends Error {
   readonly status: number;
+  readonly code: string | null;
 
-  constructor(res: Response) {
+  constructor(res: Response, code: string | null = null) {
     super(`API error: ${res.status} ${res.statusText}`);
     this.name = "ApiError";
     this.status = res.status;
+    this.code = code;
   }
+}
+
+/**
+ * The error a rejected response stands for, with the `code` its body names.
+ *
+ * A body that is not JSON, or names no code, is still a rejection: only the
+ * code is missing, so that is the only thing left out.
+ */
+async function rejection(
+  res: Response,
+  signal: AbortSignal,
+): Promise<ApiError> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    signal.throwIfAborted();
+    return new ApiError(res);
+  }
+  const parsed = schema.errorCode.safeParse(body);
+  return new ApiError(res, parsed.success ? parsed.data.code : null);
 }
 
 /**
@@ -153,7 +177,7 @@ async function fetchJson<S extends z.ZodMiniType>(
 ): Promise<z.infer<S>> {
   return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) throw new ApiError(res);
+    if (!res.ok) throw await rejection(res, signal);
     return parse(route, shape, await readJson(route, res, signal));
   });
 }
@@ -161,7 +185,7 @@ async function fetchJson<S extends z.ZodMiniType>(
 async function fetchText(url: string, init?: RequestInit): Promise<string> {
   return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) throw new ApiError(res);
+    if (!res.ok) throw await rejection(res, signal);
     return res.text();
   });
 }
@@ -173,7 +197,7 @@ async function fetchVoid(
 ): Promise<void> {
   await withDeadline(init?.signal, timeoutMs, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) throw new ApiError(res);
+    if (!res.ok) throw await rejection(res, signal);
   });
 }
 

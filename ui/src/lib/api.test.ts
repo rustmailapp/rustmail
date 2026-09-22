@@ -324,4 +324,40 @@ describe("list reads", () => {
     await expect(read).rejects.toBeInstanceOf(ApiError);
     await expect(read).rejects.toMatchObject({ status: 400 });
   });
+
+  it("carries the code a rejection names", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        { error: "unknown cursor", code: "unknown_cursor" },
+        { status: 400 },
+      ),
+    );
+
+    await expect(
+      listMessages({ limit: 100, before: "msg-gone" }),
+    ).rejects.toMatchObject({ status: 400, code: "unknown_cursor" });
+  });
+
+  it("carries no code when a rejection names none", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        { error: "Too many tag filters (max 20)" },
+        { status: 400 },
+      ),
+    );
+
+    await expect(listMessages({ limit: 100 })).rejects.toMatchObject({
+      status: 400,
+      code: null,
+    });
+  });
+
+  it("carries no code when a rejection is not JSON", async () => {
+    fetchMock.mockResolvedValue(new Response("Bad Gateway", { status: 502 }));
+
+    await expect(listMessages({ limit: 100 })).rejects.toMatchObject({
+      status: 502,
+      code: null,
+    });
+  });
 });

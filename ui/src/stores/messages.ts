@@ -22,8 +22,11 @@ const PAGE_SIZE = 100;
  */
 const MAX_LIVE_ROWS = 5 * PAGE_SIZE;
 
-/** The status `GET /messages` answers with for a `before` it does not know. */
-const UNKNOWN_CURSOR_STATUS = 400;
+/** The most `tag` filters `GET /messages` accepts; one more is a `400`. */
+const MAX_TAG_FILTERS = 20;
+
+/** The `code` `GET /messages` rejects a `before` it does not know with. */
+const UNKNOWN_CURSOR_CODE = "unknown_cursor";
 
 /**
  * How many times a list read is retried when a deletion confirms mid-flight.
@@ -308,8 +311,14 @@ function toggleFilter(key: "starred" | "unread" | "attachments"): void {
   applyFilters({ ...f, [key]: !f[key] });
 }
 
+/** Whether another tag filter would take the list read past the server's cap. */
+function tagFiltersFull(): boolean {
+  return filters().tags.length >= MAX_TAG_FILTERS;
+}
+
 function toggleTagFilter(tag: string): void {
   const f = filters();
+  if (!f.tags.includes(tag) && tagFiltersFull()) return;
   applyFilters({
     ...f,
     tags: f.tags.includes(tag)
@@ -888,9 +897,7 @@ async function loadMore(): Promise<void> {
 }
 
 function isUnknownCursor(error: unknown): boolean {
-  return (
-    error instanceof api.ApiError && error.status === UNKNOWN_CURSOR_STATUS
-  );
+  return error instanceof api.ApiError && error.code === UNKNOWN_CURSOR_CODE;
 }
 
 const RECONNECT_BASE_DELAY = 2000;
@@ -1244,6 +1251,7 @@ export {
   FRAME_FALLBACK_MS,
   MAX_LIVE_ROWS,
   MAX_QUEUED_EVENTS,
+  MAX_TAG_FILTERS,
   LIST_READ_ATTEMPTS,
   PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
@@ -1280,6 +1288,7 @@ export {
   clearTagFilters,
   toggleFilter,
   toggleTagFilter,
+  tagFiltersFull,
   allTags,
   fetchMessages,
   connectWebSocket,
