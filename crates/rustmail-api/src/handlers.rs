@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{AppState, WsEvent};
-use rustmail_storage::StorageError;
+use rustmail_storage::{PageStart, StorageError};
 
 /// Captured mail is immutable once stored, so anything derived from a
 /// message's bytes can be cached indefinitely. `private` keeps shared caches
@@ -21,11 +21,17 @@ const IMMUTABLE_MESSAGE_CACHE: &str = "private, max-age=31536000, immutable";
 /// responses must not be served from a cache.
 const MUTABLE_MESSAGE_CACHE: &str = "no-store";
 
+/// Page size when a list request names none.
+const DEFAULT_PAGE_LIMIT: i64 = 50;
+/// Largest page a list request is served, whatever it asks for.
+const MAX_PAGE_LIMIT: i64 = 200;
+
 #[derive(Deserialize)]
 pub struct ListParams {
   pub q: Option<String>,
   pub limit: Option<i64>,
   pub offset: Option<i64>,
+  pub before: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -39,18 +45,36 @@ pub async fn list_messages(
   State(state): State<AppState>,
   Query(params): Query<ListParams>,
 ) -> Result<impl IntoResponse, AppError> {
-  let limit = params.limit.unwrap_or(50).clamp(1, 200);
-  let offset = params.offset.unwrap_or(0).max(0);
+  let limit = params
+    .limit
+    .unwrap_or(DEFAULT_PAGE_LIMIT)
+    .clamp(1, MAX_PAGE_LIMIT);
+  let start = match (params.before.as_deref(), params.offset) {
+    (Some(_), Some(_)) => return Err(AppError::BadRequest(CURSOR_WITH_OFFSET)),
+    (Some(before), None) => PageStart::Before(state.repo.cursor(before).await.map_err(
+      |error| match error {
+        StorageError::NotFound(_) => AppError::BadRequest(UNKNOWN_CURSOR),
+        other => AppError::Storage(other),
+      },
+    )?),
+    (None, offset) => PageStart::Offset(offset.unwrap_or(0).max(0)),
+  };
+  let lookahead = limit + 1;
 
-  let (messages, count) = if let Some(query) = &params.q {
-    let msgs = state.repo.search(query, limit, offset).await?;
+  let (mut messages, count) = if let Some(query) = &params.q {
+    let msgs = state.repo.search_page(query, start, lookahead).await?;
     let total = state.repo.search_count(query).await?;
     (msgs, total)
   } else {
-    let msgs = state.repo.list(limit, offset).await?;
+    let msgs = state.repo.list_page(start, lookahead).await?;
     let total = state.repo.count().await?;
     (msgs, total)
   };
+  let has_more = messages.len() as i64 > limit;
+  messages.truncate(limit as usize);
+  let next_cursor = has_more
+    .then(|| messages.last().map(|m| m.id.clone()))
+    .flatten();
 
   Ok((
     StatusCode::OK,
@@ -58,6 +82,8 @@ pub async fn list_messages(
     Json(serde_json::json!({
         "messages": messages,
         "total": count,
+        "next_cursor": next_cursor,
+        "limit": limit,
     })),
   ))
 }
@@ -778,19 +804,30 @@ fn sanitize_filename(name: &str) -> String {
     .collect()
 }
 
-pub struct AppError(StorageError);
+const CURSOR_WITH_OFFSET: &str =
+  "before and offset cannot be combined; page with next_cursor or with offset, not both";
+const UNKNOWN_CURSOR: &str =
+  "before does not name a stored message; it may have been deleted, so restart from the first page";
+
+pub enum AppError {
+  Storage(StorageError),
+  BadRequest(&'static str),
+}
 
 impl From<StorageError> for AppError {
   fn from(e: StorageError) -> Self {
-    Self(e)
+    Self::Storage(e)
   }
 }
 
 impl IntoResponse for AppError {
   fn into_response(self) -> axum::response::Response {
-    let (status, message) = match &self.0 {
-      StorageError::NotFound(_) => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
-      StorageError::Database(e) => {
+    let (status, message) = match &self {
+      AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, (*reason).to_string()),
+      AppError::Storage(StorageError::NotFound(_)) => {
+        (StatusCode::NOT_FOUND, "Resource not found".to_string())
+      }
+      AppError::Storage(StorageError::Database(e)) => {
         tracing::error!(error = %e, "Database error");
         (
           StatusCode::INTERNAL_SERVER_ERROR,

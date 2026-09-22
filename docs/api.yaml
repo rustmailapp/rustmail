@@ -42,14 +42,18 @@ paths:
       operationId: listMessages
       summary: List messages
       description: >
-        Returns messages ordered by `created_at` descending (newest first).
-        Use `limit` and `offset` for pagination. `total` reflects the count
-        before pagination is applied.
+        Returns messages newest first, in arrival order. Page with `before`:
+        pass the previous response's `next_cursor` to get the next page. A
+        cursor page costs the same at any depth and does not shift when new
+        mail arrives, where `offset` does both. `offset` is still accepted,
+        but not together with `before`. `total` reflects the count before
+        pagination is applied.
       tags: [Messages]
       parameters:
         - $ref: '#/components/parameters/QueryParam'
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/OffsetParam'
+        - $ref: '#/components/parameters/BeforeParam'
       responses:
         '200':
           description: Paginated list of message summaries
@@ -68,6 +72,18 @@ paths:
                     is_read: false
                     created_at: '2026-03-21T10:00:00Z'
                 total: 1
+                next_cursor: null
+                limit: 50
+        '400':
+          description: >
+            `before` names no stored message (it may have been deleted; restart
+            from the first page), or `before` and `offset` were both given.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: before and offset cannot be combined; page with next_cursor or with offset, not both
 
     delete:
       operationId: deleteAllMessages
@@ -534,10 +550,10 @@ components:
       in: query
       schema:
         type: integer
-        minimum: 1
-        maximum: 1000
         default: 50
-      description: Maximum number of results to return
+      description: >
+        Maximum number of results to return. Values outside 1–200 are clamped
+        into that range; the response's `limit` reports the value applied.
 
     OffsetParam:
       name: offset
@@ -546,7 +562,20 @@ components:
         type: integer
         minimum: 0
         default: 0
-      description: Number of results to skip (for pagination)
+      description: >
+        Number of results to skip. Kept for compatibility; prefer `before`,
+        which it cannot be combined with.
+
+    BeforeParam:
+      name: before
+      in: query
+      schema:
+        type: string
+      description: >
+        Keyset cursor: the id of a message. Returns only messages strictly
+        older than it, in the same order. Use a previous response's
+        `next_cursor`. Works with `q`. An id that names no stored message is
+        a `400`.
 
   schemas:
 
@@ -622,7 +651,7 @@ components:
 
     MessageList:
       type: object
-      required: [messages, total]
+      required: [messages, total, next_cursor, limit]
       properties:
         messages:
           type: array
@@ -630,8 +659,18 @@ components:
             $ref: '#/components/schemas/MessageSummary'
         total:
           type: integer
-          description: Total number of messages matching the query (before limit/offset)
+          description: Total number of messages matching the query (before limit, offset and before)
           example: 120
+        next_cursor:
+          type: [string, 'null']
+          description: >
+            Id of the last returned message when a further page exists, to pass
+            as `before`; `null` on the last page.
+          example: 01HZ9RQABCDEFGHJKMNPQRSTUV
+        limit:
+          type: integer
+          description: Page size applied, after clamping the requested `limit`
+          example: 50
 
     MessageUpdate:
       type: object

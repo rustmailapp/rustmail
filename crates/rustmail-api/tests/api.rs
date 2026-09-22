@@ -1654,3 +1654,143 @@ async fn a_refused_host_still_gets_the_security_headers() {
   );
   assert_eq!(response.headers().get("x-frame-options").unwrap(), "DENY");
 }
+
+async fn insert_numbered(repo: &MessageRepository, count: usize) -> Vec<String> {
+  let mut ids = Vec::new();
+  for i in 0..count {
+    let stored = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email(&format!("M{i}"), "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+    ids.push(stored.id);
+  }
+  ids
+}
+
+async fn get(app: axum::Router, uri: &str) -> axum::response::Response {
+  app
+    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+    .await
+    .unwrap()
+}
+
+fn listed_ids(body: &Value) -> Vec<String> {
+  body["messages"]
+    .as_array()
+    .unwrap()
+    .iter()
+    .map(|m| m["id"].as_str().unwrap().to_string())
+    .collect()
+}
+
+#[tokio::test]
+async fn before_returns_the_messages_older_than_the_cursor() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let response = get(app, &format!("/api/v1/messages?before={}", ids[2])).await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  let body = json_body(response).await;
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+}
+
+#[tokio::test]
+async fn total_ignores_the_cursor() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let body = json_body(get(app, &format!("/api/v1/messages?before={}", ids[2])).await).await;
+
+  assert_eq!(body["total"], 5);
+}
+
+#[tokio::test]
+async fn next_cursor_names_the_last_message_when_more_remain() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 5).await;
+
+  let body = json_body(get(app, "/api/v1/messages?limit=2").await).await;
+
+  assert_eq!(body["next_cursor"], ids[3].as_str());
+}
+
+#[tokio::test]
+async fn next_cursor_is_null_on_the_last_page() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+
+  let body =
+    json_body(get(app, &format!("/api/v1/messages?limit=2&before={}", ids[2])).await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+  assert!(body["next_cursor"].is_null());
+}
+
+#[tokio::test]
+async fn following_next_cursor_walks_every_message_once() {
+  let (app, repo, _) = setup().await;
+  let mut ids = insert_numbered(&repo, 7).await;
+  ids.reverse();
+
+  let mut seen = Vec::new();
+  let mut uri = "/api/v1/messages?limit=3".to_string();
+  loop {
+    let body = json_body(get(app.clone(), &uri).await).await;
+    seen.extend(listed_ids(&body));
+    match body["next_cursor"].as_str() {
+      Some(cursor) => uri = format!("/api/v1/messages?limit=3&before={cursor}"),
+      None => break,
+    }
+  }
+
+  assert_eq!(seen, ids);
+}
+
+#[tokio::test]
+async fn before_pages_search_results() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+
+  let body =
+    json_body(get(app, &format!("/api/v1/messages?q=hello&before={}", ids[3])).await).await;
+
+  assert_eq!(
+    listed_ids(&body),
+    [ids[2].clone(), ids[1].clone(), ids[0].clone()]
+  );
+}
+
+#[tokio::test]
+async fn an_unknown_cursor_is_a_bad_request() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/api/v1/messages?before=01ARZ3NDEKTSV4RRFFQ69G5FAV").await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn before_and_offset_together_are_a_bad_request() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+
+  let response = get(app, &format!("/api/v1/messages?offset=1&before={}", ids[2])).await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn the_response_reports_the_clamped_limit() {
+  let (app, _, _) = setup().await;
+
+  let body = json_body(get(app, "/api/v1/messages?limit=1000").await).await;
+
+  assert_eq!(body["limit"], 200);
+}

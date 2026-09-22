@@ -1,0 +1,39 @@
+use sqlx::{QueryBuilder, Sqlite};
+
+/// A stored message's position in listing order, for keyset pagination.
+///
+/// Obtained from [`MessageRepository::cursor`](crate::MessageRepository::cursor),
+/// so a page that starts from it costs the same however deep it sits, where
+/// an offset makes SQLite step over every row in front of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cursor(pub(crate) i64);
+
+/// Where a page of results begins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageStart {
+  /// Skip this many matching messages, newest first.
+  Offset(i64),
+  /// Start with the newest message older than the cursor's.
+  Before(Cursor),
+}
+
+/// Appends the cursor bound, newest-first ordering and page window.
+///
+/// `rowid` names the column that carries arrival order in the statement.
+pub(crate) fn push_page(
+  builder: &mut QueryBuilder<'_, Sqlite>,
+  rowid: &'static str,
+  start: PageStart,
+  limit: i64,
+) {
+  if let PageStart::Before(Cursor(bound)) = start {
+    builder.push(format_args!(" AND {rowid} < "));
+    builder.push_bind(bound);
+  }
+  builder.push(format_args!(" ORDER BY {rowid} DESC LIMIT "));
+  builder.push_bind(limit);
+  if let PageStart::Offset(offset) = start {
+    builder.push(" OFFSET ");
+    builder.push_bind(offset);
+  }
+}

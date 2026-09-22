@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use sqlx::{SqliteConnection, SqlitePool};
+use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::debug;
@@ -10,6 +10,7 @@ use ulid::Ulid;
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
 use crate::prepared::PreparedMessage;
+use crate::query::{Cursor, PageStart, push_page};
 use crate::schema::BUSY_TIMEOUT;
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
@@ -212,51 +213,86 @@ impl MessageRepository {
   /// is ordered by the ULID's random bits, so `ORDER BY id` shuffles bursts.
   /// [`Self::search`] orders the same way, so browsing and searching agree.
   pub async fn list(&self, limit: i64, offset: i64) -> Result<Vec<MessageSummary>, StorageError> {
-    let messages = sqlx::query_as::<_, MessageSummary>(
-      "SELECT id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at FROM messages ORDER BY rowid DESC LIMIT ?1 OFFSET ?2",
-    )
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&self.readers)
-    .await?;
+    self.list_page(PageStart::Offset(offset), limit).await
+  }
+
+  /// Lists up to `limit` messages newest first, starting at `start`.
+  ///
+  /// Orders like [`Self::list`]; a [`PageStart::Before`] page costs the same
+  /// at any depth.
+  pub async fn list_page(
+    &self,
+    start: PageStart,
+    limit: i64,
+  ) -> Result<Vec<MessageSummary>, StorageError> {
+    let mut builder = QueryBuilder::<Sqlite>::new(
+      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages m WHERE 1=1",
+    );
+    push_page(&mut builder, "m.rowid", start, limit);
+    let messages = builder
+      .build_query_as::<MessageSummary>()
+      .fetch_all(&self.readers)
+      .await?;
 
     Ok(messages)
   }
 
   /// Full-text search across subject, body, sender, and recipients via FTS5.
-  ///
-  /// The FTS table drives the join and the ordering is `fts.rowid DESC`, which
-  /// FTS5 can satisfy natively. Ordering by a `messages` column instead forces
-  /// SQLite to materialise and sort every match before applying `LIMIT`, so a
-  /// query matching a large mailbox pays for the whole result set to return
-  /// one page of it.
   pub async fn search(
     &self,
     query: &str,
     limit: i64,
     offset: i64,
   ) -> Result<Vec<MessageSummary>, StorageError> {
+    self
+      .search_page(query, PageStart::Offset(offset), limit)
+      .await
+  }
+
+  /// Searches like [`Self::search`], returning up to `limit` matches newest
+  /// first, starting at `start`.
+  ///
+  /// The FTS table drives the join and the ordering is `fts.rowid DESC`, which
+  /// FTS5 can satisfy natively. Ordering by a `messages` column instead forces
+  /// SQLite to materialise and sort every match before applying `LIMIT`, so a
+  /// query matching a large mailbox pays for the whole result set to return
+  /// one page of it. The cursor bound goes on `fts.rowid` for the same reason.
+  pub async fn search_page(
+    &self,
+    query: &str,
+    start: PageStart,
+    limit: i64,
+  ) -> Result<Vec<MessageSummary>, StorageError> {
     let quoted = match Self::sanitize_fts_query(query) {
       Some(q) => q,
       None => return Ok(Vec::new()),
     };
-    let messages = sqlx::query_as::<_, MessageSummary>(
-      r#"
-      SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at
-      FROM messages_fts fts
-      INNER JOIN messages m ON m.rowid = fts.rowid
-      WHERE messages_fts MATCH ?1
-      ORDER BY fts.rowid DESC
-      LIMIT ?2 OFFSET ?3
-      "#,
-    )
-    .bind(&quoted)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&self.readers)
-    .await?;
+    let mut builder = QueryBuilder::<Sqlite>::new(
+      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages_fts fts INNER JOIN messages m ON m.rowid = fts.rowid WHERE messages_fts MATCH ",
+    );
+    builder.push_bind(quoted);
+    push_page(&mut builder, "fts.rowid", start, limit);
+    let messages = builder
+      .build_query_as::<MessageSummary>()
+      .fetch_all(&self.readers)
+      .await?;
 
     Ok(messages)
+  }
+
+  /// Resolves a message id to its position in listing order.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no stored message has `id`.
+  pub async fn cursor(&self, id: &str) -> Result<Cursor, StorageError> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT rowid FROM messages WHERE id = ?1")
+      .bind(id)
+      .fetch_optional(&self.readers)
+      .await?;
+    row
+      .map(|(rowid,)| Cursor(rowid))
+      .ok_or_else(|| StorageError::NotFound(id.to_string()))
   }
 
   /// Counts the total number of FTS5 search matches.
@@ -885,6 +921,73 @@ mod tests {
     assert_eq!(page2.len(), 2);
     assert_eq!(page3.len(), 1);
     assert_ne!(page1[0].id, page2[0].id);
+  }
+
+  async fn insert_subjects(repo: &MessageRepository, subjects: &[&str]) -> Vec<String> {
+    let mut ids = Vec::new();
+    for subject in subjects {
+      let stored = repo
+        .insert(
+          "a@t.com",
+          &["b@t.com".into()],
+          &raw_email(subject, "a@t.com", "b@t.com"),
+        )
+        .await
+        .unwrap();
+      ids.push(stored.id);
+    }
+    ids
+  }
+
+  fn ids_of(page: &[MessageSummary]) -> Vec<&str> {
+    page.iter().map(|m| m.id.as_str()).collect()
+  }
+
+  #[tokio::test]
+  async fn a_page_before_a_cursor_holds_only_older_messages() {
+    let repo = test_repo().await;
+    let ids = insert_subjects(&repo, &["m0", "m1", "m2", "m3", "m4"]).await;
+    let cursor = repo.cursor(&ids[3]).await.unwrap();
+
+    let page = repo.list_page(PageStart::Before(cursor), 50).await.unwrap();
+
+    assert_eq!(ids_of(&page), [&ids[2], &ids[1], &ids[0]]);
+  }
+
+  #[tokio::test]
+  async fn a_cursor_page_matches_the_offset_page_it_replaces() {
+    let repo = test_repo().await;
+    insert_subjects(&repo, &["m0", "m1", "m2", "m3", "m4", "m5"]).await;
+    let first = repo.list(2, 0).await.unwrap();
+    let cursor = repo.cursor(&first[1].id).await.unwrap();
+
+    let by_cursor = repo.list_page(PageStart::Before(cursor), 2).await.unwrap();
+    let by_offset = repo.list(2, 2).await.unwrap();
+
+    assert_eq!(ids_of(&by_cursor), ids_of(&by_offset));
+  }
+
+  #[tokio::test]
+  async fn a_search_page_before_a_cursor_holds_only_older_matches() {
+    let repo = test_repo().await;
+    let ids = insert_subjects(&repo, &["invoice a", "memo", "invoice b", "invoice c"]).await;
+    let cursor = repo.cursor(&ids[3]).await.unwrap();
+
+    let page = repo
+      .search_page("invoice", PageStart::Before(cursor), 50)
+      .await
+      .unwrap();
+
+    assert_eq!(ids_of(&page), [&ids[2], &ids[0]]);
+  }
+
+  #[tokio::test]
+  async fn the_cursor_of_an_unknown_id_is_not_found() {
+    let repo = test_repo().await;
+
+    let error = repo.cursor("01ARZ3NDEKTSV4RRFFQ69G5FAV").await.unwrap_err();
+
+    assert!(matches!(error, StorageError::NotFound(_)));
   }
 
   #[tokio::test]
