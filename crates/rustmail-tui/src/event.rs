@@ -37,12 +37,14 @@ pub enum Event {
     result: Result<ListResponse, String>,
   },
   PreviewLoaded {
+    request: u64,
     id: String,
     was_unread: bool,
     result: Result<Message, String>,
   },
   RawLoaded {
     target: RawTarget,
+    request: u64,
     id: String,
     size: i64,
     result: Result<String, String>,

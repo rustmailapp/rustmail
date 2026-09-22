@@ -76,6 +76,7 @@ pub struct App {
   ws_url: String,
   event_tx: mpsc::Sender<Event>,
   fetch_generation: u64,
+  last_request_id: u64,
   pending_deltas: PendingDeltas,
 
   pub messages: Vec<MessageSummary>,
@@ -95,12 +96,12 @@ pub struct App {
   pub preview_raw: Option<String>,
   pub preview_raw_notice: Option<String>,
   last_preview_id: Option<String>,
-  pending_preview_id: Option<String>,
+  pending_preview: Option<u64>,
 
   pub raw_content: Option<String>,
   pub raw_notice: Option<String>,
   pub raw_scroll: u16,
-  pending_raw: Option<(RawTarget, String)>,
+  pending_raw: Option<(RawTarget, u64)>,
 
   pub search_query: String,
   pub search_input: String,
@@ -135,6 +136,7 @@ impl App {
       ws_url,
       event_tx,
       fetch_generation: 0,
+      last_request_id: 0,
       pending_deltas: PendingDeltas::default(),
 
       messages: Vec::new(),
@@ -154,7 +156,7 @@ impl App {
       preview_raw: None,
       preview_raw_notice: None,
       last_preview_id: None,
-      pending_preview_id: None,
+      pending_preview: None,
 
       raw_content: None,
       raw_notice: None,
@@ -228,16 +230,26 @@ impl App {
         self.handle_messages_fetched(generation, result).await
       }
       Event::PreviewLoaded {
+        request,
         id,
         was_unread,
         result,
-      } => self.handle_preview_loaded(id, was_unread, result).await,
+      } => {
+        self
+          .handle_preview_loaded(request, id, was_unread, result)
+          .await
+      }
       Event::RawLoaded {
         target,
+        request,
         id,
         size,
         result,
-      } => self.handle_raw_loaded(target, id, size, result).await,
+      } => {
+        self
+          .handle_raw_loaded(target, request, id, size, result)
+          .await
+      }
       Event::Patched {
         id,
         is_read,
@@ -247,6 +259,11 @@ impl App {
       Event::Deleted { id, result } => self.handle_deleted(id, result).await,
       Event::AllDeleted { result } => self.handle_all_deleted(result).await,
     }
+  }
+
+  fn next_request_id(&mut self) -> u64 {
+    self.last_request_id += 1;
+    self.last_request_id
   }
 
   fn spawn_and_send<F>(&self, fut: F)
@@ -399,7 +416,8 @@ impl App {
     };
     let id = msg.id.clone();
     let size = msg.size;
-    self.pending_raw = Some((RawTarget::Preview, id.clone()));
+    let request = self.next_request_id();
+    self.pending_raw = Some((RawTarget::Preview, request));
 
     let api = self.api.clone();
     self.spawn_and_send(async move {
@@ -409,6 +427,7 @@ impl App {
         .map_err(|e| e.to_string());
       Event::RawLoaded {
         target: RawTarget::Preview,
+        request,
         id,
         size,
         result,
@@ -676,7 +695,7 @@ impl App {
     let Some(msg) = self.messages.get(self.selected) else {
       self.preview = None;
       self.last_preview_id = None;
-      self.pending_preview_id = None;
+      self.pending_preview = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
       self.pending_raw = None;
@@ -694,13 +713,15 @@ impl App {
     self.preview_raw = None;
     self.preview_raw_notice = None;
     self.preview_tab = PreviewTab::Text;
-    self.pending_preview_id = Some(target_id.clone());
+    let request = self.next_request_id();
+    self.pending_preview = Some(request);
     self.pending_raw = None;
 
     let api = self.api.clone();
     self.spawn_and_send(async move {
       let result = api.get_message(&target_id).await.map_err(|e| e.to_string());
       Event::PreviewLoaded {
+        request,
         id: target_id,
         was_unread,
         result,
@@ -710,14 +731,15 @@ impl App {
 
   async fn handle_preview_loaded(
     &mut self,
+    request: u64,
     id: String,
     was_unread: bool,
     result: Result<Message, String>,
   ) {
-    if self.pending_preview_id.as_deref() != Some(id.as_str()) {
+    if self.pending_preview != Some(request) {
       return;
     }
-    self.pending_preview_id = None;
+    self.pending_preview = None;
     self.preview_loading = false;
 
     match result {
@@ -811,7 +833,7 @@ impl App {
       self.selected -= 1;
     }
     self.last_preview_id = None;
-    self.pending_preview_id = None;
+    self.pending_preview = None;
     self.preview_raw = None;
     self.preview_raw_notice = None;
     self.pending_raw = None;
@@ -835,7 +857,7 @@ impl App {
     self.selected = 0;
     self.preview = None;
     self.last_preview_id = None;
-    self.pending_preview_id = None;
+    self.pending_preview = None;
     self.preview_raw = None;
     self.preview_raw_notice = None;
     self.pending_raw = None;
@@ -848,7 +870,8 @@ impl App {
     };
     let id = msg.id.clone();
     let size = msg.size;
-    self.pending_raw = Some((RawTarget::FullView, id.clone()));
+    let request = self.next_request_id();
+    self.pending_raw = Some((RawTarget::FullView, request));
 
     let api = self.api.clone();
     self.spawn_and_send(async move {
@@ -858,6 +881,7 @@ impl App {
         .map_err(|e| e.to_string());
       Event::RawLoaded {
         target: RawTarget::FullView,
+        request,
         id,
         size,
         result,
@@ -868,12 +892,12 @@ impl App {
   async fn handle_raw_loaded(
     &mut self,
     target: RawTarget,
+    request: u64,
     id: String,
     size: i64,
     result: Result<String, String>,
   ) {
-    let is_current = matches!(&self.pending_raw, Some((t, i)) if *t == target && i == &id);
-    if !is_current {
+    if self.pending_raw != Some((target, request)) {
       return;
     }
     self.pending_raw = None;
@@ -910,7 +934,7 @@ impl App {
       self.offset = new_offset;
       self.selected = 0;
       self.last_preview_id = None;
-      self.pending_preview_id = None;
+      self.pending_preview = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
       self.pending_raw = None;
@@ -924,7 +948,7 @@ impl App {
       self.offset = (self.offset - self.page_size).max(0);
       self.selected = 0;
       self.last_preview_id = None;
-      self.pending_preview_id = None;
+      self.pending_preview = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
       self.pending_raw = None;
@@ -972,7 +996,7 @@ impl App {
           self.sync_list_state();
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
-            self.pending_preview_id = None;
+            self.pending_preview = None;
             self.preview_raw = None;
             self.preview_raw_notice = None;
             self.pending_raw = None;
@@ -989,7 +1013,7 @@ impl App {
         self.selected = 0;
         self.preview = None;
         self.last_preview_id = None;
-        self.pending_preview_id = None;
+        self.pending_preview = None;
         self.preview_raw = None;
         self.preview_raw_notice = None;
         self.pending_raw = None;
@@ -1680,12 +1704,85 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn stale_preview_result_is_discarded_after_selection_changes() {
+  async fn repeat_visit_accepts_only_the_latest_preview_request() {
     let mut app = app_with_messages(2);
-    app.pending_preview_id = Some("id-1".into());
+    app.messages[0].is_read = false;
+
+    app.load_preview().await;
+    let first_visit = app.pending_preview.expect("first visit to id-0");
+    app.select_message(1);
+    app.load_preview().await;
+    app.messages[0].is_read = true;
+    app.select_message(0);
+    app.load_preview().await;
+    let latest_visit = app.pending_preview.expect("second visit to id-0");
 
     app
       .dispatch(Event::PreviewLoaded {
+        request: first_visit,
+        id: "id-0".into(),
+        was_unread: true,
+        result: Ok(sample_message("id-0")),
+      })
+      .await;
+    assert!(app.preview.is_none(), "superseded request must be dropped");
+    assert_eq!(app.pending_preview, Some(latest_visit));
+
+    app
+      .dispatch(Event::PreviewLoaded {
+        request: latest_visit,
+        id: "id-0".into(),
+        was_unread: false,
+        result: Ok(sample_message("id-0")),
+      })
+      .await;
+    assert!(app.preview.is_some());
+    assert_eq!(app.pending_preview, None);
+  }
+
+  #[tokio::test]
+  async fn repeat_visit_accepts_only_the_latest_raw_request() {
+    let mut app = app_with_messages(2);
+
+    app.show_raw().await;
+    let first_visit = app.pending_raw.expect("first raw request for id-0").1;
+    app.select_message(1);
+    app.show_raw().await;
+    app.select_message(0);
+    app.show_raw().await;
+    let latest_visit = app.pending_raw.expect("second raw request for id-0").1;
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::FullView,
+        request: first_visit,
+        id: "id-0".into(),
+        size: 10,
+        result: Ok("stale raw".into()),
+      })
+      .await;
+    assert_eq!(app.raw_content, None);
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::FullView,
+        request: latest_visit,
+        id: "id-0".into(),
+        size: 10,
+        result: Ok("fresh raw".into()),
+      })
+      .await;
+    assert_eq!(app.raw_content.as_deref(), Some("fresh raw"));
+  }
+
+  #[tokio::test]
+  async fn stale_preview_result_is_discarded_after_selection_changes() {
+    let mut app = app_with_messages(2);
+    app.pending_preview = Some(2);
+
+    app
+      .dispatch(Event::PreviewLoaded {
+        request: 1,
         id: "id-0".into(),
         was_unread: false,
         result: Ok(sample_message("id-0")),
@@ -1694,7 +1791,7 @@ mod tests {
 
     assert!(app.preview.is_none());
     assert_eq!(app.last_preview_id, None);
-    assert_eq!(app.pending_preview_id.as_deref(), Some("id-1"));
+    assert_eq!(app.pending_preview, Some(2));
   }
 
   #[tokio::test]
@@ -1706,11 +1803,12 @@ mod tests {
       event_tx,
     );
     app.messages = vec![sample_summary("id-0", false)];
-    app.pending_preview_id = Some("id-0".into());
+    app.pending_preview = Some(1);
     app.preview_loading = true;
 
     app
       .dispatch(Event::PreviewLoaded {
+        request: 1,
         id: "id-0".into(),
         was_unread: true,
         result: Ok(sample_message("id-0")),
@@ -1718,7 +1816,7 @@ mod tests {
       .await;
 
     assert!(!app.preview_loading);
-    assert_eq!(app.pending_preview_id, None);
+    assert_eq!(app.pending_preview, None);
     assert_eq!(app.last_preview_id.as_deref(), Some("id-0"));
     assert!(app.preview.is_some());
 
@@ -1784,11 +1882,12 @@ mod tests {
   #[tokio::test]
   async fn raw_loaded_event_populates_the_preview_tab_when_current() {
     let mut app = app_with_messages(1);
-    app.pending_raw = Some((RawTarget::Preview, "id-0".into()));
+    app.pending_raw = Some((RawTarget::Preview, 1));
 
     app
       .dispatch(Event::RawLoaded {
         target: RawTarget::Preview,
+        request: 1,
         id: "id-0".into(),
         size: 10,
         result: Ok("raw body".into()),
@@ -1803,11 +1902,12 @@ mod tests {
   #[tokio::test]
   async fn raw_loaded_event_populates_the_full_view_when_current() {
     let mut app = app_with_messages(1);
-    app.pending_raw = Some((RawTarget::FullView, "id-0".into()));
+    app.pending_raw = Some((RawTarget::FullView, 1));
 
     app
       .dispatch(Event::RawLoaded {
         target: RawTarget::FullView,
+        request: 1,
         id: "id-0".into(),
         size: 10,
         result: Ok("raw body".into()),
@@ -1821,11 +1921,12 @@ mod tests {
   #[tokio::test]
   async fn raw_loaded_event_is_discarded_when_superseded() {
     let mut app = app_with_messages(1);
-    app.pending_raw = Some((RawTarget::Preview, "id-1".into()));
+    app.pending_raw = Some((RawTarget::Preview, 2));
 
     app
       .dispatch(Event::RawLoaded {
         target: RawTarget::Preview,
+        request: 1,
         id: "id-0".into(),
         size: 10,
         result: Ok("stale raw".into()),
@@ -1833,9 +1934,6 @@ mod tests {
       .await;
 
     assert_eq!(app.preview_raw, None);
-    assert_eq!(
-      app.pending_raw.as_ref().map(|(_, id)| id.as_str()),
-      Some("id-1")
-    );
+    assert_eq!(app.pending_raw, Some((RawTarget::Preview, 2)));
   }
 }
