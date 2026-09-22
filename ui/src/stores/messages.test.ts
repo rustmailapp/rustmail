@@ -61,6 +61,7 @@ const {
   toggleTagFilter,
   allTags,
   listSize,
+  liveSummary,
   heldArrivals,
   heldRefresh,
   setLiveHeld,
@@ -1163,6 +1164,57 @@ describe("the live list's length", () => {
     deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
 
     expect(total()).toBe(2 * MAX_LIVE_ROWS);
+  });
+
+  it("brings back a row awaiting undo that an arrival would have let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    deleteWithUndo(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    undoDelete();
+
+    expect(filteredMessages().at(-1)?.id).toBe(oldest);
+    expect(total()).toBe(2 * MAX_LIVE_ROWS + 1);
+  });
+
+  it("lets a row go once it can no longer be undone", () => {
+    deleteWithUndo(`id-${MAX_LIVE_ROWS - 1}`);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    undoDelete();
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-2) }));
+
+    expect(filteredMessages()).toHaveLength(MAX_LIVE_ROWS);
+  });
+
+  it("keeps the open message's star current once its row is let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    setSelectedId(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: oldest, is_starred: true },
+      }),
+    );
+
+    expect(liveSummary(message(MAX_LIVE_ROWS - 1)).is_starred).toBe(true);
+  });
+
+  it("keeps the open message's tags current once its row is let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    setSelectedId(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:tags",
+        data: { id: oldest, tags: ["urgent"] },
+      }),
+    );
+
+    expect(liveSummary(message(MAX_LIVE_ROWS - 1)).tags).toEqual(["urgent"]);
   });
 
   it("still counts the rows it let go", () => {

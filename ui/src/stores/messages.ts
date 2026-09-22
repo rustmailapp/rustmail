@@ -171,6 +171,9 @@ function revealArrivals(): void {
 }
 
 function replaceRows(rows: MessageSummary[]): void {
+  const selected = selectedId();
+  const open = selected === null ? undefined : findMessage(selected);
+  if (open !== undefined) setOpenRow(open);
   letGoWhileHidden.clear();
   positions.clear();
   headPosition = 0;
@@ -214,18 +217,27 @@ const letGoWhileHidden = new Set<string>();
 /**
  * Lets the rows past {@link MAX_LIVE_ROWS} go, and pages on from the last kept.
  *
- * The cursor stays in the view it was read under, since the rows let go
- * belong to that view.
+ * The row that can still be undone is kept, with every row above it, so undo
+ * puts it back where it was; the undo window bounds how long the list can run
+ * past the cap for it. The cursor stays in the view it was read under, since
+ * the rows let go belong to that view.
  */
 function trimRows(): void {
   const rows = messages();
-  if (rows.length <= MAX_LIVE_ROWS) return;
+  const undoable = undoableId();
+  const keep = Math.max(
+    MAX_LIVE_ROWS,
+    undoable === null ? 0 : indexOfRow(undoable) + 1,
+  );
+  if (rows.length <= keep) return;
   const hidden = hiddenIds();
-  for (const m of rows.slice(MAX_LIVE_ROWS)) {
+  const selected = selectedId();
+  for (const m of rows.slice(keep)) {
     positions.delete(m.id);
     if (hidden.includes(m.id)) letGoWhileHidden.add(m.id);
+    if (m.id === selected) setOpenRow(m);
   }
-  const kept = rows.slice(0, MAX_LIVE_ROWS);
+  const kept = rows.slice(0, keep);
   setMessages(kept);
   setNextCursor(kept[kept.length - 1].id);
 }
@@ -237,6 +249,25 @@ function replaceRow(patched: MessageSummary): void {
 }
 const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
+/**
+ * The open message's row as it was when the list let it go, kept current by
+ * live events, so the detail pane never reads its state from a list that no
+ * longer holds it.
+ */
+const [openRow, setOpenRow] = createSignal<MessageSummary | null>(null);
+
+/**
+ * The latest known state of `loaded`, the message the detail pane opened.
+ *
+ * Its loaded row when there is one, else the open row the list let go, else
+ * `loaded` itself as it was read.
+ */
+function liveSummary(loaded: MessageSummary): MessageSummary {
+  const row = findMessage(loaded.id);
+  if (row !== undefined) return row;
+  const open = openRow();
+  return open?.id === loaded.id ? open : loaded;
+}
 const [loading, setLoading] = createSignal(false);
 const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
@@ -550,6 +581,7 @@ function forgetMessage(id: string): void {
     setNextCursor(messages()[indexOfRow(id) - 1]?.id ?? null);
   }
   removeRow(id);
+  if (openRow()?.id === id) setOpenRow(null);
   if (heldRows.delete(id)) setHeldArrivals((count) => count - 1);
   unhide(id);
   if (selectedId() === id) setSelectedId(null);
@@ -990,6 +1022,8 @@ function isKnown(id: string): boolean {
  * idempotent, so a replay over a page that already reflects it counts nothing.
  */
 function patchMessage(id: string, patch: Partial<MessageSummary>): void {
+  const open = openRow();
+  if (open?.id === id) setOpenRow({ ...open, ...patch });
   const waiting = heldRows.get(id);
   if (waiting !== undefined) {
     const patched = { ...waiting, ...patch };
@@ -1257,7 +1291,7 @@ export {
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
-  findMessage,
+  liveSummary,
   visibleMessages,
   filteredMessages,
   total,
