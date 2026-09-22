@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_rustls::TlsConnector;
 
-use rustmail_api::{AppState, WsEvent, router};
+use rustmail_api::{AppState, WsEvent, WsFrame, router};
 use rustmail_smtp::{Delivery, ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, initialize_database};
 
@@ -259,7 +259,7 @@ async fn smtp_to_api_pipeline() {
 
   let repo = test_repo().await;
   let (smtp_tx, mut smtp_rx) = mpsc::channel(256);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
   spawn_smtp_with_real_session(smtp_listener, smtp_tx);
 
@@ -775,7 +775,7 @@ async fn webhook_fires_on_new_message() {
 
   let repo = test_repo().await;
   let (smtp_tx, mut smtp_rx) = mpsc::channel(256);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
   spawn_smtp_with_real_session(smtp_listener, smtp_tx);
 
@@ -1250,7 +1250,7 @@ async fn ws_closes_a_client_that_falls_behind_instead_of_dropping_events() {
     .unwrap();
   initialize_database(&pool).await.unwrap();
   let repo = MessageRepository::new(pool);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(TINY_BROADCAST_CAPACITY);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(TINY_BROADCAST_CAPACITY);
   let state = AppState::new(repo, ws_tx.clone(), None, None);
   let app = router(state);
 
@@ -1270,7 +1270,7 @@ async fn ws_closes_a_client_that_falls_behind_instead_of_dropping_events() {
   // cannot drain between sends and is guaranteed to fall behind.
   for i in 0..EVENTS_OVERRUNNING_CAPACITY {
     ws_tx
-      .send(WsEvent::MessageDelete { id: i.to_string() })
+      .send(WsFrame::encode(&WsEvent::MessageDelete { id: i.to_string() }).unwrap())
       .unwrap();
   }
 
@@ -1308,7 +1308,7 @@ async fn ws_server_pings_a_client_as_soon_as_it_connects() {
     .unwrap();
   initialize_database(&pool).await.unwrap();
   let repo = MessageRepository::new(pool);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
   let app = router(AppState::new(repo, ws_tx, None, None));
 
   let http_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1364,7 +1364,7 @@ async fn ws_connection_limit_returns_503() {
       .unwrap();
     initialize_database(&pool).await.unwrap();
     let repo = MessageRepository::new(pool);
-    let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+    let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
     let state = AppState::new(repo.clone(), ws_tx.clone(), None, None);
     (router(state.clone()), repo, state)
   };

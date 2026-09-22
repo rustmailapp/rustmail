@@ -105,12 +105,8 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         }
         event = rx.recv() => {
             match event {
-                Ok(event) => {
-                    let json = match serde_json::to_string(&event) {
-                        Ok(j) => j,
-                        Err(_) => continue,
-                    };
-                    if !send_within(&mut socket, Message::Text(json.into()), timings.send_timeout).await {
+                Ok(frame) => {
+                    if !send_within(&mut socket, Message::Text(frame.text()), timings.send_timeout).await {
                         break;
                     }
                 }
@@ -163,7 +159,7 @@ async fn send_within(socket: &mut WebSocket, message: Message, limit: Duration) 
 #[cfg(test)]
 mod tests {
   use super::{WS_IDLE_TIMEOUT, WS_PING_INTERVAL, WS_SEND_TIMEOUT, WsTimings};
-  use crate::{AppState, WsEvent, router};
+  use crate::{AppState, WsEvent, WsFrame, router};
   use rustmail_storage::{MessageRepository, initialize_database};
   use std::net::SocketAddr;
   use std::time::Duration;
@@ -207,13 +203,13 @@ mod tests {
     );
   }
 
-  async fn serve(timings: WsTimings) -> (SocketAddr, AppState, broadcast::Sender<WsEvent>) {
+  async fn serve(timings: WsTimings) -> (SocketAddr, AppState, broadcast::Sender<WsFrame>) {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
       .connect("sqlite::memory:")
       .await
       .unwrap();
     initialize_database(&pool).await.unwrap();
-    let (ws_tx, _) = broadcast::channel::<WsEvent>(BROADCAST_CAPACITY);
+    let (ws_tx, _) = broadcast::channel::<WsFrame>(BROADCAST_CAPACITY);
     let mut state = AppState::new(MessageRepository::new(pool), ws_tx.clone(), None, None);
     state.ws_timings = timings;
 
@@ -288,7 +284,7 @@ mod tests {
       let mut cadence = tokio::time::interval(EVENT_CADENCE);
       loop {
         cadence.tick().await;
-        let _ = ws_tx.send(WsEvent::MessagesClear);
+        let _ = ws_tx.send(WsFrame::encode(&WsEvent::MessagesClear).unwrap());
       }
     });
 
@@ -327,12 +323,11 @@ mod tests {
 
     let large_tag = "x".repeat(LARGE_TAG_BYTES);
     for i in 0..BROADCAST_CAPACITY / 4 {
-      ws_tx
-        .send(WsEvent::MessageTags {
-          id: i.to_string(),
-          tags: vec![large_tag.clone()],
-        })
-        .unwrap();
+      let event = WsEvent::MessageTags {
+        id: i.to_string(),
+        tags: vec![large_tag.clone()],
+      };
+      ws_tx.send(WsFrame::encode(&event).unwrap()).unwrap();
     }
 
     let released = tokio::time::timeout(VERDICT_DEADLINE, async {
@@ -347,5 +342,49 @@ mod tests {
       released.is_ok(),
       "a send blocked on a peer that stopped reading must time out and free the slot"
     );
+  }
+
+  async fn next_text(reader: &mut BufReader<TcpStream>) -> Vec<u8> {
+    loop {
+      match tokio::time::timeout(VERDICT_DEADLINE, read_frame(reader))
+        .await
+        .expect("no text frame arrived")
+      {
+        Some((WS_TEXT_OPCODE, payload)) => return payload,
+        Some((WS_PING_OPCODE, _)) => {}
+        other => panic!("expected a text frame, got {other:?}"),
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn every_subscriber_receives_the_bytes_a_per_client_encode_produced() {
+    let (addr, state, _ws_tx) = serve(WsTimings::default()).await;
+    let mut first = handshake(addr).await;
+    let mut second = handshake(addr).await;
+    assert_eq!(
+      read_frame(&mut first).await.map(|f| f.0),
+      Some(WS_PING_OPCODE)
+    );
+    assert_eq!(
+      read_frame(&mut second).await.map(|f| f.0),
+      Some(WS_PING_OPCODE)
+    );
+
+    let summary = state
+      .repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        b"From: a@t.com\r\nTo: b@t.com\r\nSubject: Wire\r\n\r\nbody",
+      )
+      .await
+      .unwrap();
+    let event = WsEvent::MessageNew(summary);
+    let expected = serde_json::to_vec(&event).unwrap();
+    state.broadcast(event);
+
+    assert_eq!(next_text(&mut first).await, expected);
+    assert_eq!(next_text(&mut second).await, expected);
   }
 }
