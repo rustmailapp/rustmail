@@ -100,17 +100,43 @@ where
 
 /// Repository for storing and querying captured email messages.
 ///
-/// Wraps a [`SqlitePool`] and provides async methods for CRUD operations,
-/// full-text search, retention enforcement, and attachment access.
+/// Wraps a [`SqlitePool`] for reads and one for writes, which may be the same
+/// pool, and provides async methods for CRUD operations, full-text search,
+/// retention enforcement, and attachment access.
 #[derive(Clone)]
 pub struct MessageRepository {
-  pool: SqlitePool,
+  readers: SqlitePool,
+  writer: SqlitePool,
 }
 
 impl MessageRepository {
-  /// Creates a new repository backed by the given connection pool.
+  /// Creates a new repository that reads and writes through `pool`.
   pub fn new(pool: SqlitePool) -> Self {
-    Self { pool }
+    Self {
+      readers: pool.clone(),
+      writer: pool,
+    }
+  }
+
+  /// Creates a repository that reads through `readers` and writes only
+  /// through `writer`.
+  ///
+  /// `writer` is meant to hold a single connection. SQLite admits one writer
+  /// at a time anyway, and a connection that is the only one writing keeps its
+  /// page cache and memory map valid from one transaction to the next, where
+  /// writes rotating across a pool make each connection discard both whenever
+  /// another one wrote since it last ran.
+  pub fn with_writer(readers: SqlitePool, writer: SqlitePool) -> Self {
+    Self { readers, writer }
+  }
+
+  /// Closes the readers, then the writer.
+  ///
+  /// The last connection to close checkpoints the WAL, and closing the writer
+  /// last leaves that to the connection whose cache already holds the pages.
+  pub async fn close(&self) {
+    self.readers.close().await;
+    self.writer.close().await;
   }
 
   /// Parses and stores a raw email, extracting metadata and attachments.
@@ -149,7 +175,7 @@ impl MessageRepository {
     &self,
     message: &PreparedMessage,
   ) -> Result<MessageSummary, StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
     let summary = insert_in(&mut txn, message).await?;
     txn.commit().await?;
     debug!(id = %summary.id, subject = ?summary.subject, "Message stored");
@@ -179,7 +205,7 @@ impl MessageRepository {
     &self,
     messages: &[PreparedMessage],
   ) -> Result<Vec<MessageSummary>, StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
     let mut summaries = Vec::with_capacity(messages.len());
     for message in messages {
       summaries.push(insert_in(&mut txn, message).await?);
@@ -201,7 +227,7 @@ impl MessageRepository {
     )
     .bind(limit)
     .bind(offset)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(messages)
@@ -237,7 +263,7 @@ impl MessageRepository {
     .bind(&quoted)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(messages)
@@ -262,7 +288,7 @@ impl MessageRepository {
       "#,
     )
     .bind(&quoted)
-    .fetch_one(&self.pool)
+    .fetch_one(&self.readers)
     .await?;
     Ok(row.0)
   }
@@ -286,7 +312,7 @@ impl MessageRepository {
       "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
     )
     .bind(id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
 
@@ -313,7 +339,7 @@ impl MessageRepository {
       .bind(is_starred)
       .bind(tags_json.as_deref())
       .bind(id)
-      .execute(&self.pool)
+      .execute(&self.writer)
       .await?;
       Ok(result)
     })
@@ -327,7 +353,7 @@ impl MessageRepository {
 
   /// Deletes a single message and its FTS5 index entry atomically.
   pub async fn delete(&self, id: &str) -> Result<(), StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid = (SELECT rowid FROM messages WHERE id = ?1)",
@@ -360,7 +386,7 @@ impl MessageRepository {
   }
 
   async fn delete_all_once(&self) -> Result<u64, StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
       .execute(&mut *txn)
@@ -377,7 +403,7 @@ impl MessageRepository {
   /// Returns the total number of stored messages.
   pub async fn count(&self) -> Result<i64, StorageError> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
-      .fetch_one(&self.pool)
+      .fetch_one(&self.readers)
       .await?;
     Ok(row.0)
   }
@@ -410,7 +436,7 @@ impl MessageRepository {
       query = query.bind(b);
     }
 
-    let row = query.fetch_one(&self.pool).await?;
+    let row = query.fetch_one(&self.readers).await?;
     Ok(row.0)
   }
 
@@ -423,7 +449,7 @@ impl MessageRepository {
       "SELECT id, message_id, filename, content_type, content_id, size FROM attachments WHERE message_id = ?1",
     )
     .bind(message_id)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(attachments)
@@ -440,7 +466,7 @@ impl MessageRepository {
     )
     .bind(attachment_id)
     .bind(message_id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(attachment_id.to_string()))?;
 
@@ -458,7 +484,7 @@ impl MessageRepository {
     )
     .bind(content_id)
     .bind(message_id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(content_id.to_string()))?;
 
@@ -469,7 +495,7 @@ impl MessageRepository {
   pub async fn get_raw(&self, id: &str) -> Result<Vec<u8>, StorageError> {
     let row: (Vec<u8>,) = sqlx::query_as("SELECT raw FROM messages WHERE id = ?1")
       .bind(id)
-      .fetch_optional(&self.pool)
+      .fetch_optional(&self.readers)
       .await?
       .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
@@ -488,7 +514,7 @@ impl MessageRepository {
     let row: (Vec<u8>,) = sqlx::query_as("SELECT substr(raw, 1, ?2) FROM messages WHERE id = ?1")
       .bind(id)
       .bind(max_bytes)
-      .fetch_optional(&self.pool)
+      .fetch_optional(&self.readers)
       .await?
       .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
@@ -509,13 +535,13 @@ impl MessageRepository {
     let has_match: bool =
       sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM messages WHERE created_at < ?1)")
         .bind(iso_cutoff)
-        .fetch_one(&self.pool)
+        .fetch_one(&self.readers)
         .await?;
     if !has_match {
       return Ok(Vec::new());
     }
 
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE created_at < ?1)",
@@ -550,13 +576,13 @@ impl MessageRepository {
 
   async fn trim_to_max_once(&self, max: i64) -> Result<Vec<String>, StorageError> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
-      .fetch_one(&self.pool)
+      .fetch_one(&self.readers)
       .await?;
     if count <= max {
       return Ok(Vec::new());
     }
 
-    let mut txn = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut txn = self.writer.begin_with("BEGIN IMMEDIATE").await?;
 
     let threshold: Option<(i64,)> =
       sqlx::query_as("SELECT rowid FROM messages ORDER BY rowid DESC LIMIT 1 OFFSET ?1")
@@ -782,7 +808,7 @@ mod tests {
     sqlx::query(&format!(
       "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = '{subject}' BEGIN SELECT RAISE(ABORT, 'poisoned'); END"
     ))
-    .execute(&repo.pool)
+    .execute(&repo.writer)
     .await
     .unwrap();
   }
@@ -1118,7 +1144,7 @@ mod tests {
 
     async fn index_rows(repo: &MessageRepository) -> i64 {
       sqlx::query_scalar("SELECT count(*) FROM messages_fts_data")
-        .fetch_one(&repo.pool)
+        .fetch_one(&repo.writer)
         .await
         .unwrap()
     }
@@ -1324,7 +1350,7 @@ mod tests {
     deleted.sort();
     assert_eq!(deleted, oldest);
     sqlx::query("INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)")
-      .execute(&repo.pool)
+      .execute(&repo.writer)
       .await
       .expect("the index must hold no entries for trimmed rows");
   }

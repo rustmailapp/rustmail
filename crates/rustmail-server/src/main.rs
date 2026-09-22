@@ -269,10 +269,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
     "Assert mode: waiting for matching emails"
   );
 
-  let pool = connect_pool(IN_MEMORY_DB_URL, true).await?;
-  initialize_database(&pool).await?;
-
-  let repo = MessageRepository::new(pool);
+  let repo = open_repository(IN_MEMORY_DB_URL, true).await?;
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
 
   let smtp_config = SmtpServerConfig {
@@ -359,7 +356,8 @@ fn default_db_path() -> PathBuf {
 }
 
 const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
-const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+/// Connections a file database's reader pool may open, besides its writer.
+const FILE_DB_READER_CONNECTIONS: u32 = 4;
 /// How long a stop waits for queued deliveries and open HTTP connections to
 /// finish before closing the database anyway.
 ///
@@ -377,7 +375,7 @@ const MAX_BATCH_MESSAGES: usize = 32;
 const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// Raw size from which a message is parsed off the async runtime.
 const BLOCKING_PARSE_THRESHOLD_BYTES: usize = 256 * 1024;
-/// How long closing the pool, and with it the final WAL checkpoint, may take.
+/// How long closing the database, and with it the final WAL checkpoint, may take.
 const DB_CLOSE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Resolves when the process is asked to stop, by `SIGTERM` or Ctrl-C.
@@ -566,7 +564,17 @@ async fn store_one_by_one(
   stored
 }
 
-/// Opens a SQLite connection pool for `db_url`.
+/// Pool options for one connection that is never reaped or recycled.
+fn single_connection() -> sqlx::sqlite::SqlitePoolOptions {
+  sqlx::sqlite::SqlitePoolOptions::new()
+    .min_connections(1)
+    .max_connections(1)
+    .idle_timeout(None)
+    .max_lifetime(None)
+}
+
+/// Opens a SQLite connection pool for `db_url`: the reader pool of a file
+/// database, or the one connection an in-memory database lives in.
 ///
 /// In-memory pools are pinned to a single permanent connection. SQLite drops
 /// an in-memory database once its last connection closes, and the pool would
@@ -576,13 +584,9 @@ async fn store_one_by_one(
 /// `SQLITE_BUSY` that `busy_timeout` retries.
 async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool> {
   let pool_options = if in_memory {
-    sqlx::sqlite::SqlitePoolOptions::new()
-      .min_connections(1)
-      .max_connections(1)
-      .idle_timeout(None)
-      .max_lifetime(None)
+    single_connection()
   } else {
-    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_MAX_CONNECTIONS)
+    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_READER_CONNECTIONS)
   };
 
   let connect_options = rustmail_storage::connect_options(db_url)
@@ -592,6 +596,36 @@ async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool>
     .connect_with(connect_options)
     .await
     .with_context(|| format!("failed to open database: {db_url}"))
+}
+
+/// Opens the one connection every write to a file database goes through.
+///
+/// It stays open for the life of the process, so its page cache stays warm.
+async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
+  let connect_options = rustmail_storage::connect_options(db_url)
+    .with_context(|| format!("invalid database URL: {db_url}"))?;
+
+  single_connection()
+    .connect_with(connect_options)
+    .await
+    .with_context(|| format!("failed to open database for writing: {db_url}"))
+}
+
+/// Opens the repository for `db_url` and creates its schema.
+///
+/// A file database gets a dedicated writer connection beside its pool of
+/// readers. An in-memory database lives in a single connection, which then
+/// serves both.
+async fn open_repository(db_url: &str, in_memory: bool) -> Result<MessageRepository> {
+  if in_memory {
+    let pool = connect_pool(db_url, true).await?;
+    initialize_database(&pool).await?;
+    return Ok(MessageRepository::new(pool));
+  }
+  let writer = connect_writer(db_url).await?;
+  initialize_database(&writer).await?;
+  let readers = connect_pool(db_url, false).await?;
+  Ok(MessageRepository::with_writer(readers, writer))
 }
 
 fn install_rustls_crypto_provider() {
@@ -833,15 +867,12 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 
-  let pool = connect_pool(&db_url, args.ephemeral).await?;
-
-  initialize_database(&pool).await?;
+  let repo = open_repository(&db_url, args.ephemeral).await?;
 
   let (release_host, release_port) = args.release_host.as_deref().map(parse_release_host).unzip();
   let release_host: Option<String> = release_host;
   let release_port: Option<u16> = release_port.flatten();
 
-  let repo = MessageRepository::new(pool.clone());
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
   let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
@@ -1014,7 +1045,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   retention_task.abort();
 
-  if tokio::time::timeout(DB_CLOSE_DEADLINE, pool.close())
+  if tokio::time::timeout(DB_CLOSE_DEADLINE, repo.close())
     .await
     .is_err()
   {
@@ -1076,9 +1107,7 @@ mod delivery_tests {
   }
 
   async fn memory_repo() -> MessageRepository {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    MessageRepository::new(pool)
+    open_repository(IN_MEMORY_DB_URL, true).await.unwrap()
   }
 
   fn deliveries(
@@ -1149,7 +1178,7 @@ mod delivery_tests {
   /// A `250` has to mean stored, so no session in a batch may hear back
   /// before the transaction holding its message has committed.
   ///
-  /// The count runs on a second connection of a file database, which only
+  /// The count runs on a reader connection of a file database, which only
   /// sees committed rows: an answer sent mid-transaction would find fewer
   /// than the whole batch there.
   #[tokio::test]
@@ -1157,9 +1186,7 @@ mod delivery_tests {
     const BATCH: usize = 4;
     let dir = tempfile::tempdir().unwrap();
     let url = format!("sqlite:{}?mode=rwc", dir.path().join("acks.db").display());
-    let pool = connect_pool(&url, false).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool.clone());
+    let repo = open_repository(&url, false).await.unwrap();
 
     let (batch, mut verdicts) = deliveries((0..BATCH).map(|_| sample()).collect());
     let writer = tokio::spawn({
@@ -1176,7 +1203,7 @@ mod delivery_tests {
       "the first answer went out before its batch committed"
     );
     assert_eq!(writer.await.unwrap().len(), BATCH);
-    pool.close().await;
+    repo.close().await;
   }
 
   /// One message the store refuses must not cost the rest of its batch.
@@ -1422,14 +1449,28 @@ mod pool_tests {
 
   #[tokio::test(flavor = "multi_thread")]
   async fn single_connection_pool_serializes_without_deadlocking() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = open_repository(IN_MEMORY_DB_URL, true).await.unwrap();
 
-    // Ephemeral mode funnels SMTP inserts, retention and every HTTP request
-    // through one connection. A repository method that acquired a second
-    // connection while holding one would deadlock here rather than hang the
-    // whole server in production.
+    exercise_concurrently(&repo).await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn file_repository_serializes_writes_without_deadlocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("split.db").display());
+    let repo = open_repository(&url, false).await.unwrap();
+
+    exercise_concurrently(&repo).await;
+    repo.close().await;
+  }
+
+  /// Runs inserts, counts, searches and lists from many tasks at once.
+  ///
+  /// Ephemeral mode funnels SMTP inserts, retention and every HTTP request
+  /// through one connection, and a file database funnels every write through
+  /// one. A repository method that acquired a second connection while holding
+  /// one would deadlock here rather than hang the whole server in production.
+  async fn exercise_concurrently(repo: &MessageRepository) {
     let mut handles = Vec::new();
     for i in 0..CONCURRENT_WORKERS {
       let repo = repo.clone();
@@ -1454,7 +1495,7 @@ mod pool_tests {
       }
     })
     .await
-    .expect("single-connection pool deadlocked");
+    .expect("a single write connection deadlocked");
 
     assert_eq!(repo.count().await.unwrap(), CONCURRENT_WORKERS as i64);
   }
@@ -1472,10 +1513,29 @@ mod pool_tests {
 
     assert_eq!(
       pool.options().get_max_connections(),
-      FILE_DB_MAX_CONNECTIONS
+      FILE_DB_READER_CONNECTIONS
     );
 
     pool.close().await;
+  }
+
+  #[tokio::test]
+  async fn file_writer_is_one_connection_kept_for_the_process_lifetime() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let writer = connect_writer(&format!(
+      "sqlite:{}?mode=rwc",
+      dir.path().join("writer.db").display()
+    ))
+    .await
+    .unwrap();
+
+    let options = writer.options();
+    assert_eq!(options.get_max_connections(), 1);
+    assert_eq!(options.get_min_connections(), 1);
+    assert_eq!(options.get_idle_timeout(), None);
+    assert_eq!(options.get_max_lifetime(), None);
+    writer.close().await;
   }
 }
 

@@ -7,7 +7,14 @@ use sqlx::sqlite::SqliteConnectOptions;
 use crate::StorageError;
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const CACHE_SIZE_KIB: &str = "-64000";
+/// Page cache of every connection.
+///
+/// Reads are served from the memory map, so a connection's own cache holds
+/// little the OS page cache does not already have, and a larger one bought
+/// no ingest throughput. It does stay resident: the dedicated writer keeps
+/// its cache for the life of the process, and each reader keeps whatever
+/// browsing a large mailbox filled it with.
+const CACHE_SIZE_KIB: &str = "-8000";
 const MMAP_SIZE_BYTES: &str = "268435456";
 /// WAL pages that may accumulate before a commit also checkpoints.
 ///
