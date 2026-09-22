@@ -30,6 +30,15 @@ const NOTICE_SUBJECT_MAX = 50;
  */
 const UNDO_WINDOW_MS = 5000;
 
+/**
+ * The most often live mail refetches an active search.
+ *
+ * Every arrival makes the results stale, and at hundreds per second a refetch
+ * each would never let one land while flooding the server with full-text
+ * queries.
+ */
+const SEARCH_REFRESH_WINDOW_MS = 1000;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
 const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
@@ -220,6 +229,11 @@ let deletionRevision = 0;
 /** Distinguishes deletions made before the entire inbox was cleared. */
 let clearRevision = 0;
 let latestFetch = 0;
+let currentListRead: AbortController | null = null;
+let searchStale = false;
+let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+/** Live events received while the current list read is in flight. */
+let eventsDuringRead: ReplayableEvent[] | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
 
@@ -437,16 +451,39 @@ function moveSelection(to: SelectionTarget): void {
   if (msg) selectMessage(msg);
 }
 
-async function fetchMessages() {
+/**
+ * Reads the first page again, replacing the list.
+ *
+ * Live events that arrive while the read is in flight are replayed over the
+ * page it returns, since the server may have answered from before them.
+ * Starting a read aborts the one before it, which then resolves quietly: its
+ * answer would be dropped anyway, and only the current read's failure is worth
+ * reporting.
+ */
+async function fetchMessages(): Promise<void> {
+  await readFirstPage();
+}
+
+/** Does the work of {@link fetchMessages}, resolving whether its page landed. */
+async function readFirstPage(): Promise<boolean> {
   const request = ++latestFetch;
   const query = search();
+  currentListRead?.abort();
+  const controller = new AbortController();
+  currentListRead = controller;
   setLoading(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
-      if (request !== latestFetch || query !== search()) return;
+      if (request !== latestFetch || query !== search()) return false;
       const revision = deletionRevision;
-      const res = await api.listMessages(PAGE_SIZE, 0, query || undefined);
-      if (request !== latestFetch || query !== search()) return;
+      eventsDuringRead = [];
+      const res = await api.listMessages(
+        PAGE_SIZE,
+        0,
+        query || undefined,
+        controller.signal,
+      );
+      if (request !== latestFetch || query !== search()) return false;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
@@ -455,13 +492,44 @@ async function fetchMessages() {
         countNeedsRefresh = raced;
         setMessages(res.messages);
         setStoredTotal(res.total);
+        searchStale = false;
+        for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
       });
       if (raced) void refreshTotal();
-      return;
+      return true;
     }
+    return false;
+  } catch (error) {
+    if (request === latestFetch) throw error;
+    return false;
   } finally {
-    if (request === latestFetch) setLoading(false);
+    if (request === latestFetch) {
+      currentListRead = null;
+      eventsDuringRead = null;
+      setLoading(false);
+      if (searchStale) scheduleSearchRefresh();
+    }
   }
+}
+
+/**
+ * Marks the search results stale and refetches them once the window closes.
+ *
+ * A search cannot place a live message itself, since only the server knows
+ * whether it matches, so arrivals are folded into one trailing read per
+ * {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight when the window
+ * closes is left alone; the stale flag outlives it and schedules the next.
+ */
+function scheduleSearchRefresh(): void {
+  searchStale = true;
+  if (searchRefreshTimer !== null) return;
+  searchRefreshTimer = setTimeout(() => {
+    searchRefreshTimer = null;
+    if (!searchStale || !search() || loading()) return;
+    fetchMessages().catch(() =>
+      notify("Could not refresh the search results."),
+    );
+  }, SEARCH_REFRESH_WINDOW_MS);
 }
 
 async function loadMore() {
@@ -504,7 +572,18 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectDelay = RECONNECT_BASE_DELAY;
 let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let hasConnected = false;
+
+/**
+ * How long the first socket may take to open before the list is read over
+ * HTTP instead.
+ *
+ * A proxy that drops the upgrade leaves the socket pending or failing forever,
+ * and the inbox must still load without live updates.
+ */
+const SOCKET_OPEN_DEADLINE_MS = 3000;
+let httpFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+let inboxLoaded = false;
+let onFirstSync: (() => void) | null = null;
 
 /**
  * The event a frame carries, or `undefined` if it carries nothing usable.
@@ -527,21 +606,137 @@ function readEvent(frame: unknown): WsEvent | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
-function connectWebSocket() {
-  disconnectWebSocket();
+/**
+ * Puts a live message at the top of the list and counts it in.
+ *
+ * The socket is subscribed before a list read lands, over another connection,
+ * so a message can reach the store both ways. The copy that comes second must
+ * add neither a row nor a count.
+ */
+function prependArrival(arrival: MessageSummary): void {
+  if (messages().some((m) => m.id === arrival.id)) return;
+  batch(() => {
+    setMessages((prev) => [arrival, ...prev]);
+    setStoredTotal((t) => t + 1);
+  });
+  if (countNeedsRefresh) void refreshTotal();
+}
+
+/** The events a list read may have been served without. */
+type ReplayableEvent = Extract<
+  WsEvent,
+  { type: "message:new" | "message:read" | "message:starred" | "message:tags" }
+>;
+
+function isReplayable(event: WsEvent): event is ReplayableEvent {
+  return (
+    event.type === "message:new" ||
+    event.type === "message:read" ||
+    event.type === "message:starred" ||
+    event.type === "message:tags"
+  );
+}
+
+/**
+ * Applies an event that only adds a message or changes one.
+ *
+ * Applying one twice is harmless, which is what lets {@link fetchMessages}
+ * replay the ones that arrived while its read was in flight.
+ */
+function applyLiveEvent(event: ReplayableEvent): void {
+  switch (event.type) {
+    case "message:new":
+      if (search()) {
+        scheduleSearchRefresh();
+      } else {
+        prependArrival(event.data);
+      }
+      break;
+    case "message:read":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id ? { ...m, is_read: event.data.is_read } : m,
+        ),
+      );
+      break;
+    case "message:starred":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id
+            ? { ...m, is_starred: event.data.is_starred }
+            : m,
+        ),
+      );
+      break;
+    case "message:tags":
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === event.data.id ? { ...m, tags: event.data.tags } : m,
+        ),
+      );
+      break;
+  }
+}
+
+/**
+ * Opens the live connection, and reads the list each time it opens.
+ *
+ * The read comes after the open, the first time included: anything stored
+ * before the socket subscribed is only in the list the server returns, and
+ * anything after it is on the socket. A socket that fails before it first
+ * opens, or misses {@link SOCKET_OPEN_DEADLINE_MS}, gets the list read over
+ * HTTP once instead. `onSynced` runs once, after the first read that lands.
+ */
+function connectWebSocket(onSynced?: () => void): WebSocket {
+  stopHttpFallback();
+  inboxLoaded = false;
+  onFirstSync = onSynced ?? null;
+  httpFallbackTimer = setTimeout(loadOverHttp, SOCKET_OPEN_DEADLINE_MS);
+  return openSocket();
+}
+
+function stopHttpFallback(): void {
+  if (httpFallbackTimer !== null) {
+    clearTimeout(httpFallbackTimer);
+    httpFallbackTimer = null;
+  }
+}
+
+function loadOverHttp(): void {
+  if (httpFallbackTimer === null) return;
+  stopHttpFallback();
+  syncList();
+}
+
+function syncList(): void {
+  const failure = inboxLoaded
+    ? "Reconnected, but could not reload the inbox."
+    : "Could not load the inbox.";
+  readFirstPage().then(
+    (landed) => {
+      if (!landed) return;
+      inboxLoaded = true;
+      const synced = onFirstSync;
+      onFirstSync = null;
+      synced?.();
+    },
+    () => notify(failure),
+  );
+}
+
+function openSocket(): WebSocket {
+  closeSocket();
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws`);
   currentWs = ws;
+  let opened = false;
 
   ws.onopen = () => {
+    opened = true;
+    stopHttpFallback();
     reconnectDelay = RECONNECT_BASE_DELAY;
-    if (hasConnected) {
-      fetchMessages().catch(() =>
-        notify("Reconnected, but could not reload the inbox."),
-      );
-    }
-    hasConnected = true;
+    syncList();
   };
 
   ws.onmessage = (e) => {
@@ -551,42 +746,16 @@ function connectWebSocket() {
       return;
     }
 
+    if (isReplayable(event)) {
+      eventsDuringRead?.push(event);
+      applyLiveEvent(event);
+      return;
+    }
+
     switch (event.type) {
-      case "message:new":
-        if (search()) {
-          fetchMessages();
-        } else {
-          setMessages((prev) => [event.data, ...prev]);
-          setStoredTotal((t) => t + 1);
-          if (countNeedsRefresh) void refreshTotal();
-        }
-        break;
       case "message:delete":
         cancelUndo(event.data.id);
         reconcileDeletion(event.data.id);
-        break;
-      case "message:read":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id ? { ...m, is_read: event.data.is_read } : m,
-          ),
-        );
-        break;
-      case "message:starred":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id
-              ? { ...m, is_starred: event.data.is_starred }
-              : m,
-          ),
-        );
-        break;
-      case "message:tags":
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === event.data.id ? { ...m, tags: event.data.tags } : m,
-          ),
-        );
         break;
       case "messages:clear":
         batch(() => {
@@ -601,15 +770,16 @@ function connectWebSocket() {
 
   ws.onclose = () => {
     currentWs = null;
+    if (!opened) loadOverHttp();
     const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
-    reconnectTimer = setTimeout(connectWebSocket, jitter);
+    reconnectTimer = setTimeout(openSocket, jitter);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 
   return ws;
 }
 
-function disconnectWebSocket() {
+function closeSocket(): void {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -621,10 +791,27 @@ function disconnectWebSocket() {
   }
 }
 
+function disconnectWebSocket(): void {
+  stopHttpFallback();
+  closeSocket();
+  latestFetch += 1;
+  currentListRead?.abort();
+  currentListRead = null;
+  eventsDuringRead = null;
+  setLoading(false);
+  if (searchRefreshTimer !== null) {
+    clearTimeout(searchRefreshTimer);
+    searchRefreshTimer = null;
+  }
+  searchStale = false;
+}
+
 export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
   LIST_READ_ATTEMPTS,
+  SEARCH_REFRESH_WINDOW_MS,
+  SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
   messages,
   visibleMessages,

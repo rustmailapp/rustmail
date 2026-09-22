@@ -170,6 +170,7 @@ export async function listMessages(
   limit = 50,
   offset = 0,
   q?: string,
+  signal?: AbortSignal,
 ): Promise<ListResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -180,6 +181,7 @@ export async function listMessages(
     "GET /messages",
     `${BASE}/messages?${params}`,
     schema.listResponse,
+    { signal },
   );
 }
 

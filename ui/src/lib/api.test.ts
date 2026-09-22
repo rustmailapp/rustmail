@@ -117,6 +117,20 @@ describe("request deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("passes a caller's cancellation on to a list read", async () => {
+    const signal = stallFetch();
+    const caller = new AbortController();
+
+    const read = expect(
+      listMessages(100, 0, "invoice", caller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    caller.abort(new DOMException("superseded", "AbortError"));
+
+    await read;
+    expect(signal()?.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("gives a whole-inbox delete a longer budget than a read", async () => {
     const signal = stallFetch();
 
