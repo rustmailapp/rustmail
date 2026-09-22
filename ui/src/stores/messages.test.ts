@@ -27,6 +27,7 @@ vi.mock("../lib/api", () => ({
 const {
   LIST_READ_ATTEMPTS,
   NOTICE_SUBJECT_MAX,
+  SEARCH_REFRESH_WINDOW_MS,
   UNDO_WINDOW_MS,
   clearFilters,
   clearInbox,
@@ -36,6 +37,7 @@ const {
   flushPendingDelete,
   fetchMessages,
   filteredMessages,
+  loading,
   moveSelection,
   loadMore,
   selectMessage,
@@ -606,6 +608,137 @@ describe("WebSocket events", () => {
     );
 
     expect(JSON.stringify(logged.mock.calls)).not.toContain("Board pack Q3");
+  });
+});
+
+describe("live traffic during a search", () => {
+  const ROUND_TRIP_MS = 50;
+  const ARRIVAL_INTERVAL_MS = 10;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    setSearch("invoice");
+    await seed([message(0)]);
+    connectWebSocket();
+    listMessages.mockClear();
+  });
+
+  afterEach(async () => {
+    setSearch("");
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function arrival(n: number): string {
+    return JSON.stringify({ type: "message:new", data: message(n) });
+  }
+
+  it("folds a burst of arrivals into one trailing refetch", async () => {
+    listMessages.mockResolvedValue({ messages: [message(5)], total: 1 });
+
+    for (let n = 100; n < 150; n += 1) deliver(arrival(n));
+    expect(listMessages).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+
+    expect(listMessages).toHaveBeenCalledExactlyOnceWith(
+      100,
+      0,
+      "invoice",
+      expect.any(AbortSignal),
+    );
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
+    expect(loading()).toBe(false);
+  });
+
+  it("waits out a refetch in flight, then runs one more after it", async () => {
+    const read = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages.mockReturnValueOnce(read.promise);
+    listMessages.mockResolvedValue({ messages: [message(6)], total: 1 });
+
+    deliver(arrival(100));
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    deliver(arrival(101));
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+
+    read.resolve({ messages: [message(5)], total: 1 });
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-6"]);
+  });
+
+  it("lands results and settles loading while mail keeps arriving", async () => {
+    const TRAFFIC_MS = 5 * SEARCH_REFRESH_WINDOW_MS;
+    listMessages.mockImplementation(
+      () =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => resolve({ messages: [message(5)], total: 1 }),
+            ROUND_TRIP_MS,
+          ),
+        ),
+    );
+
+    for (let at = 0; at < TRAFFIC_MS; at += ARRIVAL_INTERVAL_MS) {
+      deliver(arrival(1000 + at));
+      await vi.advanceTimersByTimeAsync(ARRIVAL_INTERVAL_MS);
+    }
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
+    expect(listMessages.mock.calls.length).toBeLessThanOrEqual(
+      TRAFFIC_MS / SEARCH_REFRESH_WINDOW_MS,
+    );
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS + ROUND_TRIP_MS);
+    expect(loading()).toBe(false);
+  });
+
+  it("drops the pending refetch once the search is cleared", async () => {
+    deliver(arrival(100));
+    setSearch("");
+
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe("a superseded list read", () => {
+  it("is aborted when a newer read starts", async () => {
+    const signals: AbortSignal[] = [];
+    listMessages.mockImplementation(
+      (_limit: number, _offset: number, _q: unknown, signal: AbortSignal) => {
+        signals.push(signal);
+        return new Promise((_resolve, reject) =>
+          signal.addEventListener("abort", () => reject(signal.reason)),
+        );
+      },
+    );
+
+    const first = fetchMessages();
+    const second = fetchMessages();
+
+    expect(signals.map((s) => s.aborted)).toEqual([true, false]);
+    await expect(first).resolves.toBeUndefined();
+    expect(loading()).toBe(true);
+
+    listMessages.mockResolvedValue({ messages: [message(1)], total: 1 });
+    await fetchMessages();
+    await expect(second).resolves.toBeUndefined();
+    expect(loading()).toBe(false);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+  });
+
+  it("still reports a failure of the read that was current", async () => {
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    await expect(fetchMessages()).rejects.toThrow("offline");
+    expect(loading()).toBe(false);
   });
 });
 

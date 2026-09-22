@@ -30,6 +30,15 @@ const NOTICE_SUBJECT_MAX = 50;
  */
 const UNDO_WINDOW_MS = 5000;
 
+/**
+ * The most often live mail refetches an active search.
+ *
+ * Every arrival makes the results stale, and at hundreds per second a refetch
+ * each would never let one land while flooding the server with full-text
+ * queries.
+ */
+const SEARCH_REFRESH_WINDOW_MS = 1000;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
 const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
@@ -220,6 +229,9 @@ let deletionRevision = 0;
 /** Distinguishes deletions made before the entire inbox was cleared. */
 let clearRevision = 0;
 let latestFetch = 0;
+let currentListRead: AbortController | null = null;
+let searchStale = false;
+let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
 
@@ -437,15 +449,31 @@ function moveSelection(to: SelectionTarget): void {
   if (msg) selectMessage(msg);
 }
 
-async function fetchMessages() {
+/**
+ * Reads the first page again, replacing the list.
+ *
+ * Starting a read aborts the one before it, which then resolves quietly: its
+ * answer would be dropped anyway, and only the current read's failure is worth
+ * reporting.
+ */
+async function fetchMessages(): Promise<void> {
   const request = ++latestFetch;
   const query = search();
+  currentListRead?.abort();
+  const controller = new AbortController();
+  currentListRead = controller;
+  searchStale = false;
   setLoading(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
       if (request !== latestFetch || query !== search()) return;
       const revision = deletionRevision;
-      const res = await api.listMessages(PAGE_SIZE, 0, query || undefined);
+      const res = await api.listMessages(
+        PAGE_SIZE,
+        0,
+        query || undefined,
+        controller.signal,
+      );
       if (request !== latestFetch || query !== search()) return;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
@@ -459,9 +487,35 @@ async function fetchMessages() {
       if (raced) void refreshTotal();
       return;
     }
+  } catch (error) {
+    if (request === latestFetch) throw error;
   } finally {
-    if (request === latestFetch) setLoading(false);
+    if (request === latestFetch) {
+      currentListRead = null;
+      setLoading(false);
+      if (searchStale) scheduleSearchRefresh();
+    }
   }
+}
+
+/**
+ * Marks the search results stale and refetches them once the window closes.
+ *
+ * A search cannot place a live message itself, since only the server knows
+ * whether it matches, so arrivals are folded into one trailing read per
+ * {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight when the window
+ * closes is left alone; the stale flag outlives it and schedules the next.
+ */
+function scheduleSearchRefresh(): void {
+  searchStale = true;
+  if (searchRefreshTimer !== null) return;
+  searchRefreshTimer = setTimeout(() => {
+    searchRefreshTimer = null;
+    if (!searchStale || !search() || loading()) return;
+    fetchMessages().catch(() =>
+      notify("Could not refresh the search results."),
+    );
+  }, SEARCH_REFRESH_WINDOW_MS);
 }
 
 async function loadMore() {
@@ -554,7 +608,7 @@ function connectWebSocket() {
     switch (event.type) {
       case "message:new":
         if (search()) {
-          fetchMessages();
+          scheduleSearchRefresh();
         } else {
           setMessages((prev) => [event.data, ...prev]);
           setStoredTotal((t) => t + 1);
@@ -625,6 +679,7 @@ export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
   LIST_READ_ATTEMPTS,
+  SEARCH_REFRESH_WINDOW_MS,
   flushPendingDelete,
   messages,
   visibleMessages,
