@@ -12,6 +12,15 @@ import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
 
+/**
+ * The most rows live mail keeps loaded at the top of the list.
+ *
+ * Each arrival pushes the oldest loaded row out past this, and scrolling down
+ * reads it back from the server, so memory and every per-frame pass over the
+ * list stay bounded however long the traffic runs.
+ */
+const MAX_LIVE_ROWS = 5 * PAGE_SIZE;
+
 /** The status `GET /messages` answers with for a `before` it does not know. */
 const UNKNOWN_CURSOR_STATUS = 400;
 
@@ -119,6 +128,21 @@ function removeRow(id: string): void {
     positions.set(next[i].id, headPosition + i);
   }
   setMessages(next);
+}
+
+/**
+ * Lets the rows past {@link MAX_LIVE_ROWS} go, and pages on from the last kept.
+ *
+ * The cursor stays in the view it was read under, since the rows let go
+ * belong to that view.
+ */
+function trimRows(): void {
+  const rows = messages();
+  if (rows.length <= MAX_LIVE_ROWS) return;
+  for (const m of rows.slice(MAX_LIVE_ROWS)) positions.delete(m.id);
+  const kept = rows.slice(0, MAX_LIVE_ROWS);
+  setMessages(kept);
+  setNextCursor(kept[kept.length - 1].id);
 }
 
 function replaceRow(patched: MessageSummary): void {
@@ -718,7 +742,9 @@ function scheduleSearchRefresh(): void {
  *
  * A cursor the server no longer knows belongs to a message deleted before its
  * event got here, so the row goes and the read starts again from the one
- * before it.
+ * before it. A page read from a cursor that has since moved, because its row
+ * was deleted or let go, would not join the rows above it, so it is read again
+ * from where the list now ends.
  */
 async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
@@ -746,6 +772,7 @@ async function loadMore(): Promise<void> {
         continue;
       }
       if (!isCurrentView(view) || startedOn !== latestFetch) return;
+      if (nextCursor() !== before) continue;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
@@ -837,6 +864,7 @@ function admitArrivals(arrivals: readonly MessageSummary[]): void {
   if (fresh.length === 0) return;
   batch(() => {
     prependRows(fresh);
+    trimRows();
     setStoredTotal((t) => t + fresh.length);
   });
   if (countNeedsRefresh) void refreshTotal();
@@ -1093,6 +1121,7 @@ export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
   FRAME_FALLBACK_MS,
+  MAX_LIVE_ROWS,
   MAX_QUEUED_EVENTS,
   LIST_READ_ATTEMPTS,
   PAGE_SIZE,

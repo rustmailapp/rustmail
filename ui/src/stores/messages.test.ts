@@ -31,6 +31,7 @@ const { ApiError } = await import("../lib/api");
 const {
   FRAME_FALLBACK_MS,
   LIST_READ_ATTEMPTS,
+  MAX_LIVE_ROWS,
   MAX_QUEUED_EVENTS,
   NOTICE_SUBJECT_MAX,
   PAGE_SIZE,
@@ -1082,6 +1083,69 @@ describe("live events per frame", () => {
     nextFrame();
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+});
+
+describe("the live list's length", () => {
+  const LAST_KEPT = MAX_LIVE_ROWS - 2;
+
+  beforeEach(async () => {
+    listMessages.mockResolvedValue(
+      page(range(MAX_LIVE_ROWS), 2 * MAX_LIVE_ROWS, `id-${MAX_LIVE_ROWS - 1}`),
+    );
+    await fetchMessages();
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+  });
+
+  it("lets the oldest row go when an arrival would pass the cap", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    const ids = filteredMessages().map((m) => m.id);
+    expect(ids).toHaveLength(MAX_LIVE_ROWS);
+    expect(ids[0]).toBe("id--1");
+    expect(ids.at(-1)).toBe(`id-${LAST_KEPT}`);
+  });
+
+  it("still counts the rows it let go", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    expect(total()).toBe(2 * MAX_LIVE_ROWS + 1);
+  });
+
+  it("drops a page read from a cursor the cap has since moved", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    listMessages.mockResolvedValueOnce(
+      page([message(LAST_KEPT + 1), message(MAX_LIVE_ROWS)], 0),
+    );
+    const paging = loadMore();
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    read.resolve(page([message(MAX_LIVE_ROWS)], 0));
+    await paging;
+
+    expect(
+      filteredMessages()
+        .map((m) => m.id)
+        .slice(-3),
+    ).toEqual([
+      `id-${LAST_KEPT}`,
+      `id-${LAST_KEPT + 1}`,
+      `id-${MAX_LIVE_ROWS}`,
+    ]);
+  });
+
+  it("reads the rows it let go again from the last one kept", async () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    listMessages.mockResolvedValue(page([message(LAST_KEPT + 1)], 0));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: `id-${LAST_KEPT}`,
+    });
   });
 });
 
