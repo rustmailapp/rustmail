@@ -7,8 +7,8 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::Deserialize;
 use time::OffsetDateTime;
-use tokio::sync::{broadcast, mpsc};
-use tracing::info;
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
 use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
@@ -352,6 +352,55 @@ fn default_db_path() -> PathBuf {
 
 const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
 const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+/// How long a stop waits for queued deliveries and open HTTP connections to
+/// finish before closing the database anyway.
+///
+/// Together with [`DB_CLOSE_DEADLINE`] it stays well under Docker's default
+/// 10 s stop timeout, so the WAL is checkpointed before the container runtime
+/// resorts to `SIGKILL`.
+const SHUTDOWN_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long closing the pool, and with it the final WAL checkpoint, may take.
+const DB_CLOSE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Resolves when the process is asked to stop, by `SIGTERM` or Ctrl-C.
+///
+/// `SIGTERM` needs a handler of its own: as PID 1 in a container the kernel
+/// ignores it by default, so `docker stop` would otherwise wait out its
+/// timeout and then `SIGKILL` the server.
+async fn shutdown_signal() -> std::io::Result<()> {
+  #[cfg(unix)]
+  {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+      result = tokio::signal::ctrl_c() => result,
+      _ = terminate.recv() => Ok(()),
+    }
+  }
+  #[cfg(not(unix))]
+  tokio::signal::ctrl_c().await
+}
+
+/// Receives the next queued delivery, closing the queue once `stop` fires.
+///
+/// Closing refuses further hand-offs, so a session still in progress tells its
+/// sender to retry, while deliveries already queued keep coming. The caller
+/// therefore drains the queue and sees `None` once it is empty, even though
+/// SMTP sessions still hold senders.
+async fn next_delivery(
+  deliveries: &mut mpsc::Receiver<Delivery>,
+  stop: &mut Option<oneshot::Receiver<()>>,
+) -> Option<Delivery> {
+  if let Some(signal) = stop {
+    tokio::select! {
+      delivery = deliveries.recv() => return delivery,
+      _ = signal => {
+        deliveries.close();
+        *stop = None;
+      }
+    }
+  }
+  deliveries.recv().await
+}
 
 /// Stores a captured message and tells the waiting SMTP session what happened.
 ///
@@ -659,7 +708,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let release_host: Option<String> = release_host;
   let release_port: Option<u16> = release_port.flatten();
 
-  let repo = MessageRepository::new(pool);
+  let repo = MessageRepository::new(pool.clone());
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
   let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
@@ -683,11 +732,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   let webhook_url = args.webhook_url.clone();
   let webhook_semaphore = Arc::new(tokio::sync::Semaphore::new(10));
 
-  let message_processor = {
+  let (stop_processor, processor_stop) = oneshot::channel::<()>();
+  let mut message_processor = {
     let repo = repo.clone();
     let state = state.clone();
+    let mut stop = Some(processor_stop);
     tokio::spawn(async move {
-      while let Some(delivery) = smtp_rx.recv().await {
+      while let Some(delivery) = next_delivery(&mut smtp_rx, &mut stop).await {
         let Some(summary) = store_delivery(&repo, delivery).await else {
           continue;
         };
@@ -718,7 +769,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     })
   };
 
-  let retention_task = {
+  let mut retention_task = {
     let repo = repo.clone();
     let state = state.clone();
     let retention_hours = args.retention;
@@ -778,6 +829,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   let app = rustmail_api::router(state);
+  let (stop_http, http_stop) = oneshot::channel::<()>();
+  let http_server = axum::serve(listener, app)
+    .with_graceful_shutdown(async {
+      let _ = http_stop.await;
+    })
+    .into_future();
+  tokio::pin!(http_server);
 
   tokio::select! {
       result = smtp_server.run() => {
@@ -786,16 +844,52 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
               Ok(()) => anyhow::bail!("SMTP server exited unexpectedly"),
           }
       }
-      result = axum::serve(listener, app) => {
+      result = &mut http_server => {
           match result {
               Err(e) => anyhow::bail!("HTTP server failed: {e}"),
               Ok(()) => anyhow::bail!("HTTP server exited unexpectedly"),
           }
       }
-      _ = message_processor => {
+      _ = &mut message_processor => {
           anyhow::bail!("Message processor stopped unexpectedly");
       }
-      _ = retention_task => {}
+      _ = &mut retention_task => {}
+      result = shutdown_signal() => {
+          result.context("failed to listen for shutdown signals")?;
+      }
+  }
+
+  info!("Shutting down: SMTP closed, draining queued messages");
+  let _ = stop_processor.send(());
+  let _ = stop_http.send(());
+
+  let drained = tokio::time::timeout(SHUTDOWN_DRAIN_DEADLINE, async {
+    tokio::join!(&mut http_server, &mut message_processor)
+  })
+  .await;
+  match drained {
+    Ok((Err(e), _)) => warn!(error = %e, "HTTP server failed while shutting down"),
+    Ok((_, Err(e))) => warn!(error = %e, "Message processor failed while draining"),
+    Ok(_) => {}
+    Err(_) => {
+      message_processor.abort();
+      warn!(
+        deadline_secs = SHUTDOWN_DRAIN_DEADLINE.as_secs(),
+        "Shutdown drain deadline elapsed with work in flight; closing the database anyway"
+      );
+    }
+  }
+
+  retention_task.abort();
+
+  if tokio::time::timeout(DB_CLOSE_DEADLINE, pool.close())
+    .await
+    .is_err()
+  {
+    warn!(
+      deadline_secs = DB_CLOSE_DEADLINE.as_secs(),
+      "Database did not close in time; the WAL will be recovered on next start"
+    );
   }
 
   Ok(())
@@ -894,6 +988,31 @@ mod delivery_tests {
       "an abandoned delivery must not be stored"
     );
     assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  #[tokio::test]
+  async fn stopping_drains_queued_deliveries_then_refuses_new_ones() {
+    let (tx, mut rx) = mpsc::channel::<Delivery>(4);
+    let (stop_tx, stop_rx) = oneshot::channel::<()>();
+    let mut stop = Some(stop_rx);
+    for _ in 0..2 {
+      tx.send(Delivery::new(sample()).0).await.unwrap();
+    }
+
+    stop_tx.send(()).unwrap();
+
+    let mut drained = 0;
+    while next_delivery(&mut rx, &mut stop).await.is_some() {
+      drained += 1;
+    }
+    assert_eq!(
+      drained, 2,
+      "deliveries queued before the stop must be stored"
+    );
+    assert!(
+      tx.send(Delivery::new(sample()).0).await.is_err(),
+      "a session handing over after the stop must be told to retry"
+    );
   }
 }
 
