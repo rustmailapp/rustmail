@@ -42,5 +42,6 @@ mod session;
 
 pub use message::{Delivery, DeliveryAck, DeliveryOutcome, ReceivedMessage};
 pub use server::{SmtpServer, SmtpServerConfig, TlsConfig};
+pub use session::STORE_ACK_TIMEOUT;
 #[cfg(feature = "test-util")]
 pub use session::{Session, SessionError};

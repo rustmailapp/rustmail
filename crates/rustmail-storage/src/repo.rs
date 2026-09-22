@@ -1,26 +1,20 @@
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mail_parser::{MessageParser, MimeHeaders, PartType};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::debug;
 use ulid::Ulid;
 
-use crate::error::StorageError;
+use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
+use crate::prepared::PreparedMessage;
 use crate::schema::BUSY_TIMEOUT;
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
   format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
-/// SQLite primary result code for `SQLITE_BUSY`.
-const SQLITE_BUSY: i32 = 5;
-/// SQLite primary result code for `SQLITE_LOCKED`.
-const SQLITE_LOCKED: i32 = 6;
-/// Low byte of a SQLite result code, which carries the primary code.
-const PRIMARY_CODE_MASK: i32 = 0xFF;
 /// Total attempts a contended write gets, the first one included.
 const WRITE_ATTEMPTS: u32 = 5;
 /// Delay before the second attempt; doubles from there.
@@ -41,13 +35,9 @@ const WRITE_RETRY_BUDGET: Duration = BUSY_TIMEOUT;
 /// the cases where SQLite refuses to wait — promoting a transaction that would
 /// deadlock, for one — so the caller still has to be prepared to retry.
 fn is_retryable_lock(error: &StorageError) -> bool {
-  let StorageError::Database(sqlx::Error::Database(db_error)) = error else {
-    return false;
-  };
-  db_error
-    .code()
-    .and_then(|code| code.parse::<i32>().ok())
-    .is_some_and(|code| matches!(code & PRIMARY_CODE_MASK, SQLITE_BUSY | SQLITE_LOCKED))
+  error
+    .sqlite_primary_code()
+    .is_some_and(|code| matches!(code, SQLITE_BUSY | SQLITE_LOCKED))
 }
 
 /// Spread for a retry delay, so racing writers do not wake together.
@@ -100,17 +90,43 @@ where
 
 /// Repository for storing and querying captured email messages.
 ///
-/// Wraps a [`SqlitePool`] and provides async methods for CRUD operations,
-/// full-text search, retention enforcement, and attachment access.
+/// Wraps a [`SqlitePool`] for reads and one for writes, which may be the same
+/// pool, and provides async methods for CRUD operations, full-text search,
+/// retention enforcement, and attachment access.
 #[derive(Clone)]
 pub struct MessageRepository {
-  pool: SqlitePool,
+  readers: SqlitePool,
+  writer: SqlitePool,
 }
 
 impl MessageRepository {
-  /// Creates a new repository backed by the given connection pool.
+  /// Creates a new repository that reads and writes through `pool`.
   pub fn new(pool: SqlitePool) -> Self {
-    Self { pool }
+    Self {
+      readers: pool.clone(),
+      writer: pool,
+    }
+  }
+
+  /// Creates a repository that reads through `readers` and writes only
+  /// through `writer`.
+  ///
+  /// `writer` is meant to hold a single connection. SQLite admits one writer
+  /// at a time anyway, and a connection that is the only one writing keeps its
+  /// page cache and memory map valid from one transaction to the next, where
+  /// writes rotating across a pool make each connection discard both whenever
+  /// another one wrote since it last ran.
+  pub fn with_writer(readers: SqlitePool, writer: SqlitePool) -> Self {
+    Self { readers, writer }
+  }
+
+  /// Closes the readers, then the writer.
+  ///
+  /// The last connection to close checkpoints the WAL, and closing the writer
+  /// last leaves that to the connection whose cache already holds the pages.
+  pub async fn close(&self) {
+    self.readers.close().await;
+    self.writer.close().await;
   }
 
   /// Parses and stores a raw email, extracting metadata and attachments.
@@ -127,129 +143,66 @@ impl MessageRepository {
     recipients: &[String],
     raw: &[u8],
   ) -> Result<MessageSummary, StorageError> {
-    retry_on_lock(|| self.insert_once(sender, recipients, raw)).await
+    let message = PreparedMessage::parse(sender.to_string(), recipients, raw.to_vec());
+    self.insert_prepared(&message).await
   }
 
-  async fn insert_once(
+  /// Stores a message parsed ahead of time by [`PreparedMessage::parse`].
+  ///
+  /// A contended write is retried without parsing the message again.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if any insert fails.
+  pub async fn insert_prepared(
     &self,
-    sender: &str,
-    recipients: &[String],
-    raw: &[u8],
+    message: &PreparedMessage,
   ) -> Result<MessageSummary, StorageError> {
-    let id = Ulid::new().to_string();
-    let recipients_json = serde_json::to_string(recipients).unwrap_or_default();
-    let size = raw.len() as i64;
-    let now = OffsetDateTime::now_utc()
-      .format(ISO8601_FMT)
-      .unwrap_or_default();
+    retry_on_lock(|| self.insert_prepared_once(message)).await
+  }
 
-    let parsed = MessageParser::default().parse(raw);
-
-    let (subject, text_body, html_body, has_attachments) = match &parsed {
-      Some(msg) => (
-        msg.subject().map(String::from),
-        msg.body_text(0).map(|s| s.into_owned()),
-        msg.body_html(0).map(|s| s.into_owned()),
-        msg.attachment_count() > 0,
-      ),
-      None => (None, None, None, false),
-    };
-
-    let mut txn = self.pool.begin().await?;
-
-    sqlx::query(
-      r#"
-      INSERT INTO messages (id, sender, recipients, subject, text_body, html_body, raw, size, has_attachments, is_read, is_starred, tags, created_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '[]', ?10)
-      "#,
-    )
-    .bind(&id)
-    .bind(sender)
-    .bind(&recipients_json)
-    .bind(&subject)
-    .bind(&text_body)
-    .bind(&html_body)
-    .bind(raw)
-    .bind(size)
-    .bind(has_attachments)
-    .bind(&now)
-    .execute(&mut *txn)
-    .await?;
-
-    sqlx::query(
-      "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) SELECT rowid, ?2, ?3, ?4, ?5 FROM messages WHERE id = ?1",
-    )
-    .bind(&id)
-    .bind(&subject)
-    .bind(&text_body)
-    .bind(sender)
-    .bind(&recipients_json)
-    .execute(&mut *txn)
-    .await?;
-
-    if let Some(parsed_msg) = &parsed {
-      let attachment_ids: std::collections::HashSet<u32> =
-        parsed_msg.attachments.iter().copied().collect();
-
-      for (idx, part) in parsed_msg.parts.iter().enumerate() {
-        let is_attachment = attachment_ids.contains(&(idx as u32));
-        let cid = part.content_id().map(String::from);
-        let is_inline_binary = matches!(part.body, PartType::InlineBinary(_));
-
-        if !is_attachment && !is_inline_binary {
-          continue;
-        }
-
-        let content = part.contents();
-        if content.is_empty() {
-          continue;
-        }
-
-        let att_id = Ulid::new().to_string();
-        let filename = part.attachment_name().map(String::from);
-        let content_type =
-          part
-            .content_type()
-            .map(|ct: &mail_parser::ContentType| match ct.subtype() {
-              Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
-              None => ct.ctype().to_string(),
-            });
-        let att_size = content.len() as i64;
-
-        sqlx::query(
-          r#"
-          INSERT INTO attachments (id, message_id, filename, content_type, content_id, size, content)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-          "#,
-        )
-        .bind(&att_id)
-        .bind(&id)
-        .bind(&filename)
-        .bind(&content_type)
-        .bind(&cid)
-        .bind(att_size)
-        .bind(content)
-        .execute(&mut *txn)
-        .await?;
-      }
-    }
-
+  async fn insert_prepared_once(
+    &self,
+    message: &PreparedMessage,
+  ) -> Result<MessageSummary, StorageError> {
+    let mut txn = self.writer.begin().await?;
+    let summary = insert_in(&mut txn, message).await?;
     txn.commit().await?;
+    debug!(id = %summary.id, subject = ?summary.subject, "Message stored");
+    Ok(summary)
+  }
 
-    debug!(id = %id, subject = ?subject, "Message stored");
+  /// Stores every message in `messages` in one transaction: all of them or
+  /// none.
+  ///
+  /// The commit, with its WAL frames and FTS5 segment flush, dominates the
+  /// cost of storing small mail, so committing a batch at once amortises it.
+  /// Summaries come back in input order, which is also the arrival order
+  /// [`Self::list`] sorts by.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if any insert fails, in which case
+  /// no message from the batch is stored.
+  pub async fn insert_batch(
+    &self,
+    messages: &[PreparedMessage],
+  ) -> Result<Vec<MessageSummary>, StorageError> {
+    retry_on_lock(|| self.insert_batch_once(messages)).await
+  }
 
-    Ok(MessageSummary {
-      id,
-      sender: sender.to_string(),
-      recipients: recipients_json,
-      subject,
-      size,
-      has_attachments,
-      is_read: false,
-      is_starred: false,
-      tags: "[]".to_string(),
-      created_at: now,
-    })
+  async fn insert_batch_once(
+    &self,
+    messages: &[PreparedMessage],
+  ) -> Result<Vec<MessageSummary>, StorageError> {
+    let mut txn = self.writer.begin().await?;
+    let mut summaries = Vec::with_capacity(messages.len());
+    for message in messages {
+      summaries.push(insert_in(&mut txn, message).await?);
+    }
+    txn.commit().await?;
+    debug!(count = summaries.len(), "Message batch stored");
+    Ok(summaries)
   }
 
   /// Lists messages ordered by newest first, with pagination.
@@ -264,7 +217,7 @@ impl MessageRepository {
     )
     .bind(limit)
     .bind(offset)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(messages)
@@ -300,7 +253,7 @@ impl MessageRepository {
     .bind(&quoted)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(messages)
@@ -325,7 +278,7 @@ impl MessageRepository {
       "#,
     )
     .bind(&quoted)
-    .fetch_one(&self.pool)
+    .fetch_one(&self.readers)
     .await?;
     Ok(row.0)
   }
@@ -349,7 +302,7 @@ impl MessageRepository {
       "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
     )
     .bind(id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
 
@@ -376,7 +329,7 @@ impl MessageRepository {
       .bind(is_starred)
       .bind(tags_json.as_deref())
       .bind(id)
-      .execute(&self.pool)
+      .execute(&self.writer)
       .await?;
       Ok(result)
     })
@@ -390,7 +343,7 @@ impl MessageRepository {
 
   /// Deletes a single message and its FTS5 index entry atomically.
   pub async fn delete(&self, id: &str) -> Result<(), StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid = (SELECT rowid FROM messages WHERE id = ?1)",
@@ -423,7 +376,7 @@ impl MessageRepository {
   }
 
   async fn delete_all_once(&self) -> Result<u64, StorageError> {
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
       .execute(&mut *txn)
@@ -440,7 +393,7 @@ impl MessageRepository {
   /// Returns the total number of stored messages.
   pub async fn count(&self) -> Result<i64, StorageError> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages")
-      .fetch_one(&self.pool)
+      .fetch_one(&self.readers)
       .await?;
     Ok(row.0)
   }
@@ -473,7 +426,7 @@ impl MessageRepository {
       query = query.bind(b);
     }
 
-    let row = query.fetch_one(&self.pool).await?;
+    let row = query.fetch_one(&self.readers).await?;
     Ok(row.0)
   }
 
@@ -486,7 +439,7 @@ impl MessageRepository {
       "SELECT id, message_id, filename, content_type, content_id, size FROM attachments WHERE message_id = ?1",
     )
     .bind(message_id)
-    .fetch_all(&self.pool)
+    .fetch_all(&self.readers)
     .await?;
 
     Ok(attachments)
@@ -503,7 +456,7 @@ impl MessageRepository {
     )
     .bind(attachment_id)
     .bind(message_id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(attachment_id.to_string()))?;
 
@@ -521,7 +474,7 @@ impl MessageRepository {
     )
     .bind(content_id)
     .bind(message_id)
-    .fetch_optional(&self.pool)
+    .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(content_id.to_string()))?;
 
@@ -532,7 +485,7 @@ impl MessageRepository {
   pub async fn get_raw(&self, id: &str) -> Result<Vec<u8>, StorageError> {
     let row: (Vec<u8>,) = sqlx::query_as("SELECT raw FROM messages WHERE id = ?1")
       .bind(id)
-      .fetch_optional(&self.pool)
+      .fetch_optional(&self.readers)
       .await?
       .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
@@ -551,7 +504,7 @@ impl MessageRepository {
     let row: (Vec<u8>,) = sqlx::query_as("SELECT substr(raw, 1, ?2) FROM messages WHERE id = ?1")
       .bind(id)
       .bind(max_bytes)
-      .fetch_optional(&self.pool)
+      .fetch_optional(&self.readers)
       .await?
       .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
@@ -572,13 +525,13 @@ impl MessageRepository {
     let has_match: bool =
       sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM messages WHERE created_at < ?1)")
         .bind(iso_cutoff)
-        .fetch_one(&self.pool)
+        .fetch_one(&self.readers)
         .await?;
     if !has_match {
       return Ok(Vec::new());
     }
 
-    let mut txn = self.pool.begin().await?;
+    let mut txn = self.writer.begin().await?;
 
     sqlx::query(
       "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE created_at < ?1)",
@@ -613,13 +566,13 @@ impl MessageRepository {
 
   async fn trim_to_max_once(&self, max: i64) -> Result<Vec<String>, StorageError> {
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
-      .fetch_one(&self.pool)
+      .fetch_one(&self.readers)
       .await?;
     if count <= max {
       return Ok(Vec::new());
     }
 
-    let mut txn = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut txn = self.writer.begin_with("BEGIN IMMEDIATE").await?;
 
     let threshold: Option<(i64,)> =
       sqlx::query_as("SELECT rowid FROM messages ORDER BY rowid DESC LIMIT 1 OFFSET ?1")
@@ -643,6 +596,82 @@ impl MessageRepository {
     txn.commit().await?;
     Ok(ids.into_iter().map(|(id,)| id).collect())
   }
+}
+
+/// Writes `message` and its index and attachment rows on `conn`.
+///
+/// Mints a fresh id on every call, so a retried or re-batched write can never
+/// collide with a row an earlier attempt committed.
+async fn insert_in(
+  conn: &mut SqliteConnection,
+  message: &PreparedMessage,
+) -> Result<MessageSummary, StorageError> {
+  let id = Ulid::new().to_string();
+  let size = message.raw.len() as i64;
+  let now = OffsetDateTime::now_utc()
+    .format(ISO8601_FMT)
+    .unwrap_or_default();
+
+  sqlx::query(
+    r#"
+    INSERT INTO messages (id, sender, recipients, subject, text_body, html_body, raw, size, has_attachments, is_read, is_starred, tags, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '[]', ?10)
+    "#,
+  )
+  .bind(&id)
+  .bind(&message.sender)
+  .bind(&message.recipients_json)
+  .bind(&message.subject)
+  .bind(&message.text_body)
+  .bind(&message.html_body)
+  .bind(&message.raw)
+  .bind(size)
+  .bind(message.has_attachments)
+  .bind(&now)
+  .execute(&mut *conn)
+  .await?;
+
+  sqlx::query(
+    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) SELECT rowid, ?2, ?3, ?4, ?5 FROM messages WHERE id = ?1",
+  )
+  .bind(&id)
+  .bind(&message.subject)
+  .bind(&message.text_body)
+  .bind(&message.sender)
+  .bind(&message.recipients_json)
+  .execute(&mut *conn)
+  .await?;
+
+  for attachment in &message.attachments {
+    sqlx::query(
+      r#"
+      INSERT INTO attachments (id, message_id, filename, content_type, content_id, size, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      "#,
+    )
+    .bind(Ulid::new().to_string())
+    .bind(&id)
+    .bind(&attachment.filename)
+    .bind(&attachment.content_type)
+    .bind(&attachment.content_id)
+    .bind(attachment.content.len() as i64)
+    .bind(&attachment.content)
+    .execute(&mut *conn)
+    .await?;
+  }
+
+  Ok(MessageSummary {
+    id,
+    sender: message.sender.clone(),
+    recipients: message.recipients_json.clone(),
+    subject: message.subject.clone(),
+    size,
+    has_attachments: message.has_attachments,
+    is_read: false,
+    is_starred: false,
+    tags: "[]".to_string(),
+    created_at: now,
+  })
 }
 
 fn escape_like(s: &str) -> String {
@@ -721,6 +750,89 @@ mod tests {
     assert_eq!(msg.id, summary.id);
     assert_eq!(msg.text_body.as_deref(), Some("Hello world"));
     assert_eq!(repo.get_raw(&summary.id).await.unwrap(), raw);
+  }
+
+  #[tokio::test]
+  async fn a_prepared_message_stores_its_attachments() {
+    let repo = test_repo().await;
+    let prepared = PreparedMessage::parse(
+      "sender@test.com".to_string(),
+      &["rcpt@test.com".into()],
+      multipart_email("Prepared"),
+    );
+
+    let summary = repo.insert_prepared(&prepared).await.unwrap();
+
+    assert!(summary.has_attachments);
+    let attachments = repo.get_attachments(&summary.id).await.unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].filename.as_deref(), Some("report.pdf"));
+    assert_eq!(repo.search("Prepared", 10, 0).await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn storing_one_prepared_message_twice_keeps_both_rows() {
+    let repo = test_repo().await;
+    let prepared = PreparedMessage::parse(
+      "a@test.com".to_string(),
+      &["b@test.com".into()],
+      raw_email("Twice", "a@test.com", "b@test.com"),
+    );
+
+    let first = repo.insert_prepared(&prepared).await.unwrap();
+    let second = repo.insert_prepared(&prepared).await.unwrap();
+
+    assert_ne!(first.id, second.id, "every attempt mints its own id");
+    assert_eq!(repo.count().await.unwrap(), 2);
+  }
+
+  fn prepared(subject: &str) -> PreparedMessage {
+    PreparedMessage::parse(
+      "a@test.com".to_string(),
+      &["b@test.com".into()],
+      raw_email(subject, "a@test.com", "b@test.com"),
+    )
+  }
+
+  async fn poison_subject(repo: &MessageRepository, subject: &str) {
+    sqlx::query(&format!(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = '{subject}' BEGIN SELECT RAISE(ABORT, 'poisoned'); END"
+    ))
+    .execute(&repo.writer)
+    .await
+    .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_batch_is_stored_in_arrival_order() {
+    let repo = test_repo().await;
+    let batch: Vec<PreparedMessage> = ["one", "two", "three"].map(prepared).into();
+
+    let summaries = repo.insert_batch(&batch).await.unwrap();
+
+    let subjects: Vec<_> = summaries.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("one"), Some("two"), Some("three")]);
+    let newest_first: Vec<String> = repo
+      .list(10, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .map(|s| s.id)
+      .collect();
+    let inserted: Vec<String> = summaries.into_iter().rev().map(|s| s.id).collect();
+    assert_eq!(newest_first, inserted);
+    assert_eq!(repo.search("two", 10, 0).await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_failing_batch_stores_none_of_its_messages() {
+    let repo = test_repo().await;
+    poison_subject(&repo, "bad").await;
+    let batch: Vec<PreparedMessage> = ["good", "bad", "also-good"].map(prepared).into();
+
+    assert!(repo.insert_batch(&batch).await.is_err());
+    assert_eq!(repo.count().await.unwrap(), 0);
+    assert!(repo.search("good", 10, 0).await.unwrap().is_empty());
   }
 
   #[tokio::test]
@@ -1022,7 +1134,7 @@ mod tests {
 
     async fn index_rows(repo: &MessageRepository) -> i64 {
       sqlx::query_scalar("SELECT count(*) FROM messages_fts_data")
-        .fetch_one(&repo.pool)
+        .fetch_one(&repo.writer)
         .await
         .unwrap()
     }
@@ -1228,7 +1340,7 @@ mod tests {
     deleted.sort();
     assert_eq!(deleted, oldest);
     sqlx::query("INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)")
-      .execute(&repo.pool)
+      .execute(&repo.writer)
       .await
       .expect("the index must hold no entries for trimmed rows");
   }
@@ -1509,6 +1621,73 @@ mod tests {
         .await
         .unwrap();
     })
+  }
+
+  #[tokio::test]
+  async fn a_lock_that_outlasts_the_retries_is_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("blocked", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(error.is_store_wide(), "got {error:?}");
+    sqlx::query("ROLLBACK")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_closed_pool_is_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    pool.close().await;
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("closed", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(error.is_store_wide(), "got {error:?}");
+  }
+
+  #[tokio::test]
+  async fn a_row_the_schema_refuses_is_not_store_wide() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    sqlx::query(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'poisoned'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let error = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("poison", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap_err();
+
+    assert!(!error.is_store_wide(), "got {error:?}");
   }
 
   const CONTENDED_HOLD: Duration = Duration::from_millis(60);

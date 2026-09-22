@@ -8,3 +8,72 @@ pub enum StorageError {
   #[error("Message not found: {0}")]
   NotFound(String),
 }
+
+/// SQLite primary result code for `SQLITE_BUSY`.
+pub(crate) const SQLITE_BUSY: i32 = 5;
+/// SQLite primary result code for `SQLITE_LOCKED`.
+pub(crate) const SQLITE_LOCKED: i32 = 6;
+/// SQLite primary result code for `SQLITE_NOMEM`.
+const SQLITE_NOMEM: i32 = 7;
+/// SQLite primary result code for `SQLITE_READONLY`.
+const SQLITE_READONLY: i32 = 8;
+/// SQLite primary result code for `SQLITE_IOERR`.
+const SQLITE_IOERR: i32 = 10;
+/// SQLite primary result code for `SQLITE_CORRUPT`.
+const SQLITE_CORRUPT: i32 = 11;
+/// SQLite primary result code for `SQLITE_FULL`.
+const SQLITE_FULL: i32 = 13;
+/// SQLite primary result code for `SQLITE_CANTOPEN`.
+const SQLITE_CANTOPEN: i32 = 14;
+/// SQLite primary result code for `SQLITE_NOTADB`.
+const SQLITE_NOTADB: i32 = 26;
+/// Low byte of a SQLite result code, which carries the primary code.
+const PRIMARY_CODE_MASK: i32 = 0xFF;
+
+impl StorageError {
+  /// The SQLite primary result code this error carries, if SQLite reported it.
+  pub(crate) fn sqlite_primary_code(&self) -> Option<i32> {
+    let StorageError::Database(sqlx::Error::Database(db_error)) = self else {
+      return None;
+    };
+    db_error
+      .code()
+      .and_then(|code| code.parse::<i32>().ok())
+      .map(|code| code & PRIMARY_CODE_MASK)
+  }
+
+  /// Whether the failure concerns the store as a whole rather than the
+  /// message being written.
+  ///
+  /// A locked, full, unreadable or unreachable database refuses every write
+  /// alike, so writing the same messages again one at a time only fails
+  /// again, each attempt as slowly as the first. Anything else, a constraint
+  /// or a trigger refusing a row among them, may be specific to one message.
+  pub fn is_store_wide(&self) -> bool {
+    match self {
+      StorageError::Database(
+        sqlx::Error::Configuration(_)
+        | sqlx::Error::Io(_)
+        | sqlx::Error::Tls(_)
+        | sqlx::Error::Protocol(_)
+        | sqlx::Error::PoolTimedOut
+        | sqlx::Error::PoolClosed
+        | sqlx::Error::WorkerCrashed,
+      ) => true,
+      _ => self.sqlite_primary_code().is_some_and(|code| {
+        matches!(
+          code,
+          SQLITE_BUSY
+            | SQLITE_LOCKED
+            | SQLITE_NOMEM
+            | SQLITE_READONLY
+            | SQLITE_IOERR
+            | SQLITE_CORRUPT
+            | SQLITE_FULL
+            | SQLITE_CANTOPEN
+            | SQLITE_NOTADB
+        )
+      }),
+    }
+  }
+}

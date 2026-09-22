@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -11,8 +12,13 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
-use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
-use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
+use rustmail_smtp::{
+  Delivery, DeliveryAck, ReceivedMessage, STORE_ACK_TIMEOUT, SmtpServer, SmtpServerConfig,
+  TlsConfig,
+};
+use rustmail_storage::{
+  MessageRepository, MessageSummary, PreparedMessage, format_iso8601, initialize_database,
+};
 
 #[derive(Parser)]
 #[command(
@@ -265,10 +271,7 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
     "Assert mode: waiting for matching emails"
   );
 
-  let pool = connect_pool(IN_MEMORY_DB_URL, true).await?;
-  initialize_database(&pool).await?;
-
-  let repo = MessageRepository::new(pool);
+  let repo = open_repository(IN_MEMORY_DB_URL, true).await?;
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
 
   let smtp_config = SmtpServerConfig {
@@ -293,8 +296,12 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
   let checker = {
     let repo = repo.clone();
     tokio::spawn(async move {
-      while let Some(delivery) = smtp_rx.recv().await {
-        if store_delivery(&repo, delivery).await.is_none() {
+      let mut batch = Vec::with_capacity(MAX_BATCH_MESSAGES);
+      while next_batch(&mut smtp_rx, &mut None, &mut batch).await {
+        if store_batch(&repo, std::mem::take(&mut batch))
+          .await
+          .is_empty()
+        {
           continue;
         }
         let count = repo
@@ -351,7 +358,8 @@ fn default_db_path() -> PathBuf {
 }
 
 const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
-const FILE_DB_MAX_CONNECTIONS: u32 = 5;
+/// Connections a file database's reader pool may open, besides its writer.
+const FILE_DB_READER_CONNECTIONS: u32 = 4;
 /// How long a stop waits for queued deliveries and open HTTP connections to
 /// finish before closing the database anyway.
 ///
@@ -359,7 +367,17 @@ const FILE_DB_MAX_CONNECTIONS: u32 = 5;
 /// 10 s stop timeout, so the WAL is checkpointed before the container runtime
 /// resorts to `SIGKILL`.
 const SHUTDOWN_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
-/// How long closing the pool, and with it the final WAL checkpoint, may take.
+/// Most queued deliveries taken into one batch.
+const MAX_BATCH_MESSAGES: usize = 32;
+/// Most raw mail, in bytes, committed in one transaction.
+///
+/// Small transactional mail gains the most from sharing a commit; large mail
+/// is bound by writing its bytes, so it gains little and would only hold the
+/// write lock longer.
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
+/// Raw size from which a message is parsed off the async runtime.
+const BLOCKING_PARSE_THRESHOLD_BYTES: usize = 256 * 1024;
+/// How long closing the database, and with it the final WAL checkpoint, may take.
 const DB_CLOSE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Resolves when the process is asked to stop, by `SIGTERM` or Ctrl-C.
@@ -380,60 +398,226 @@ async fn shutdown_signal() -> std::io::Result<()> {
   tokio::signal::ctrl_c().await
 }
 
-/// Receives the next queued delivery, closing the queue once `stop` fires.
+/// Receives the next run of queued deliveries into `batch`, closing the queue
+/// once `stop` fires.
 ///
-/// Closing refuses further hand-offs, so a session still in progress tells its
-/// sender to retry, while deliveries already queued keep coming. The caller
-/// therefore drains the queue and sees `None` once it is empty, even though
-/// SMTP sessions still hold senders.
-async fn next_delivery(
+/// Takes whatever is already queued, up to [`MAX_BATCH_MESSAGES`], without
+/// waiting for more: a lone message is stored as promptly as before, and a
+/// burst shares its commits. Closing refuses further hand-offs, so a session
+/// still in progress tells its sender to retry, while deliveries already
+/// queued keep coming. The caller therefore drains the queue and sees `false`
+/// once it is empty, even though SMTP sessions still hold senders.
+async fn next_batch(
   deliveries: &mut mpsc::Receiver<Delivery>,
   stop: &mut Option<oneshot::Receiver<()>>,
-) -> Option<Delivery> {
+  batch: &mut Vec<Delivery>,
+) -> bool {
   if let Some(signal) = stop {
     tokio::select! {
-      delivery = deliveries.recv() => return delivery,
+      received = deliveries.recv_many(batch, MAX_BATCH_MESSAGES) => return received > 0,
       _ = signal => {
         deliveries.close();
         *stop = None;
       }
     }
   }
-  deliveries.recv().await
+  deliveries.recv_many(batch, MAX_BATCH_MESSAGES).await > 0
 }
 
-/// Stores a captured message and tells the waiting SMTP session what happened.
+/// Parses a captured message ahead of its write.
 ///
-/// The session holds its reply until this answers, so the acknowledgement goes
-/// out the moment the write settles and ahead of anything downstream. Only a
-/// stored message yields a summary; a refused one is reported to the sender as
-/// a temporary failure, which is the whole point of waiting — a catcher that
-/// answered on the hand-off would lose it instead.
-async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<MessageSummary> {
-  let (received, ack) = delivery.into_parts();
-  if ack.is_abandoned() {
-    tracing::warn!(
-      "Skipped a message whose session gave up waiting; the sender was asked to retry"
-    );
-    return None;
+/// A message at or past [`BLOCKING_PARSE_THRESHOLD_BYTES`] is parsed on the
+/// blocking pool: decoding megabytes of base64 inline would stall a runtime
+/// worker, and with it every SMTP session scheduled there.
+async fn prepare(received: ReceivedMessage) -> Result<PreparedMessage, tokio::task::JoinError> {
+  let ReceivedMessage {
+    sender,
+    recipients,
+    raw,
+  } = received;
+  if raw.len() < BLOCKING_PARSE_THRESHOLD_BYTES {
+    return Ok(PreparedMessage::parse(sender, &recipients, raw));
   }
-  match repo
-    .insert(&received.sender, &received.recipients, &received.raw)
-    .await
-  {
-    Ok(summary) => {
-      ack.stored();
-      Some(summary)
+  tokio::task::spawn_blocking(move || PreparedMessage::parse(sender, &recipients, raw)).await
+}
+
+/// Splits a received batch into groups of at most [`MAX_BATCH_BYTES`] of raw
+/// mail, each to be committed as one transaction.
+///
+/// Arrival order is kept across and within groups. A message larger than the
+/// cap forms a group of its own, so large mail still commits one at a time.
+fn transactions(deliveries: Vec<Delivery>) -> Vec<Vec<(ReceivedMessage, DeliveryAck)>> {
+  let mut groups: Vec<Vec<(ReceivedMessage, DeliveryAck)>> = Vec::new();
+  let mut group_bytes = 0;
+  for (received, ack) in deliveries.into_iter().map(Delivery::into_parts) {
+    let size = received.raw.len();
+    match groups.last_mut() {
+      Some(group) if group_bytes + size <= MAX_BATCH_BYTES => {
+        group_bytes += size;
+        group.push((received, ack));
+      }
+      _ => {
+        group_bytes = size;
+        groups.push(vec![(received, ack)]);
+      }
+    }
+  }
+  groups
+}
+
+/// How long after a batch is taken off the queue it may still fall back to
+/// storing its messages one at a time.
+///
+/// A session answers `451` once [`STORE_ACK_TIMEOUT`] passes without a
+/// verdict, and a message committed after that is captured twice once the
+/// sender retries. Half the timeout leaves the other half for the insert
+/// already running when the budget runs out, which SQLite's `busy_timeout`
+/// and the repository's retries can stretch to ten seconds, and for the time
+/// the delivery waited in the queue before its batch was taken.
+const FALLBACK_BUDGET: std::time::Duration =
+  std::time::Duration::from_secs(STORE_ACK_TIMEOUT.as_secs() / 2);
+
+/// Stores a batch of captured messages and tells each waiting SMTP session
+/// what happened.
+///
+/// Each session holds its reply until this answers, and a message is only
+/// acknowledged once the transaction holding it has committed, so a `250`
+/// still means stored. A refused message is reported to its sender as a
+/// temporary failure, which is the whole point of waiting — a catcher that
+/// answered on the hand-off would lose it instead. Returns the stored
+/// messages in arrival order.
+async fn store_batch(repo: &MessageRepository, deliveries: Vec<Delivery>) -> Vec<MessageSummary> {
+  let fallback_deadline = Instant::now() + FALLBACK_BUDGET;
+  let mut stored = Vec::with_capacity(deliveries.len());
+  for group in transactions(deliveries) {
+    stored.extend(store_group(repo, group, fallback_deadline).await);
+  }
+  stored
+}
+
+/// Stores a batch, then announces each stored message to WebSocket clients in
+/// the order it was stored.
+async fn process_batch(
+  repo: &MessageRepository,
+  state: &AppState,
+  deliveries: Vec<Delivery>,
+) -> Vec<MessageSummary> {
+  let stored = store_batch(repo, deliveries).await;
+  for summary in &stored {
+    state.broadcast(WsEvent::MessageNew(summary.clone()));
+  }
+  stored
+}
+
+async fn store_group(
+  repo: &MessageRepository,
+  group: Vec<(ReceivedMessage, DeliveryAck)>,
+  fallback_deadline: Instant,
+) -> Vec<MessageSummary> {
+  let mut messages = Vec::with_capacity(group.len());
+  let mut acks = Vec::with_capacity(group.len());
+  for (received, ack) in group {
+    if ack.is_abandoned() {
+      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
+      continue;
+    }
+    match prepare(received).await {
+      Ok(message) => {
+        messages.push(message);
+        acks.push(ack);
+      }
+      Err(e) => {
+        ack.rejected();
+        tracing::error!(error = %e, "Refused a message that could not be parsed; the sender was asked to retry");
+      }
+    }
+  }
+  if messages.is_empty() {
+    return Vec::new();
+  }
+
+  match repo.insert_batch(&messages).await {
+    Ok(summaries) => {
+      acks.into_iter().for_each(DeliveryAck::stored);
+      summaries
+    }
+    Err(e) if messages.len() == 1 || e.is_store_wide() => {
+      acks.into_iter().for_each(DeliveryAck::rejected);
+      tracing::error!(error = %e, count = messages.len(), "Refused messages the store would not take; the senders were asked to retry");
+      Vec::new()
     }
     Err(e) => {
-      ack.rejected();
-      tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
-      None
+      warn!(error = %e, count = messages.len(), "A batch failed to commit; storing its messages one at a time");
+      store_one_by_one(repo, messages, acks, fallback_deadline).await
     }
   }
 }
 
-/// Opens a SQLite connection pool for `db_url`.
+/// Stores each message in its own transaction, so a message the store
+/// refuses fails alone rather than taking its batch with it.
+///
+/// Refuses every message not yet tried once the store reports a failure that
+/// is not specific to one message, or once `deadline` has passed, since a
+/// message committed after its session answered `451` is captured again when
+/// the sender retries.
+async fn store_one_by_one(
+  repo: &MessageRepository,
+  messages: Vec<PreparedMessage>,
+  acks: Vec<DeliveryAck>,
+  deadline: Instant,
+) -> Vec<MessageSummary> {
+  let mut stored = Vec::with_capacity(messages.len());
+  let mut pending = messages.iter().zip(acks);
+  while let Some((message, ack)) = pending.next() {
+    if ack.is_abandoned() {
+      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
+      continue;
+    }
+    if Instant::now() >= deadline {
+      ack.rejected();
+      let remaining = 1 + reject_rest(pending);
+      warn!(
+        count = remaining,
+        "A batch ran out of time to store its messages one at a time; the senders were asked to retry"
+      );
+      break;
+    }
+    match repo.insert_prepared(message).await {
+      Ok(summary) => {
+        ack.stored();
+        stored.push(summary);
+      }
+      Err(e) if e.is_store_wide() => {
+        ack.rejected();
+        let remaining = 1 + reject_rest(pending);
+        tracing::error!(error = %e, count = remaining, "Refused messages the store would not take; the senders were asked to retry");
+        break;
+      }
+      Err(e) => {
+        ack.rejected();
+        tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
+      }
+    }
+  }
+  stored
+}
+
+/// Refuses every delivery left in `pending`, returning how many there were.
+fn reject_rest<'a>(pending: impl Iterator<Item = (&'a PreparedMessage, DeliveryAck)>) -> usize {
+  pending.map(|(_, ack)| ack.rejected()).count()
+}
+
+/// Pool options for one connection that is never reaped or recycled.
+fn single_connection() -> sqlx::sqlite::SqlitePoolOptions {
+  sqlx::sqlite::SqlitePoolOptions::new()
+    .min_connections(1)
+    .max_connections(1)
+    .idle_timeout(None)
+    .max_lifetime(None)
+}
+
+/// Opens a SQLite connection pool for `db_url`: the reader pool of a file
+/// database, or the one connection an in-memory database lives in.
 ///
 /// In-memory pools are pinned to a single permanent connection. SQLite drops
 /// an in-memory database once its last connection closes, and the pool would
@@ -443,13 +627,9 @@ async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<
 /// `SQLITE_BUSY` that `busy_timeout` retries.
 async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool> {
   let pool_options = if in_memory {
-    sqlx::sqlite::SqlitePoolOptions::new()
-      .min_connections(1)
-      .max_connections(1)
-      .idle_timeout(None)
-      .max_lifetime(None)
+    single_connection()
   } else {
-    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_MAX_CONNECTIONS)
+    sqlx::sqlite::SqlitePoolOptions::new().max_connections(FILE_DB_READER_CONNECTIONS)
   };
 
   let connect_options = rustmail_storage::connect_options(db_url)
@@ -459,6 +639,36 @@ async fn connect_pool(db_url: &str, in_memory: bool) -> Result<sqlx::SqlitePool>
     .connect_with(connect_options)
     .await
     .with_context(|| format!("failed to open database: {db_url}"))
+}
+
+/// Opens the one connection every write to a file database goes through.
+///
+/// It stays open for the life of the process, so its page cache stays warm.
+async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
+  let connect_options = rustmail_storage::connect_options(db_url)
+    .with_context(|| format!("invalid database URL: {db_url}"))?;
+
+  single_connection()
+    .connect_with(connect_options)
+    .await
+    .with_context(|| format!("failed to open database for writing: {db_url}"))
+}
+
+/// Opens the repository for `db_url` and creates its schema.
+///
+/// A file database gets a dedicated writer connection beside its pool of
+/// readers. An in-memory database lives in a single connection, which then
+/// serves both.
+async fn open_repository(db_url: &str, in_memory: bool) -> Result<MessageRepository> {
+  if in_memory {
+    let pool = connect_pool(db_url, true).await?;
+    initialize_database(&pool).await?;
+    return Ok(MessageRepository::new(pool));
+  }
+  let writer = connect_writer(db_url).await?;
+  initialize_database(&writer).await?;
+  let readers = connect_pool(db_url, false).await?;
+  Ok(MessageRepository::with_writer(readers, writer))
 }
 
 fn install_rustls_crypto_provider() {
@@ -700,15 +910,12 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 
-  let pool = connect_pool(&db_url, args.ephemeral).await?;
-
-  initialize_database(&pool).await?;
+  let repo = open_repository(&db_url, args.ephemeral).await?;
 
   let (release_host, release_port) = args.release_host.as_deref().map(parse_release_host).unzip();
   let release_host: Option<String> = release_host;
   let release_port: Option<u16> = release_port.flatten();
 
-  let repo = MessageRepository::new(pool.clone());
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
   let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
@@ -738,16 +945,15 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     let state = state.clone();
     let mut stop = Some(processor_stop);
     tokio::spawn(async move {
-      while let Some(delivery) = next_delivery(&mut smtp_rx, &mut stop).await {
-        let Some(summary) = store_delivery(&repo, delivery).await else {
+      let mut batch = Vec::with_capacity(MAX_BATCH_MESSAGES);
+      while next_batch(&mut smtp_rx, &mut stop, &mut batch).await {
+        let stored = process_batch(&repo, &state, std::mem::take(&mut batch)).await;
+        let (Some(client), Some(url)) = (&webhook_client, &webhook_url) else {
           continue;
         };
-        state.broadcast(WsEvent::MessageNew(summary.clone()));
-
-        if let (Some(client), Some(url)) = (&webhook_client, &webhook_url) {
+        for payload in stored {
           let client = client.clone();
           let url = url.clone();
-          let payload = summary;
           let sem = webhook_semaphore.clone();
           tokio::spawn(async move {
             let _permit = match sem.acquire().await {
@@ -882,7 +1088,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   retention_task.abort();
 
-  if tokio::time::timeout(DB_CLOSE_DEADLINE, pool.close())
+  if tokio::time::timeout(DB_CLOSE_DEADLINE, repo.close())
     .await
     .is_err()
   {
@@ -923,27 +1129,67 @@ mod version_tests {
 #[cfg(test)]
 mod delivery_tests {
   use super::*;
-  use rustmail_smtp::{DeliveryOutcome, ReceivedMessage};
+  use rustmail_smtp::DeliveryOutcome;
 
   fn sample() -> ReceivedMessage {
+    titled("Hello")
+  }
+
+  fn titled(subject: &str) -> ReceivedMessage {
     ReceivedMessage {
       sender: "alice@test.com".to_string(),
       recipients: vec!["bob@test.com".to_string()],
-      raw: b"Subject: Hello\r\n\r\nbody\r\n".to_vec(),
+      raw: format!("Subject: {subject}\r\n\r\nbody\r\n").into_bytes(),
     }
+  }
+
+  fn sized(size: usize) -> ReceivedMessage {
+    let mut message = sample();
+    message.raw.resize(size, b'x');
+    message
+  }
+
+  async fn memory_repo() -> MessageRepository {
+    open_repository(IN_MEMORY_DB_URL, true).await.unwrap()
+  }
+
+  fn deliveries(
+    messages: Vec<ReceivedMessage>,
+  ) -> (Vec<Delivery>, Vec<oneshot::Receiver<DeliveryOutcome>>) {
+    messages.into_iter().map(Delivery::new).unzip()
+  }
+
+  async fn outcomes(verdicts: Vec<oneshot::Receiver<DeliveryOutcome>>) -> Vec<DeliveryOutcome> {
+    let mut outcomes = Vec::with_capacity(verdicts.len());
+    for verdict in verdicts {
+      outcomes.push(verdict.await.unwrap());
+    }
+    outcomes
   }
 
   #[tokio::test]
   async fn a_stored_message_lets_the_session_accept_it() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = memory_repo().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, verdicts) = deliveries(vec![sample()]);
+    let stored = store_batch(&repo, batch).await;
 
-    assert!(summary.is_some(), "a healthy store must yield a summary");
-    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
+    assert_eq!(stored.len(), 1, "a healthy store must yield a summary");
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+  }
+
+  #[tokio::test]
+  async fn a_message_parsed_off_the_runtime_is_stored_whole() {
+    let repo = memory_repo().await;
+    let message = sized(BLOCKING_PARSE_THRESHOLD_BYTES + 1);
+    let expected_size = message.raw.len() as i64;
+
+    let (batch, verdicts) = deliveries(vec![message]);
+    let stored = store_batch(&repo, batch).await;
+
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+    assert_eq!(stored[0].size, expected_size);
+    assert_eq!(stored[0].subject.as_deref(), Some("Hello"));
   }
 
   /// A write the store will not take must reach the sender as a refusal.
@@ -959,14 +1205,175 @@ mod delivery_tests {
     let repo = MessageRepository::new(pool.clone());
     pool.close().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, verdicts) = deliveries(vec![sample(), sample()]);
+    let stored = store_batch(&repo, batch).await;
 
     assert!(
-      summary.is_none(),
+      stored.is_empty(),
       "a refused write must not yield a summary"
     );
-    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Rejected);
+    assert_eq!(
+      outcomes(verdicts).await,
+      [DeliveryOutcome::Rejected, DeliveryOutcome::Rejected]
+    );
+  }
+
+  /// A `250` has to mean stored, so no session in a batch may hear back
+  /// before the transaction holding its message has committed.
+  ///
+  /// The count runs on a reader connection of a file database, which only
+  /// sees committed rows: an answer sent mid-transaction would find fewer
+  /// than the whole batch there.
+  #[tokio::test]
+  async fn a_batch_is_acknowledged_only_once_it_is_committed() {
+    const BATCH: usize = 4;
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("acks.db").display());
+    let repo = open_repository(&url, false).await.unwrap();
+
+    let (batch, mut verdicts) = deliveries((0..BATCH).map(|_| sample()).collect());
+    let writer = tokio::spawn({
+      let repo = repo.clone();
+      async move { store_batch(&repo, batch).await }
+    });
+
+    let first = verdicts.remove(0).await.unwrap();
+    let visible = repo.count().await.unwrap();
+
+    assert_eq!(first, DeliveryOutcome::Stored);
+    assert_eq!(
+      visible, BATCH as i64,
+      "the first answer went out before its batch committed"
+    );
+    assert_eq!(writer.await.unwrap().len(), BATCH);
+    repo.close().await;
+  }
+
+  /// A store whose trigger refuses any message titled `poison`.
+  async fn poisoned_repo() -> MessageRepository {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    sqlx::query(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = 'poison' BEGIN SELECT RAISE(ABORT, 'poisoned'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    MessageRepository::new(pool)
+  }
+
+  /// One message the store refuses must not cost the rest of its batch.
+  ///
+  /// The trigger stands in for whatever makes a single row unwritable; it
+  /// aborts the shared transaction exactly as such a failure would.
+  #[tokio::test]
+  async fn a_poisoned_message_does_not_fail_its_neighbours() {
+    let repo = poisoned_repo().await;
+
+    let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
+    let stored = store_batch(&repo, batch).await;
+
+    assert_eq!(
+      outcomes(verdicts).await,
+      [
+        DeliveryOutcome::Stored,
+        DeliveryOutcome::Rejected,
+        DeliveryOutcome::Stored
+      ]
+    );
+    let subjects: Vec<_> = stored.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("before"), Some("after")]);
+    assert_eq!(repo.count().await.unwrap(), 2);
+  }
+
+  /// A lock outlasting the retry budget fails every message alike, so trying
+  /// them one at a time only holds each session longer.
+  ///
+  /// The sleep stands in for a concurrent writer's duration: it outlasts the
+  /// batch's own retries but ends well inside what retrying each of the
+  /// messages would take, so any per-message insert would store its message.
+  #[tokio::test]
+  async fn a_store_wide_failure_rejects_the_group_without_retrying_each_message() {
+    const MESSAGES: usize = 6;
+    const LOCK_HOLD: std::time::Duration = std::time::Duration::from_millis(1500);
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("locked.db").display());
+    let options = rustmail_storage::connect_options(&url)
+      .unwrap()
+      .busy_timeout(std::time::Duration::ZERO);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(2)
+      .connect_with(options)
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+    let releaser = tokio::spawn(async move {
+      tokio::time::sleep(LOCK_HOLD).await;
+      sqlx::query("ROLLBACK")
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    });
+
+    let (batch, verdicts) = deliveries((0..MESSAGES).map(|_| sample()).collect());
+    let stored = store_batch(&repo, batch).await;
+    releaser.await.unwrap();
+
+    assert!(stored.is_empty());
+    assert_eq!(
+      outcomes(verdicts).await,
+      [DeliveryOutcome::Rejected; MESSAGES]
+    );
+    assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  /// Past its budget, a fallback would commit messages whose sessions are
+  /// about to answer `451`, and each of those is captured again on retry.
+  #[tokio::test]
+  async fn the_fallback_stops_once_the_batch_has_spent_its_budget() {
+    let repo = poisoned_repo().await;
+
+    let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
+    let group = transactions(batch).into_iter().next().unwrap();
+    let stored = store_group(&repo, group, Instant::now()).await;
+
+    assert!(stored.is_empty());
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Rejected; 3]);
+    assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  /// The UI prepends each `message:new` as it arrives, so the events have to
+  /// follow the order the mailbox lists messages in.
+  #[tokio::test]
+  async fn message_new_events_follow_insert_order() {
+    let repo = memory_repo().await;
+    let (ws_tx, mut ws_rx) = broadcast::channel::<WsFrame>(64);
+    let state = AppState::new(repo.clone(), ws_tx, None, None);
+    let subjects = ["one", "two", "three", "four", "five"];
+
+    let (batch, _verdicts) = deliveries(subjects.iter().map(|s| titled(s)).collect());
+    process_batch(&repo, &state, batch).await;
+
+    let mut announced = Vec::new();
+    while let Ok(frame) = ws_rx.try_recv() {
+      announced.push(frame);
+    }
+    let oldest_first: Vec<WsFrame> = repo
+      .list(50, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .rev()
+      .map(|summary| WsFrame::encode(&WsEvent::MessageNew(summary)).unwrap())
+      .collect();
+    assert_eq!(announced.len(), subjects.len());
+    assert_eq!(announced, oldest_first);
   }
 
   /// A session that stopped waiting has already told the sender to retry.
@@ -975,19 +1382,58 @@ mod delivery_tests {
   /// retry lands.
   #[tokio::test]
   async fn a_delivery_its_session_gave_up_on_is_not_stored() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = memory_repo().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    drop(verdict);
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, mut verdicts) = deliveries(vec![titled("abandoned"), titled("waiting")]);
+    drop(verdicts.remove(0));
+    let stored = store_batch(&repo, batch).await;
 
-    assert!(
-      summary.is_none(),
-      "an abandoned delivery must not be stored"
-    );
-    assert_eq!(repo.count().await.unwrap(), 0);
+    let subjects: Vec<_> = stored.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("waiting")]);
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+  }
+
+  #[test]
+  fn large_mail_commits_one_message_per_transaction() {
+    let (batch, _verdicts) = deliveries(vec![
+      sized(MAX_BATCH_BYTES),
+      sized(MAX_BATCH_BYTES / 2),
+      sized(MAX_BATCH_BYTES / 2),
+      sized(MAX_BATCH_BYTES / 2),
+    ]);
+
+    let sizes: Vec<usize> = transactions(batch)
+      .into_iter()
+      .map(|group| group.len())
+      .collect();
+
+    assert_eq!(sizes, [1, 2, 1]);
+  }
+
+  #[test]
+  fn small_mail_shares_one_transaction() {
+    let (batch, _verdicts) = deliveries((0..MAX_BATCH_MESSAGES).map(|_| sample()).collect());
+
+    let groups = transactions(batch);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].len(), MAX_BATCH_MESSAGES);
+  }
+
+  #[tokio::test]
+  async fn a_batch_takes_at_most_its_cap_of_queued_deliveries() {
+    let (tx, mut rx) = mpsc::channel::<Delivery>(MAX_BATCH_MESSAGES * 2);
+    for _ in 0..=MAX_BATCH_MESSAGES {
+      tx.send(Delivery::new(sample()).0).await.unwrap();
+    }
+    let mut batch = Vec::new();
+
+    assert!(next_batch(&mut rx, &mut None, &mut batch).await);
+    assert_eq!(batch.len(), MAX_BATCH_MESSAGES);
+    batch.clear();
+    assert!(next_batch(&mut rx, &mut None, &mut batch).await);
+    assert_eq!(batch.len(), 1);
   }
 
   #[tokio::test]
@@ -1001,9 +1447,11 @@ mod delivery_tests {
 
     stop_tx.send(()).unwrap();
 
+    let mut batch = Vec::new();
     let mut drained = 0;
-    while next_delivery(&mut rx, &mut stop).await.is_some() {
-      drained += 1;
+    while next_batch(&mut rx, &mut stop, &mut batch).await {
+      drained += batch.len();
+      batch.clear();
     }
     assert_eq!(
       drained, 2,
@@ -1111,14 +1559,28 @@ mod pool_tests {
 
   #[tokio::test(flavor = "multi_thread")]
   async fn single_connection_pool_serializes_without_deadlocking() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = open_repository(IN_MEMORY_DB_URL, true).await.unwrap();
 
-    // Ephemeral mode funnels SMTP inserts, retention and every HTTP request
-    // through one connection. A repository method that acquired a second
-    // connection while holding one would deadlock here rather than hang the
-    // whole server in production.
+    exercise_concurrently(&repo).await;
+  }
+
+  #[tokio::test(flavor = "multi_thread")]
+  async fn file_repository_serializes_writes_without_deadlocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("split.db").display());
+    let repo = open_repository(&url, false).await.unwrap();
+
+    exercise_concurrently(&repo).await;
+    repo.close().await;
+  }
+
+  /// Runs inserts, counts, searches and lists from many tasks at once.
+  ///
+  /// Ephemeral mode funnels SMTP inserts, retention and every HTTP request
+  /// through one connection, and a file database funnels every write through
+  /// one. A repository method that acquired a second connection while holding
+  /// one would deadlock here rather than hang the whole server in production.
+  async fn exercise_concurrently(repo: &MessageRepository) {
     let mut handles = Vec::new();
     for i in 0..CONCURRENT_WORKERS {
       let repo = repo.clone();
@@ -1143,7 +1605,7 @@ mod pool_tests {
       }
     })
     .await
-    .expect("single-connection pool deadlocked");
+    .expect("a single write connection deadlocked");
 
     assert_eq!(repo.count().await.unwrap(), CONCURRENT_WORKERS as i64);
   }
@@ -1161,10 +1623,29 @@ mod pool_tests {
 
     assert_eq!(
       pool.options().get_max_connections(),
-      FILE_DB_MAX_CONNECTIONS
+      FILE_DB_READER_CONNECTIONS
     );
 
     pool.close().await;
+  }
+
+  #[tokio::test]
+  async fn file_writer_is_one_connection_kept_for_the_process_lifetime() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let writer = connect_writer(&format!(
+      "sqlite:{}?mode=rwc",
+      dir.path().join("writer.db").display()
+    ))
+    .await
+    .unwrap();
+
+    let options = writer.options();
+    assert_eq!(options.get_max_connections(), 1);
+    assert_eq!(options.get_min_connections(), 1);
+    assert_eq!(options.get_idle_timeout(), None);
+    assert_eq!(options.get_max_lifetime(), None);
+    writer.close().await;
   }
 }
 
