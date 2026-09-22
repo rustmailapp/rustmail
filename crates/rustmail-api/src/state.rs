@@ -4,6 +4,7 @@ use tokio::sync::{Semaphore, broadcast};
 
 use crate::host::Hostname;
 use crate::origin::Origin;
+use crate::ws::WsTimings;
 
 const MAX_WS_CONNECTIONS: usize = 50;
 
@@ -50,6 +51,7 @@ pub struct AppState {
   pub allowed_origins: Arc<[Origin]>,
   /// Host names RustMail answers a browser on, besides addresses and `localhost`.
   pub allowed_hosts: Arc<[Hostname]>,
+  pub(crate) ws_timings: WsTimings,
 }
 
 impl AppState {
@@ -68,6 +70,7 @@ impl AppState {
       ws_semaphore: Arc::new(Semaphore::new(MAX_WS_CONNECTIONS)),
       allowed_origins: Arc::from([]),
       allowed_hosts: Arc::from([]),
+      ws_timings: WsTimings::default(),
     }
   }
 
