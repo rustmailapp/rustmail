@@ -581,6 +581,22 @@ function readEvent(frame: unknown): WsEvent | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * Puts a live message at the top of the list and counts it in.
+ *
+ * The socket is subscribed before a list read lands, over another connection,
+ * so a message can reach the store both ways. The copy that comes second must
+ * add neither a row nor a count.
+ */
+function prependArrival(arrival: MessageSummary): void {
+  if (messages().some((m) => m.id === arrival.id)) return;
+  batch(() => {
+    setMessages((prev) => [arrival, ...prev]);
+    setStoredTotal((t) => t + 1);
+  });
+  if (countNeedsRefresh) void refreshTotal();
+}
+
 function connectWebSocket() {
   disconnectWebSocket();
 
@@ -610,9 +626,7 @@ function connectWebSocket() {
         if (search()) {
           scheduleSearchRefresh();
         } else {
-          setMessages((prev) => [event.data, ...prev]);
-          setStoredTotal((t) => t + 1);
-          if (countNeedsRefresh) void refreshTotal();
+          prependArrival(event.data);
         }
         break;
       case "message:delete":

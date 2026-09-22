@@ -573,6 +573,27 @@ describe("WebSocket events", () => {
     ]);
   });
 
+  it("ignores an arrival for a message the list already holds", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(0) }));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("counts a message delivered twice once", () => {
+    const frame = JSON.stringify({ type: "message:new", data: message(9) });
+
+    deliver(frame);
+    deliver(frame);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+    expect(total()).toBe(3);
+  });
+
   it("discards an event whose payload does not match its schema", () => {
     deliver(
       JSON.stringify({
