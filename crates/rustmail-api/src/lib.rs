@@ -49,10 +49,17 @@ pub use state::{AppState, WsEvent, WsFrame, WsFrameError};
 use axum::Router;
 use axum::http::{HeaderValue, StatusCode};
 use axum::routing::{delete, get, patch, post};
-use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{NotForContentType, Predicate};
+use tower_http::compression::{CompressionLayer, DefaultPredicate};
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
+
+/// Content type of attachment downloads.
+///
+/// Attachments are mostly archives, PDFs and images that are compressed
+/// already, so gzipping them again spends CPU on every download for nothing.
+const DOWNLOAD_CONTENT_TYPE: &str = "application/octet-stream";
 
 /// Builds the complete axum router with all API routes, static file serving,
 /// compression, tracing, and security headers.
@@ -97,7 +104,9 @@ pub fn router(state: AppState) -> Router {
       state.clone(),
       host::guard_host,
     ))
-    .layer(CompressionLayer::new())
+    .layer(CompressionLayer::new().compress_when(
+      DefaultPredicate::new().and(NotForContentType::const_new(DOWNLOAD_CONTENT_TYPE)),
+    ))
     .layer(TraceLayer::new_for_http())
     .layer(SetResponseHeaderLayer::if_not_present(
       axum::http::header::X_CONTENT_TYPE_OPTIONS,

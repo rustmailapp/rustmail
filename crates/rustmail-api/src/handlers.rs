@@ -262,7 +262,10 @@ pub async fn get_attachment(
   Ok((
     StatusCode::OK,
     [
-      (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+      (
+        header::CONTENT_TYPE,
+        crate::DOWNLOAD_CONTENT_TYPE.to_string(),
+      ),
       (
         header::CONTENT_DISPOSITION,
         format!("attachment; filename=\"{}\"", filename),

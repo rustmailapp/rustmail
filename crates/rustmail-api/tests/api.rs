@@ -1904,3 +1904,84 @@ async fn a_malformed_filter_value_is_a_bad_request() {
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
   assert!(json_body(response).await["error"].is_string());
 }
+
+const COMPRESSIBLE_ATTACHMENT_BYTES: usize = 4096;
+
+fn email_with_compressible_attachment() -> Vec<u8> {
+  let content = "a".repeat(COMPRESSIBLE_ATTACHMENT_BYTES);
+  format!(
+    concat!(
+      "From: a@t.com\r\n",
+      "To: b@t.com\r\n",
+      "Subject: Archive\r\n",
+      "MIME-Version: 1.0\r\n",
+      "Content-Type: multipart/mixed; boundary=\"B\"\r\n",
+      "\r\n",
+      "--B\r\n",
+      "Content-Type: text/plain\r\n",
+      "\r\n",
+      "See attached\r\n",
+      "--B\r\n",
+      "Content-Type: application/zip\r\n",
+      "Content-Disposition: attachment; filename=\"archive.zip\"\r\n",
+      "\r\n",
+      "{}\r\n",
+      "--B--\r\n",
+    ),
+    content
+  )
+  .into_bytes()
+}
+
+async fn get_gzip(app: axum::Router, uri: &str) -> axum::response::Response {
+  app
+    .oneshot(
+      Request::builder()
+        .uri(uri)
+        .header("accept-encoding", "gzip")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn attachment_downloads_are_not_gzipped() {
+  let (app, repo, _) = setup().await;
+  let message = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into()],
+      &email_with_compressible_attachment(),
+    )
+    .await
+    .unwrap();
+  let attachment = repo.get_attachments(&message.id).await.unwrap().remove(0);
+
+  let response = get_gzip(
+    app,
+    &format!(
+      "/api/v1/messages/{}/attachments/{}",
+      message.id, attachment.id
+    ),
+  )
+  .await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "application/octet-stream"
+  );
+  assert!(response.headers().get("content-encoding").is_none());
+}
+
+#[tokio::test]
+async fn json_responses_are_still_gzipped() {
+  let (app, repo, _) = setup().await;
+  insert_numbered(&repo, 20).await;
+
+  let response = get_gzip(app, "/api/v1/messages").await;
+
+  assert_eq!(response.headers()["content-encoding"], "gzip");
+}
