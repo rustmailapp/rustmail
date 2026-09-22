@@ -1234,6 +1234,26 @@ describe("arrivals while the reader is scrolled away", () => {
     });
   });
 
+  it("drops a held arrival that stops matching the filters", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+    setLiveHeld(true);
+    deliver(arrival(9, { is_starred: true }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: false },
+      }),
+    );
+    setLiveHeld(false);
+
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(1);
+    expect(ids()).toEqual(["id-0"]);
+  });
+
   it("forgets a held arrival that is deleted", () => {
     setLiveHeld(true);
     deliver(arrival(9));

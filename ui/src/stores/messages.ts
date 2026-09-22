@@ -953,7 +953,9 @@ function isKnown(id: string): boolean {
 }
 
 /**
- * Changes a loaded message, and counts it in or out of a filtered total.
+ * Changes a loaded or held message, and counts it in or out of a filtered
+ * total. A held arrival that stops matching is let go, since the list it waits
+ * to join would not show it.
  *
  * Deciding from the row's state rather than from the event keeps this
  * idempotent, so a replay over a page that already reflects it counts nothing.
@@ -961,7 +963,16 @@ function isKnown(id: string): boolean {
 function patchMessage(id: string, patch: Partial<MessageSummary>): void {
   const waiting = heldRows.get(id);
   if (waiting !== undefined) {
-    heldRows.set(id, { ...waiting, ...patch });
+    const patched = { ...waiting, ...patch };
+    if (matchesFilters(patched, filters())) {
+      heldRows.set(id, patched);
+      return;
+    }
+    heldRows.delete(id);
+    batch(() => {
+      setHeldArrivals((count) => count - 1);
+      setStoredTotal((t) => Math.max(0, t - 1));
+    });
     return;
   }
   const current = findMessage(id);
