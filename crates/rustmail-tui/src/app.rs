@@ -9,8 +9,10 @@ use ratatui::prelude::*;
 use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
 
-use crate::api::{ApiClient, Message, MessageSummary, RAW_PREVIEW_LIMIT_BYTES, WsEvent};
-use crate::event::{self, Event};
+use crate::api::{
+  ApiClient, ListResponse, Message, MessageSummary, RAW_PREVIEW_LIMIT_BYTES, WsEvent,
+};
+use crate::event::{self, Event, RawTarget};
 use crate::ui;
 use crate::ui::util::format_size;
 
@@ -46,6 +48,8 @@ pub struct App {
 
   api: ApiClient,
   ws_url: String,
+  event_tx: mpsc::Sender<Event>,
+  fetch_generation: u64,
 
   pub messages: Vec<MessageSummary>,
   pub total: i64,
@@ -64,10 +68,12 @@ pub struct App {
   pub preview_raw: Option<String>,
   pub preview_raw_notice: Option<String>,
   last_preview_id: Option<String>,
+  pending_preview_id: Option<String>,
 
   pub raw_content: Option<String>,
   pub raw_notice: Option<String>,
   pub raw_scroll: u16,
+  pending_raw: Option<(RawTarget, String)>,
 
   pub search_query: String,
   pub search_input: String,
@@ -92,7 +98,7 @@ pub struct App {
 }
 
 impl App {
-  pub fn new(base_url: String, ws_url: String) -> Self {
+  pub fn new(base_url: String, ws_url: String, event_tx: mpsc::Sender<Event>) -> Self {
     Self {
       running: true,
       mode: Mode::Normal,
@@ -100,6 +106,8 @@ impl App {
 
       api: ApiClient::new(base_url),
       ws_url,
+      event_tx,
+      fetch_generation: 0,
 
       messages: Vec::new(),
       total: 0,
@@ -118,10 +126,12 @@ impl App {
       preview_raw: None,
       preview_raw_notice: None,
       last_preview_id: None,
+      pending_preview_id: None,
 
       raw_content: None,
       raw_notice: None,
       raw_scroll: 0,
+      pending_raw: None,
 
       search_query: String::new(),
       search_input: String::new(),
@@ -146,10 +156,12 @@ impl App {
     }
   }
 
-  pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-    let (mut events, ws_sender) = event::create_event_handler();
-
-    self.connect_websocket(ws_sender);
+  pub async fn run(
+    &mut self,
+    terminal: &mut DefaultTerminal,
+    events: &mut event::EventHandler,
+  ) -> Result<()> {
+    self.connect_websocket();
     self.fetch_messages().await;
 
     while self.running {
@@ -184,11 +196,45 @@ impl App {
       Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
       Event::WsStatus(connected) => self.handle_ws_status(connected).await,
       Event::WsOverflow => self.view_stale = true,
+      Event::MessagesFetched { generation, result } => {
+        self.handle_messages_fetched(generation, result).await
+      }
+      Event::PreviewLoaded {
+        id,
+        was_unread,
+        result,
+      } => self.handle_preview_loaded(id, was_unread, result).await,
+      Event::RawLoaded {
+        target,
+        id,
+        size,
+        result,
+      } => self.handle_raw_loaded(target, id, size, result).await,
+      Event::Patched {
+        id,
+        is_read,
+        is_starred,
+        result,
+      } => self.handle_patched(id, is_read, is_starred, result),
+      Event::Deleted { id, result } => self.handle_deleted(id, result).await,
+      Event::AllDeleted { result } => self.handle_all_deleted(result).await,
     }
   }
 
-  fn connect_websocket(&self, tx: mpsc::Sender<Event>) {
+  fn spawn_and_send<F>(&self, fut: F)
+  where
+    F: std::future::Future<Output = Event> + Send + 'static,
+  {
+    let tx = self.event_tx.clone();
+    tokio::spawn(async move {
+      let event = fut.await;
+      let _ = tx.send(event).await;
+    });
+  }
+
+  fn connect_websocket(&self) {
     let ws_url = self.ws_url.clone();
+    let tx = self.event_tx.clone();
     tokio::spawn(async move {
       let mut delay = Duration::from_secs(2);
       loop {
@@ -317,14 +363,22 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
-    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
-      Ok(raw) => {
-        self.preview_raw = Some(raw);
-        self.preview_raw_notice = notice;
+    let size = msg.size;
+    self.pending_raw = Some((RawTarget::Preview, id.clone()));
+
+    let api = self.api.clone();
+    self.spawn_and_send(async move {
+      let result = api
+        .get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES)
+        .await
+        .map_err(|e| e.to_string());
+      Event::RawLoaded {
+        target: RawTarget::Preview,
+        id,
+        size,
+        result,
       }
-      Err(e) => self.set_error(format!("Failed to load raw: {}", e)),
-    }
+    });
   }
 
   async fn handle_search_key(&mut self, key: KeyEvent) {
@@ -529,17 +583,38 @@ impl App {
   pub async fn fetch_messages(&mut self) {
     self.loading = true;
     self.last_fetch_at = Some(Instant::now());
-    let query = if self.search_query.is_empty() {
-      None
-    } else {
-      Some(self.search_query.as_str())
-    };
+    self.fetch_generation += 1;
+    let generation = self.fetch_generation;
 
-    match self
-      .api
-      .list_messages(query, self.page_size, self.offset)
-      .await
-    {
+    let api = self.api.clone();
+    let query = self.search_query.clone();
+    let page_size = self.page_size;
+    let offset = self.offset;
+
+    self.spawn_and_send(async move {
+      let q = if query.is_empty() {
+        None
+      } else {
+        Some(query.as_str())
+      };
+      let result = api
+        .list_messages(q, page_size, offset)
+        .await
+        .map_err(|e| e.to_string());
+      Event::MessagesFetched { generation, result }
+    });
+  }
+
+  async fn handle_messages_fetched(
+    &mut self,
+    generation: u64,
+    result: Result<ListResponse, String>,
+  ) {
+    if generation != self.fetch_generation {
+      return;
+    }
+    self.loading = false;
+    match result {
       Ok(resp) => {
         self.messages = resp.messages;
         self.total = resp.total;
@@ -556,15 +631,16 @@ impl App {
         self.set_error(format!("Failed to fetch messages: {}", e));
       }
     }
-    self.loading = false;
   }
 
   async fn load_preview(&mut self) {
     let Some(msg) = self.messages.get(self.selected) else {
       self.preview = None;
       self.last_preview_id = None;
+      self.pending_preview_id = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
+      self.pending_raw = None;
       return;
     };
 
@@ -579,24 +655,61 @@ impl App {
     self.preview_raw = None;
     self.preview_raw_notice = None;
     self.preview_tab = PreviewTab::Text;
+    self.pending_preview_id = Some(target_id.clone());
+    self.pending_raw = None;
 
-    match self.api.get_message(&target_id).await {
+    let api = self.api.clone();
+    self.spawn_and_send(async move {
+      let result = api.get_message(&target_id).await.map_err(|e| e.to_string());
+      Event::PreviewLoaded {
+        id: target_id,
+        was_unread,
+        result,
+      }
+    });
+  }
+
+  async fn handle_preview_loaded(
+    &mut self,
+    id: String,
+    was_unread: bool,
+    result: Result<Message, String>,
+  ) {
+    if self.pending_preview_id.as_deref() != Some(id.as_str()) {
+      return;
+    }
+    self.pending_preview_id = None;
+    self.preview_loading = false;
+
+    match result {
       Ok(detail) => {
-        self.last_preview_id = Some(target_id.clone());
+        self.last_preview_id = Some(id.clone());
         self.preview = Some(detail);
-
         if was_unread {
-          let _ = self.api.update_message(&target_id, Some(true), None).await;
-          if let Some(m) = self.messages.iter_mut().find(|m| m.id == target_id) {
-            m.is_read = true;
-          }
+          self.spawn_patch(id, Some(true), None);
         }
       }
       Err(e) => {
         self.set_error(format!("Failed to load message: {}", e));
       }
     }
-    self.preview_loading = false;
+  }
+
+  fn spawn_patch(&self, id: String, is_read: Option<bool>, is_starred: Option<bool>) {
+    let api = self.api.clone();
+    let patch_id = id.clone();
+    self.spawn_and_send(async move {
+      let result = api
+        .update_message(&patch_id, is_read, is_starred)
+        .await
+        .map_err(|e| e.to_string());
+      Event::Patched {
+        id: patch_id,
+        is_read,
+        is_starred,
+        result,
+      }
+    });
   }
 
   async fn toggle_read(&mut self) {
@@ -605,15 +718,7 @@ impl App {
     };
     let new_state = !msg.is_read;
     let id = msg.id.clone();
-    if self
-      .api
-      .update_message(&id, Some(new_state), None)
-      .await
-      .is_ok()
-      && let Some(m) = self.messages.iter_mut().find(|m| m.id == id)
-    {
-      m.is_read = new_state;
-    }
+    self.spawn_patch(id, Some(new_state), None);
   }
 
   async fn toggle_star(&mut self) {
@@ -622,14 +727,27 @@ impl App {
     };
     let new_state = !msg.is_starred;
     let id = msg.id.clone();
-    if self
-      .api
-      .update_message(&id, None, Some(new_state))
-      .await
-      .is_ok()
-      && let Some(m) = self.messages.iter_mut().find(|m| m.id == id)
-    {
-      m.is_starred = new_state;
+    self.spawn_patch(id, None, Some(new_state));
+  }
+
+  fn handle_patched(
+    &mut self,
+    id: String,
+    is_read: Option<bool>,
+    is_starred: Option<bool>,
+    result: Result<(), String>,
+  ) {
+    if result.is_err() {
+      return;
+    }
+    let Some(m) = self.messages.iter_mut().find(|m| m.id == id) else {
+      return;
+    };
+    if let Some(v) = is_read {
+      m.is_read = v;
+    }
+    if let Some(v) = is_starred {
+      m.is_starred = v;
     }
   }
 
@@ -638,29 +756,51 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    if self.api.delete_message(&id).await.is_ok() {
-      self.messages.retain(|m| m.id != id);
-      if self.selected >= self.messages.len() && self.selected > 0 {
-        self.selected -= 1;
-      }
-      self.last_preview_id = None;
-      self.preview_raw = None;
-      self.preview_raw_notice = None;
-      self.sync_list_state();
-      self.load_preview().await;
+    let api = self.api.clone();
+    self.spawn_and_send(async move {
+      let result = api.delete_message(&id).await.map_err(|e| e.to_string());
+      Event::Deleted { id, result }
+    });
+  }
+
+  async fn handle_deleted(&mut self, id: String, result: Result<(), String>) {
+    if result.is_err() {
+      return;
     }
+    self.messages.retain(|m| m.id != id);
+    if self.selected >= self.messages.len() && self.selected > 0 {
+      self.selected -= 1;
+    }
+    self.last_preview_id = None;
+    self.pending_preview_id = None;
+    self.preview_raw = None;
+    self.preview_raw_notice = None;
+    self.pending_raw = None;
+    self.sync_list_state();
+    self.load_preview().await;
   }
 
   async fn delete_all(&mut self) {
-    if self.api.delete_all_messages().await.is_ok() {
-      self.messages.clear();
-      self.selected = 0;
-      self.preview = None;
-      self.last_preview_id = None;
-      self.preview_raw = None;
-      self.preview_raw_notice = None;
-      self.sync_list_state();
+    let api = self.api.clone();
+    self.spawn_and_send(async move {
+      let result = api.delete_all_messages().await.map_err(|e| e.to_string());
+      Event::AllDeleted { result }
+    });
+  }
+
+  async fn handle_all_deleted(&mut self, result: Result<(), String>) {
+    if result.is_err() {
+      return;
     }
+    self.messages.clear();
+    self.selected = 0;
+    self.preview = None;
+    self.last_preview_id = None;
+    self.pending_preview_id = None;
+    self.preview_raw = None;
+    self.preview_raw_notice = None;
+    self.pending_raw = None;
+    self.sync_list_state();
   }
 
   async fn show_raw(&mut self) {
@@ -668,16 +808,59 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
-    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
+    let size = msg.size;
+    self.pending_raw = Some((RawTarget::FullView, id.clone()));
+
+    let api = self.api.clone();
+    self.spawn_and_send(async move {
+      let result = api
+        .get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES)
+        .await
+        .map_err(|e| e.to_string());
+      Event::RawLoaded {
+        target: RawTarget::FullView,
+        id,
+        size,
+        result,
+      }
+    });
+  }
+
+  async fn handle_raw_loaded(
+    &mut self,
+    target: RawTarget,
+    id: String,
+    size: i64,
+    result: Result<String, String>,
+  ) {
+    let is_current = matches!(&self.pending_raw, Some((t, i)) if *t == target && i == &id);
+    if !is_current {
+      return;
+    }
+    self.pending_raw = None;
+
+    match result {
       Ok(raw) => {
-        self.raw_content = Some(raw);
-        self.raw_notice = notice;
-        self.raw_scroll = 0;
-        self.mode = Mode::RawView;
+        let notice = raw_truncation_notice(size, &self.api.export_url(&id));
+        match target {
+          RawTarget::FullView => {
+            self.raw_content = Some(raw);
+            self.raw_notice = notice;
+            self.raw_scroll = 0;
+            self.mode = Mode::RawView;
+          }
+          RawTarget::Preview => {
+            self.preview_raw = Some(raw);
+            self.preview_raw_notice = notice;
+          }
+        }
       }
       Err(e) => {
-        self.set_error(format!("Failed to load raw message: {}", e));
+        let message = match target {
+          RawTarget::FullView => format!("Failed to load raw message: {}", e),
+          RawTarget::Preview => format!("Failed to load raw: {}", e),
+        };
+        self.set_error(message);
       }
     }
   }
@@ -688,8 +871,10 @@ impl App {
       self.offset = new_offset;
       self.selected = 0;
       self.last_preview_id = None;
+      self.pending_preview_id = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
+      self.pending_raw = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -700,8 +885,10 @@ impl App {
       self.offset = (self.offset - self.page_size).max(0);
       self.selected = 0;
       self.last_preview_id = None;
+      self.pending_preview_id = None;
       self.preview_raw = None;
       self.preview_raw_notice = None;
+      self.pending_raw = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -742,8 +929,10 @@ impl App {
           self.sync_list_state();
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
+            self.pending_preview_id = None;
             self.preview_raw = None;
             self.preview_raw_notice = None;
+            self.pending_raw = None;
             self.load_preview().await;
           }
         }
@@ -769,8 +958,10 @@ impl App {
         self.selected = 0;
         self.preview = None;
         self.last_preview_id = None;
+        self.pending_preview_id = None;
         self.preview_raw = None;
         self.preview_raw_notice = None;
+        self.pending_raw = None;
         self.sync_list_state();
       }
     }
@@ -858,6 +1049,23 @@ mod tests {
     }
   }
 
+  fn sample_message(id: &str) -> Message {
+    Message {
+      id: id.to_string(),
+      sender: "a@test.com".to_string(),
+      recipients: vec!["b@test.com".to_string()],
+      subject: Some("s".to_string()),
+      text_body: Some("body".to_string()),
+      html_body: None,
+      size: 10,
+      has_attachments: false,
+      is_read: false,
+      is_starred: false,
+      tags: vec![],
+      created_at: "2026-04-21T00:00:00Z".to_string(),
+    }
+  }
+
   async fn spawn_recording_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -887,13 +1095,23 @@ mod tests {
   }
 
   fn app_with_messages(count: usize) -> App {
-    let mut app = App::new("http://127.0.0.1:1".into(), "ws://127.0.0.1:1/ws".into());
+    let (_events, event_tx) = event::channel();
+    let mut app = App::new(
+      "http://127.0.0.1:1".into(),
+      "ws://127.0.0.1:1".into(),
+      event_tx,
+    );
     app.messages = (0..count)
       .map(|i| sample_summary(&format!("id-{i}"), i % 2 == 0))
       .collect();
     app.total = count as i64;
     app.sync_list_state();
     app
+  }
+
+  async fn recv_and_dispatch(app: &mut App, events: &mut event::EventHandler) {
+    let event = events.next().await.expect("event channel closed");
+    app.dispatch(event).await;
   }
 
   #[test]
@@ -996,7 +1214,8 @@ mod tests {
   #[tokio::test]
   async fn ws_reconnect_refetches_current_view() {
     let (base_url, requests) = spawn_recording_server().await;
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    let (mut events, event_tx) = event::channel();
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
     app.offset = 50;
     app.search_query = "invoice".into();
     app.selected = 3;
@@ -1009,6 +1228,7 @@ mod tests {
 
     app.handle_ws_status(false).await;
     app.handle_ws_status(true).await;
+    recv_and_dispatch(&mut app, &mut events).await;
 
     let requests = requests.lock().unwrap().clone();
     assert_eq!(
@@ -1106,7 +1326,8 @@ mod tests {
   #[tokio::test]
   async fn stale_search_view_refetches_only_after_throttle() {
     let (base_url, requests) = spawn_recording_server().await;
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    let (mut events, event_tx) = event::channel();
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
     app.search_query = "invoice".into();
     app.view_stale = true;
     app.last_fetch_at = Some(Instant::now());
@@ -1119,6 +1340,7 @@ mod tests {
 
     app.last_fetch_at = Instant::now().checked_sub(STALE_VIEW_REFETCH_INTERVAL);
     app.refetch_if_stale().await;
+    recv_and_dispatch(&mut app, &mut events).await;
 
     assert_eq!(
       requests.lock().unwrap().clone(),
@@ -1129,7 +1351,8 @@ mod tests {
   #[tokio::test]
   async fn fresh_view_does_not_refetch_on_tick() {
     let (base_url, requests) = spawn_recording_server().await;
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    let (_events, event_tx) = event::channel();
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
 
     app.refetch_if_stale().await;
 
@@ -1139,10 +1362,12 @@ mod tests {
   #[tokio::test]
   async fn show_raw_requests_a_capped_preview() {
     let (base_url, requests) = spawn_recording_server().await;
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    let (mut events, event_tx) = event::channel();
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
     app.messages = vec![sample_summary("id-0", true)];
 
     app.show_raw().await;
+    recv_and_dispatch(&mut app, &mut events).await;
 
     assert_eq!(
       requests.lock().unwrap().clone(),
@@ -1201,22 +1426,227 @@ mod tests {
 
     match rx.recv().await.unwrap() {
       Event::WsMessage(text) => assert_eq!(text, "first"),
-      _ => panic!("expected a WsMessage event"),
+      other => panic!("unexpected event: {other:?}"),
     }
   }
 
   #[tokio::test]
   async fn ws_frame_forwarding_drops_the_frame_when_the_queue_stays_full() {
-    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    let (tx, rx) = mpsc::channel::<Event>(1);
     tx.try_send(Event::Tick).unwrap();
 
     forward_ws_frame(&tx, "dropped".into());
 
+    let mut rx = rx;
     let mut remaining = Vec::new();
     while let Ok(event) = rx.try_recv() {
       remaining.push(event);
     }
     assert_eq!(remaining.len(), 1);
     assert!(matches!(remaining[0], Event::Tick));
+  }
+
+  #[tokio::test]
+  async fn stale_fetch_result_is_discarded_after_a_newer_fetch_starts() {
+    let mut app = app_with_messages(1);
+    app.fetch_generation = 5;
+    app.loading = true;
+
+    let stale = ListResponse {
+      messages: vec![sample_summary("stale", false)],
+      total: 999,
+    };
+    app
+      .dispatch(Event::MessagesFetched {
+        generation: 4,
+        result: Ok(stale),
+      })
+      .await;
+
+    assert_eq!(app.total, 1);
+    assert_eq!(app.messages.len(), 1);
+    assert!(app.loading, "the newer, still in-flight fetch owns loading");
+  }
+
+  #[tokio::test]
+  async fn matching_generation_fetch_result_updates_state() {
+    let mut app = app_with_messages(0);
+    app.fetch_generation = 1;
+    app.loading = true;
+
+    let resp = ListResponse {
+      messages: vec![sample_summary("id-9", true)],
+      total: 1,
+    };
+    app
+      .dispatch(Event::MessagesFetched {
+        generation: 1,
+        result: Ok(resp),
+      })
+      .await;
+
+    assert_eq!(app.total, 1);
+    assert_eq!(app.messages[0].id, "id-9");
+    assert!(!app.loading);
+  }
+
+  #[tokio::test]
+  async fn stale_preview_result_is_discarded_after_selection_changes() {
+    let mut app = app_with_messages(2);
+    app.pending_preview_id = Some("id-1".into());
+
+    app
+      .dispatch(Event::PreviewLoaded {
+        id: "id-0".into(),
+        was_unread: false,
+        result: Ok(sample_message("id-0")),
+      })
+      .await;
+
+    assert!(app.preview.is_none());
+    assert_eq!(app.last_preview_id, None);
+    assert_eq!(app.pending_preview_id.as_deref(), Some("id-1"));
+  }
+
+  #[tokio::test]
+  async fn matching_preview_result_updates_state_and_marks_read() {
+    let (mut events, event_tx) = event::channel();
+    let mut app = App::new(
+      "http://127.0.0.1:1".into(),
+      "ws://127.0.0.1:1".into(),
+      event_tx,
+    );
+    app.messages = vec![sample_summary("id-0", false)];
+    app.pending_preview_id = Some("id-0".into());
+    app.preview_loading = true;
+
+    app
+      .dispatch(Event::PreviewLoaded {
+        id: "id-0".into(),
+        was_unread: true,
+        result: Ok(sample_message("id-0")),
+      })
+      .await;
+
+    assert!(!app.preview_loading);
+    assert_eq!(app.pending_preview_id, None);
+    assert_eq!(app.last_preview_id.as_deref(), Some("id-0"));
+    assert!(app.preview.is_some());
+
+    let patch_event = events.next().await.expect("patch task must report back");
+    match patch_event {
+      Event::Patched {
+        id,
+        is_read,
+        is_starred,
+        ..
+      } => {
+        assert_eq!(id, "id-0");
+        assert_eq!(is_read, Some(true));
+        assert_eq!(is_starred, None);
+      }
+      other => panic!("unexpected event: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn patched_event_updates_the_matching_message() {
+    let mut app = app_with_messages(2);
+
+    app.handle_patched("id-0".into(), Some(true), Some(true), Ok(()));
+
+    let msg = app.messages.iter().find(|m| m.id == "id-0").unwrap();
+    assert!(msg.is_read);
+    assert!(msg.is_starred);
+  }
+
+  #[test]
+  fn patched_event_is_ignored_on_failure() {
+    let mut app = app_with_messages(2);
+    let before = app.messages[0].is_starred;
+
+    app.handle_patched("id-0".into(), None, Some(true), Err("boom".into()));
+
+    assert_eq!(app.messages[0].is_starred, before);
+  }
+
+  #[tokio::test]
+  async fn deleted_event_removes_the_message_and_clamps_selection() {
+    let mut app = app_with_messages(2);
+    app.selected = 1;
+
+    app.handle_deleted("id-1".into(), Ok(())).await;
+
+    assert_eq!(app.messages.len(), 1);
+    assert_eq!(app.selected, 0);
+    assert!(app.messages.iter().all(|m| m.id != "id-1"));
+  }
+
+  #[tokio::test]
+  async fn all_deleted_event_clears_the_list() {
+    let mut app = app_with_messages(3);
+
+    app.handle_all_deleted(Ok(())).await;
+
+    assert!(app.messages.is_empty());
+    assert_eq!(app.selected, 0);
+  }
+
+  #[tokio::test]
+  async fn raw_loaded_event_populates_the_preview_tab_when_current() {
+    let mut app = app_with_messages(1);
+    app.pending_raw = Some((RawTarget::Preview, "id-0".into()));
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::Preview,
+        id: "id-0".into(),
+        size: 10,
+        result: Ok("raw body".into()),
+      })
+      .await;
+
+    assert_eq!(app.preview_raw.as_deref(), Some("raw body"));
+    assert_eq!(app.pending_raw, None);
+    assert_eq!(app.mode, Mode::Normal);
+  }
+
+  #[tokio::test]
+  async fn raw_loaded_event_populates_the_full_view_when_current() {
+    let mut app = app_with_messages(1);
+    app.pending_raw = Some((RawTarget::FullView, "id-0".into()));
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::FullView,
+        id: "id-0".into(),
+        size: 10,
+        result: Ok("raw body".into()),
+      })
+      .await;
+
+    assert_eq!(app.raw_content.as_deref(), Some("raw body"));
+    assert_eq!(app.mode, Mode::RawView);
+  }
+
+  #[tokio::test]
+  async fn raw_loaded_event_is_discarded_when_superseded() {
+    let mut app = app_with_messages(1);
+    app.pending_raw = Some((RawTarget::Preview, "id-1".into()));
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::Preview,
+        id: "id-0".into(),
+        size: 10,
+        result: Ok("stale raw".into()),
+      })
+      .await;
+
+    assert_eq!(app.preview_raw, None);
+    assert_eq!(
+      app.pending_raw.as_ref().map(|(_, id)| id.as_str()),
+      Some("id-1")
+    );
   }
 }
