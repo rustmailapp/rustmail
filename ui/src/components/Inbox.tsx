@@ -11,7 +11,7 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
   visibleMessages,
-  total,
+  listSize,
   selectedId,
   selectMessage,
   starMessage,
@@ -53,18 +53,6 @@ const SELECTION_KEYS: Record<string, SelectionTarget | undefined> = {
 
 function optionId(messageId: string): string {
   return `msg-option-${messageId}`;
-}
-
-/**
- * Size of the set a row belongs to, for `aria-setsize`.
- *
- * The inbox loads a page at a time, so the server total is what a reader wants
- * to hear — "message 40 of 600", not a count of what happens to be fetched.
- * Client-side filters narrow the set below that total, and then only the
- * filtered length is meaningful.
- */
-function setSize(): number {
-  return hasActiveFilters() ? filteredMessages().length : total();
 }
 
 export default function Inbox() {
@@ -254,7 +242,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
       id={optionId(msg().id)}
       aria-selected={isSelected()}
       aria-posinset={props.index + 1}
-      aria-setsize={setSize()}
+      aria-setsize={listSize()}
       data-id={msg().id}
       onClick={() => selectMessage(msg())}
       class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${

@@ -1,3 +1,4 @@
+import { createEffect, createRoot, on } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageSummary } from "../lib/types";
 import { dismissNotice, notices } from "./notices";
@@ -52,6 +53,9 @@ const {
   setSearch,
   setSelectedId,
   toggleFilter,
+  toggleTagFilter,
+  allTags,
+  listSize,
   total,
   undoDelete,
   undoableId,
@@ -125,6 +129,11 @@ beforeEach(async () => {
   await seed([]);
 });
 
+afterEach(() => {
+  disconnectWebSocket();
+  vi.unstubAllGlobals();
+});
+
 describe("store reactivity", () => {
   it("recomputes the filtered list when messages land", async () => {
     expect(filteredMessages()).toEqual([]);
@@ -153,6 +162,37 @@ describe("paging by cursor", () => {
       "id-2",
       "id-3",
     ]);
+  });
+
+  it("does not page on from a cursor read under another search", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockClear();
+    setSearch("invoice");
+
+    await loadMore();
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not page on from a cursor read under other filters", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockClear();
+    const dispose = createRoot((dispose) => {
+      createEffect(
+        on(filteredMessages, () => void loadMore(), { defer: true }),
+      );
+      return dispose;
+    });
+
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    dispose();
+
+    for (const [query] of listMessages.mock.calls) {
+      expect(query).not.toHaveProperty("before");
+    }
   });
 
   it("stops paging once the server has no older page", async () => {
@@ -371,6 +411,153 @@ describe("selectMessage", () => {
     );
 
     expect(selectedId()).toBe("id-7");
+  });
+});
+
+describe("filtering on the server", () => {
+  const STARRED_ONLY = {
+    starred: true,
+    unread: false,
+    attachments: false,
+    tags: [],
+  };
+
+  it("asks the server for the starred messages in one read", async () => {
+    await seed(range(3));
+    listMessages.mockClear();
+    listMessages.mockResolvedValue(page([message(7, { is_starred: true })]));
+
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(filteredMessages()).toHaveLength(1));
+
+    expect(listMessages).toHaveBeenCalledExactlyOnceWith(
+      { limit: PAGE_SIZE, filters: STARRED_ONLY },
+      expect.any(AbortSignal),
+    );
+    expect(total()).toBe(1);
+  });
+
+  it("reads the next page under the same filters", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(
+      page([message(0, { is_starred: true })], 2, "id-0"),
+    );
+    await fetchMessages();
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith({
+      limit: PAGE_SIZE,
+      before: "id-0",
+      filters: STARRED_ONLY,
+    });
+  });
+
+  it("does not read again when clearing filters that were never set", async () => {
+    listMessages.mockClear();
+
+    clearFilters();
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("says so when the filtered read fails", async () => {
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    toggleFilter("unread");
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not apply the filters.",
+      ]),
+    );
+  });
+
+  it("counts a message out when a flag change stops it matching", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(
+      page([
+        message(0, { is_starred: true }),
+        message(1, { is_starred: true }),
+      ]),
+    );
+    await fetchMessages();
+    connectAndOpen();
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-0", is_starred: false },
+      }),
+    );
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+  });
+
+  it("keeps offering the inbox's tags while filtering by one of them", async () => {
+    await seed([
+      message(0, { tags: ["alpha"] }),
+      message(1, { tags: ["beta"] }),
+    ]);
+    listMessages.mockResolvedValue(page([message(0, { tags: ["alpha"] })]));
+
+    toggleTagFilter("alpha");
+    await vi.waitFor(() => expect(filteredMessages()).toHaveLength(1));
+
+    expect(allTags()).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("listSize", () => {
+  it("counts the selected row the unread filter keeps after it is read", async () => {
+    toggleFilter("unread");
+    listMessages.mockResolvedValue(page([message(0), message(1)]));
+    await fetchMessages();
+    connectAndOpen();
+    setSelectedId("id-0");
+
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: "id-0", is_read: true },
+      }),
+    );
+
+    expect(total()).toBe(1);
+    expect(listSize()).toBe(2);
+  });
+});
+
+describe("live arrivals under filters", () => {
+  beforeEach(() => {
+    connectAndOpen();
+  });
+
+  function arrival(over: Partial<MessageSummary>): string {
+    return JSON.stringify({ type: "message:new", data: message(9, over) });
+  }
+
+  it("leaves out an arrival the filters exclude, and its count", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+
+    deliver(arrival({}));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0"]);
+    expect(total()).toBe(1);
+  });
+
+  it("adds an arrival the filters match", async () => {
+    toggleFilter("unread");
+    listMessages.mockResolvedValue(page([message(0)]));
+    await fetchMessages();
+
+    deliver(arrival({}));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-9", "id-0"]);
+    expect(total()).toBe(2);
   });
 });
 
@@ -613,6 +800,15 @@ class FakeSocket {
   }
 
   close(): void {}
+}
+
+/** Connects the store to a fake socket and opens it, as the server would. */
+function connectAndOpen(): void {
+  FakeSocket.last = null;
+  vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+  connectWebSocket();
+  openSocket();
 }
 
 function deliver(frame: unknown): void {

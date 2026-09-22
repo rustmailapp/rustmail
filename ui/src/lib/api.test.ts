@@ -275,6 +275,37 @@ describe("list reads", () => {
     expect(requested().searchParams.has("offset")).toBe(false);
   });
 
+  it("sends each active filter, and every selected tag", async () => {
+    fetchMock.mockResolvedValue(Response.json(listBody()));
+
+    await listMessages({
+      limit: 100,
+      filters: {
+        starred: true,
+        unread: true,
+        attachments: true,
+        tags: ["alpha", "beta"],
+      },
+    });
+
+    const params = requested().searchParams;
+    expect(params.get("starred")).toBe("true");
+    expect(params.get("unread")).toBe("true");
+    expect(params.get("has_attachments")).toBe("true");
+    expect(params.getAll("tag")).toEqual(["alpha", "beta"]);
+  });
+
+  it("leaves inactive filters out of the request", async () => {
+    fetchMock.mockResolvedValue(Response.json(listBody()));
+
+    await listMessages({
+      limit: 100,
+      filters: { starred: false, unread: false, attachments: false, tags: [] },
+    });
+
+    expect([...requested().searchParams.keys()]).toEqual(["limit"]);
+  });
+
   it("returns the cursor the server hands back", async () => {
     fetchMock.mockResolvedValue(Response.json(listBody()));
 

@@ -3,6 +3,7 @@ import * as schema from "./schema";
 import type {
   Attachment,
   AuthResults,
+  FilterState,
   ListResponse,
   Message,
   MessageHeader,
@@ -183,6 +184,15 @@ export interface ListQuery {
   q?: string;
   /** The `next_cursor` of the page before: read the messages older than it. */
   before?: string;
+  /** Narrows the read, and its `total`, to the messages these match. */
+  filters?: FilterState;
+}
+
+function setFilterParams(params: URLSearchParams, filters: FilterState): void {
+  if (filters.starred) params.set("starred", "true");
+  if (filters.unread) params.set("unread", "true");
+  if (filters.attachments) params.set("has_attachments", "true");
+  for (const tag of filters.tags) params.append("tag", tag);
 }
 
 export async function listMessages(
@@ -192,6 +202,7 @@ export async function listMessages(
   const params = new URLSearchParams({ limit: String(query.limit) });
   if (query.q) params.set("q", query.q);
   if (query.before !== undefined) params.set("before", query.before);
+  if (query.filters) setFilterParams(params, query.filters);
   return fetchJson(
     "GET /messages",
     `${BASE}/messages?${params}`,
