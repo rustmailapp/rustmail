@@ -1905,6 +1905,37 @@ async fn a_malformed_filter_value_is_a_bad_request() {
   assert!(json_body(response).await["error"].is_string());
 }
 
+#[tokio::test]
+async fn before_combines_with_starred_unread_and_tag() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 6).await;
+  for id in &ids {
+    tag(&repo, id, "a").await;
+  }
+  for id in [&ids[0], &ids[1], &ids[2], &ids[4], &ids[5]] {
+    star(&repo, id).await;
+  }
+  tag(&repo, &ids[2], "b").await;
+  repo
+    .update_message(&ids[4], Some(true), None, None)
+    .await
+    .unwrap();
+
+  let body = json_body(
+    get(
+      app,
+      &format!(
+        "/api/v1/messages?before={}&starred=true&unread=true&tag=a",
+        ids[5]
+      ),
+    )
+    .await,
+  )
+  .await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone(), ids[0].clone()]);
+}
+
 const COMPRESSIBLE_ATTACHMENT_BYTES: usize = 4096;
 
 fn email_with_compressible_attachment() -> Vec<u8> {
@@ -2065,4 +2096,39 @@ async fn a_stale_etag_gets_the_whole_ui_shell() {
     response.headers()["content-type"],
     "text/html; charset=utf-8"
   );
+}
+
+async fn ui_shell_etag(app: axum::Router) -> String {
+  let response = get(app, "/").await;
+  response.headers()["etag"].to_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_starred_if_none_match_revalidates_the_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get_with_if_none_match(app, "/", "*").await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn a_later_entry_in_an_if_none_match_list_revalidates_the_ui_shell() {
+  let (app, _, _) = setup().await;
+  let etag = ui_shell_etag(app.clone()).await;
+
+  let response = get_with_if_none_match(app, "/", &format!("\"stale\", {etag}")).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+}
+
+#[tokio::test]
+async fn a_strong_if_none_match_matches_the_weak_ui_shell_etag() {
+  let (app, _, _) = setup().await;
+  let etag = ui_shell_etag(app.clone()).await;
+  let strong = etag.trim_start_matches("W/");
+
+  let response = get_with_if_none_match(app, "/", strong).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
 }
