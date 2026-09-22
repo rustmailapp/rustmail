@@ -9,9 +9,10 @@ use ratatui::prelude::*;
 use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
 
-use crate::api::{ApiClient, Message, MessageSummary, WsEvent};
+use crate::api::{ApiClient, Message, MessageSummary, RAW_PREVIEW_LIMIT_BYTES, WsEvent};
 use crate::event::{self, Event};
 use crate::ui;
+use crate::ui::util::format_size;
 
 const STALE_VIEW_REFETCH_INTERVAL: Duration = Duration::from_secs(2);
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -61,9 +62,11 @@ pub struct App {
   pub preview_scrollbar_state: ScrollbarState,
   pub preview_tab: PreviewTab,
   pub preview_raw: Option<String>,
+  pub preview_raw_notice: Option<String>,
   last_preview_id: Option<String>,
 
   pub raw_content: Option<String>,
+  pub raw_notice: Option<String>,
   pub raw_scroll: u16,
 
   pub search_query: String,
@@ -113,9 +116,11 @@ impl App {
       preview_scrollbar_state: ScrollbarState::default(),
       preview_tab: PreviewTab::Text,
       preview_raw: None,
+      preview_raw_notice: None,
       last_preview_id: None,
 
       raw_content: None,
+      raw_notice: None,
       raw_scroll: 0,
 
       search_query: String::new(),
@@ -296,8 +301,12 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    match self.api.get_raw_message(&id).await {
-      Ok(raw) => self.preview_raw = Some(raw),
+    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
+    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
+      Ok(raw) => {
+        self.preview_raw = Some(raw);
+        self.preview_raw_notice = notice;
+      }
       Err(e) => self.set_error(format!("Failed to load raw: {}", e)),
     }
   }
@@ -339,6 +348,7 @@ impl App {
       KeyCode::Char('q') | KeyCode::Esc => {
         self.mode = Mode::Normal;
         self.raw_content = None;
+        self.raw_notice = None;
         self.raw_scroll = 0;
       }
       KeyCode::Char('j') | KeyCode::Down => {
@@ -638,9 +648,11 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    match self.api.get_raw_message(&id).await {
+    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
+    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
       Ok(raw) => {
         self.raw_content = Some(raw);
+        self.raw_notice = notice;
         self.raw_scroll = 0;
         self.mode = Mode::RawView;
       }
@@ -755,6 +767,19 @@ impl App {
   pub fn spinner_char(&self) -> char {
     SPINNER_FRAMES[self.spinner_frame]
   }
+}
+
+/// Returns the banner shown above a raw preview that was cut at
+/// [`RAW_PREVIEW_LIMIT_BYTES`], or `None` when the whole message fits.
+fn raw_truncation_notice(size: i64, export_url: &str) -> Option<String> {
+  (size > RAW_PREVIEW_LIMIT_BYTES).then(|| {
+    format!(
+      "Showing the first {} of {}. Full source: {}",
+      format_size(RAW_PREVIEW_LIMIT_BYTES),
+      format_size(size),
+      export_url
+    )
+  })
 }
 
 async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> {
@@ -1074,5 +1099,39 @@ mod tests {
     app.refetch_if_stale().await;
 
     assert!(requests.lock().unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn show_raw_requests_a_capped_preview() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    app.messages = vec![sample_summary("id-0", true)];
+
+    app.show_raw().await;
+
+    assert_eq!(
+      requests.lock().unwrap().clone(),
+      vec![format!(
+        "GET /api/v1/messages/id-0/raw?limit={RAW_PREVIEW_LIMIT_BYTES} HTTP/1.1"
+      )]
+    );
+  }
+
+  #[test]
+  fn raw_notice_is_absent_when_message_fits_the_preview() {
+    assert_eq!(
+      raw_truncation_notice(RAW_PREVIEW_LIMIT_BYTES, "http://x/export"),
+      None
+    );
+  }
+
+  #[test]
+  fn raw_notice_names_both_sizes_and_the_export_url() {
+    let notice = raw_truncation_notice(25 * 1024 * 1024, "http://x/api/v1/messages/id-0/export")
+      .expect("oversized message must carry a notice");
+    assert_eq!(
+      notice,
+      "Showing the first 128.0K of 25.0M. Full source: http://x/api/v1/messages/id-0/export"
+    );
   }
 }
