@@ -31,7 +31,9 @@ fn body_of(data: Cow<'static, [u8]>) -> Bytes {
 ///
 /// Unmatched API paths are excluded from that fallback: answering them with
 /// the SPA shell hands an API client a `200` full of HTML, which it cannot
-/// tell apart from a real response.
+/// tell apart from a real response. So are unmatched hashed assets: a tab
+/// left open across an upgrade asks for the old build's files, and a `404`
+/// fails cleanly where HTML served as a script is a MIME error.
 pub async fn static_handler(uri: Uri) -> Response {
   let path = uri.path().trim_start_matches('/');
 
@@ -60,6 +62,8 @@ pub async fn static_handler(uri: Uri) -> Response {
       body_of(file.data),
     )
       .into_response()
+  } else if path.starts_with(HASHED_ASSET_PREFIX) {
+    (StatusCode::NOT_FOUND, "Not found").into_response()
   } else if let Some(index) = Assets::get("index.html") {
     (
       StatusCode::OK,

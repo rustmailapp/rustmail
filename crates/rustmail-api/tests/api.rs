@@ -1985,3 +1985,25 @@ async fn json_responses_are_still_gzipped() {
 
   assert_eq!(response.headers()["content-encoding"], "gzip");
 }
+
+#[tokio::test]
+async fn a_missing_hashed_asset_is_not_found() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/assets/index-0000dead.js").await;
+
+  assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_unknown_client_route_serves_the_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/messages/some-client-route").await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "text/html; charset=utf-8"
+  );
+}
