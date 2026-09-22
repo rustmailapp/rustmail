@@ -187,6 +187,8 @@ async fn read_banner(stream: &mut BufReader<TcpStream>) -> String {
   read_smtp_response_line(stream).await
 }
 
+/// Sends one message and quits without requiring the QUIT reply, because
+/// `rustmail assert` exits once its condition holds and may reset the socket first.
 async fn smtp_send(addr: std::net::SocketAddr, from: &str, to: &str, subject: &str, body: &str) {
   let mut stream = TcpStream::connect(addr).await.unwrap();
   let mut buf = vec![0u8; 4096];
@@ -218,7 +220,7 @@ async fn smtp_send(addr: std::net::SocketAddr, from: &str, to: &str, subject: &s
   let _ = stream.read(&mut buf).await.unwrap();
 
   stream.write_all(b"QUIT\r\n").await.unwrap();
-  let _ = stream.read(&mut buf).await.unwrap();
+  let _ = stream.read(&mut buf).await;
 }
 
 async fn wait_for_count(repo: &MessageRepository, expected: i64) {
