@@ -1,8 +1,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mail_parser::{MessageParser, MimeHeaders, PartType};
-use sqlx::SqlitePool;
+use sqlx::{SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::debug;
@@ -10,6 +9,7 @@ use ulid::Ulid;
 
 use crate::error::StorageError;
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
+use crate::prepared::PreparedMessage;
 use crate::schema::BUSY_TIMEOUT;
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
@@ -127,129 +127,33 @@ impl MessageRepository {
     recipients: &[String],
     raw: &[u8],
   ) -> Result<MessageSummary, StorageError> {
-    retry_on_lock(|| self.insert_once(sender, recipients, raw)).await
+    let message = PreparedMessage::parse(sender.to_string(), recipients, raw.to_vec());
+    self.insert_prepared(&message).await
   }
 
-  async fn insert_once(
+  /// Stores a message parsed ahead of time by [`PreparedMessage::parse`].
+  ///
+  /// A contended write is retried without parsing the message again.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if any insert fails.
+  pub async fn insert_prepared(
     &self,
-    sender: &str,
-    recipients: &[String],
-    raw: &[u8],
+    message: &PreparedMessage,
   ) -> Result<MessageSummary, StorageError> {
-    let id = Ulid::new().to_string();
-    let recipients_json = serde_json::to_string(recipients).unwrap_or_default();
-    let size = raw.len() as i64;
-    let now = OffsetDateTime::now_utc()
-      .format(ISO8601_FMT)
-      .unwrap_or_default();
+    retry_on_lock(|| self.insert_prepared_once(message)).await
+  }
 
-    let parsed = MessageParser::default().parse(raw);
-
-    let (subject, text_body, html_body, has_attachments) = match &parsed {
-      Some(msg) => (
-        msg.subject().map(String::from),
-        msg.body_text(0).map(|s| s.into_owned()),
-        msg.body_html(0).map(|s| s.into_owned()),
-        msg.attachment_count() > 0,
-      ),
-      None => (None, None, None, false),
-    };
-
+  async fn insert_prepared_once(
+    &self,
+    message: &PreparedMessage,
+  ) -> Result<MessageSummary, StorageError> {
     let mut txn = self.pool.begin().await?;
-
-    sqlx::query(
-      r#"
-      INSERT INTO messages (id, sender, recipients, subject, text_body, html_body, raw, size, has_attachments, is_read, is_starred, tags, created_at)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '[]', ?10)
-      "#,
-    )
-    .bind(&id)
-    .bind(sender)
-    .bind(&recipients_json)
-    .bind(&subject)
-    .bind(&text_body)
-    .bind(&html_body)
-    .bind(raw)
-    .bind(size)
-    .bind(has_attachments)
-    .bind(&now)
-    .execute(&mut *txn)
-    .await?;
-
-    sqlx::query(
-      "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) SELECT rowid, ?2, ?3, ?4, ?5 FROM messages WHERE id = ?1",
-    )
-    .bind(&id)
-    .bind(&subject)
-    .bind(&text_body)
-    .bind(sender)
-    .bind(&recipients_json)
-    .execute(&mut *txn)
-    .await?;
-
-    if let Some(parsed_msg) = &parsed {
-      let attachment_ids: std::collections::HashSet<u32> =
-        parsed_msg.attachments.iter().copied().collect();
-
-      for (idx, part) in parsed_msg.parts.iter().enumerate() {
-        let is_attachment = attachment_ids.contains(&(idx as u32));
-        let cid = part.content_id().map(String::from);
-        let is_inline_binary = matches!(part.body, PartType::InlineBinary(_));
-
-        if !is_attachment && !is_inline_binary {
-          continue;
-        }
-
-        let content = part.contents();
-        if content.is_empty() {
-          continue;
-        }
-
-        let att_id = Ulid::new().to_string();
-        let filename = part.attachment_name().map(String::from);
-        let content_type =
-          part
-            .content_type()
-            .map(|ct: &mail_parser::ContentType| match ct.subtype() {
-              Some(subtype) => format!("{}/{}", ct.ctype(), subtype),
-              None => ct.ctype().to_string(),
-            });
-        let att_size = content.len() as i64;
-
-        sqlx::query(
-          r#"
-          INSERT INTO attachments (id, message_id, filename, content_type, content_id, size, content)
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-          "#,
-        )
-        .bind(&att_id)
-        .bind(&id)
-        .bind(&filename)
-        .bind(&content_type)
-        .bind(&cid)
-        .bind(att_size)
-        .bind(content)
-        .execute(&mut *txn)
-        .await?;
-      }
-    }
-
+    let summary = insert_in(&mut txn, message).await?;
     txn.commit().await?;
-
-    debug!(id = %id, subject = ?subject, "Message stored");
-
-    Ok(MessageSummary {
-      id,
-      sender: sender.to_string(),
-      recipients: recipients_json,
-      subject,
-      size,
-      has_attachments,
-      is_read: false,
-      is_starred: false,
-      tags: "[]".to_string(),
-      created_at: now,
-    })
+    debug!(id = %summary.id, subject = ?summary.subject, "Message stored");
+    Ok(summary)
   }
 
   /// Lists messages ordered by newest first, with pagination.
@@ -645,6 +549,82 @@ impl MessageRepository {
   }
 }
 
+/// Writes `message` and its index and attachment rows on `conn`.
+///
+/// Mints a fresh id on every call, so a retried or re-batched write can never
+/// collide with a row an earlier attempt committed.
+async fn insert_in(
+  conn: &mut SqliteConnection,
+  message: &PreparedMessage,
+) -> Result<MessageSummary, StorageError> {
+  let id = Ulid::new().to_string();
+  let size = message.raw.len() as i64;
+  let now = OffsetDateTime::now_utc()
+    .format(ISO8601_FMT)
+    .unwrap_or_default();
+
+  sqlx::query(
+    r#"
+    INSERT INTO messages (id, sender, recipients, subject, text_body, html_body, raw, size, has_attachments, is_read, is_starred, tags, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '[]', ?10)
+    "#,
+  )
+  .bind(&id)
+  .bind(&message.sender)
+  .bind(&message.recipients_json)
+  .bind(&message.subject)
+  .bind(&message.text_body)
+  .bind(&message.html_body)
+  .bind(&message.raw)
+  .bind(size)
+  .bind(message.has_attachments)
+  .bind(&now)
+  .execute(&mut *conn)
+  .await?;
+
+  sqlx::query(
+    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) SELECT rowid, ?2, ?3, ?4, ?5 FROM messages WHERE id = ?1",
+  )
+  .bind(&id)
+  .bind(&message.subject)
+  .bind(&message.text_body)
+  .bind(&message.sender)
+  .bind(&message.recipients_json)
+  .execute(&mut *conn)
+  .await?;
+
+  for attachment in &message.attachments {
+    sqlx::query(
+      r#"
+      INSERT INTO attachments (id, message_id, filename, content_type, content_id, size, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      "#,
+    )
+    .bind(Ulid::new().to_string())
+    .bind(&id)
+    .bind(&attachment.filename)
+    .bind(&attachment.content_type)
+    .bind(&attachment.content_id)
+    .bind(attachment.content.len() as i64)
+    .bind(&attachment.content)
+    .execute(&mut *conn)
+    .await?;
+  }
+
+  Ok(MessageSummary {
+    id,
+    sender: message.sender.clone(),
+    recipients: message.recipients_json.clone(),
+    subject: message.subject.clone(),
+    size,
+    has_attachments: message.has_attachments,
+    is_read: false,
+    is_starred: false,
+    tags: "[]".to_string(),
+    created_at: now,
+  })
+}
+
 fn escape_like(s: &str) -> String {
   s.replace('\\', "\\\\")
     .replace('%', "\\%")
@@ -721,6 +701,40 @@ mod tests {
     assert_eq!(msg.id, summary.id);
     assert_eq!(msg.text_body.as_deref(), Some("Hello world"));
     assert_eq!(repo.get_raw(&summary.id).await.unwrap(), raw);
+  }
+
+  #[tokio::test]
+  async fn a_prepared_message_stores_its_attachments() {
+    let repo = test_repo().await;
+    let prepared = PreparedMessage::parse(
+      "sender@test.com".to_string(),
+      &["rcpt@test.com".into()],
+      multipart_email("Prepared"),
+    );
+
+    let summary = repo.insert_prepared(&prepared).await.unwrap();
+
+    assert!(summary.has_attachments);
+    let attachments = repo.get_attachments(&summary.id).await.unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].filename.as_deref(), Some("report.pdf"));
+    assert_eq!(repo.search("Prepared", 10, 0).await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn storing_one_prepared_message_twice_keeps_both_rows() {
+    let repo = test_repo().await;
+    let prepared = PreparedMessage::parse(
+      "a@test.com".to_string(),
+      &["b@test.com".into()],
+      raw_email("Twice", "a@test.com", "b@test.com"),
+    );
+
+    let first = repo.insert_prepared(&prepared).await.unwrap();
+    let second = repo.insert_prepared(&prepared).await.unwrap();
+
+    assert_ne!(first.id, second.id, "every attempt mints its own id");
+    assert_eq!(repo.count().await.unwrap(), 2);
   }
 
   #[tokio::test]

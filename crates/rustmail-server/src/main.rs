@@ -11,8 +11,10 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
-use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
-use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
+use rustmail_smtp::{Delivery, ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig};
+use rustmail_storage::{
+  MessageRepository, MessageSummary, PreparedMessage, format_iso8601, initialize_database,
+};
 
 #[derive(Parser)]
 #[command(
@@ -359,6 +361,8 @@ const FILE_DB_MAX_CONNECTIONS: u32 = 5;
 /// 10 s stop timeout, so the WAL is checkpointed before the container runtime
 /// resorts to `SIGKILL`.
 const SHUTDOWN_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Raw size from which a message is parsed off the async runtime.
+const BLOCKING_PARSE_THRESHOLD_BYTES: usize = 256 * 1024;
 /// How long closing the pool, and with it the final WAL checkpoint, may take.
 const DB_CLOSE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -402,6 +406,23 @@ async fn next_delivery(
   deliveries.recv().await
 }
 
+/// Parses a captured message ahead of its write.
+///
+/// A message at or past [`BLOCKING_PARSE_THRESHOLD_BYTES`] is parsed on the
+/// blocking pool: decoding megabytes of base64 inline would stall a runtime
+/// worker, and with it every SMTP session scheduled there.
+async fn prepare(received: ReceivedMessage) -> Result<PreparedMessage, tokio::task::JoinError> {
+  let ReceivedMessage {
+    sender,
+    recipients,
+    raw,
+  } = received;
+  if raw.len() < BLOCKING_PARSE_THRESHOLD_BYTES {
+    return Ok(PreparedMessage::parse(sender, &recipients, raw));
+  }
+  tokio::task::spawn_blocking(move || PreparedMessage::parse(sender, &recipients, raw)).await
+}
+
 /// Stores a captured message and tells the waiting SMTP session what happened.
 ///
 /// The session holds its reply until this answers, so the acknowledgement goes
@@ -417,10 +438,15 @@ async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<
     );
     return None;
   }
-  match repo
-    .insert(&received.sender, &received.recipients, &received.raw)
-    .await
-  {
+  let message = match prepare(received).await {
+    Ok(message) => message,
+    Err(e) => {
+      ack.rejected();
+      tracing::error!(error = %e, "Refused a message that could not be parsed; the sender was asked to retry");
+      return None;
+    }
+  };
+  match repo.insert_prepared(&message).await {
     Ok(summary) => {
       ack.stored();
       Some(summary)
@@ -944,6 +970,25 @@ mod delivery_tests {
 
     assert!(summary.is_some(), "a healthy store must yield a summary");
     assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
+  }
+
+  #[tokio::test]
+  async fn a_message_parsed_off_the_runtime_is_stored_whole() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+    let mut message = sample();
+    message
+      .raw
+      .extend(std::iter::repeat_n(b'x', BLOCKING_PARSE_THRESHOLD_BYTES));
+    let expected_size = message.raw.len() as i64;
+
+    let (delivery, verdict) = Delivery::new(message);
+    let summary = store_delivery(&repo, delivery).await.unwrap();
+
+    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
+    assert_eq!(summary.size, expected_size);
+    assert_eq!(summary.subject.as_deref(), Some("Hello"));
   }
 
   /// A write the store will not take must reach the sender as a refusal.

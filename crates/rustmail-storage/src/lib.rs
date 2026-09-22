@@ -27,10 +27,12 @@
 
 mod error;
 mod models;
+mod prepared;
 mod repo;
 mod schema;
 
 pub use error::StorageError;
 pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
+pub use prepared::PreparedMessage;
 pub use repo::{MessageRepository, format_iso8601};
 pub use schema::{connect_options, initialize_database};
