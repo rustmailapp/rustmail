@@ -56,6 +56,8 @@ pub enum WsEvent {
   MessagesClear,
 }
 
+pub const RAW_PREVIEW_LIMIT_BYTES: i64 = 128 * 1024;
+
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
@@ -144,11 +146,16 @@ impl ApiClient {
     Ok(())
   }
 
-  pub async fn get_raw_message(&self, id: &str) -> Result<String> {
+  pub fn export_url(&self, id: &str) -> String {
+    format!("{}/api/v1/messages/{}/export", self.base_url, id)
+  }
+
+  pub async fn get_raw_message(&self, id: &str, limit: i64) -> Result<String> {
     let url = format!("{}/api/v1/messages/{}/raw", self.base_url, id);
     let resp = self
       .client
       .get(&url)
+      .query(&[("limit", limit.to_string())])
       .send()
       .await?
       .error_for_status()?

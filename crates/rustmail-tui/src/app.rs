@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use ratatui::DefaultTerminal;
@@ -9,10 +9,12 @@ use ratatui::prelude::*;
 use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
 
-use crate::api::{ApiClient, Message, MessageSummary, WsEvent};
+use crate::api::{ApiClient, Message, MessageSummary, RAW_PREVIEW_LIMIT_BYTES, WsEvent};
 use crate::event::{self, Event};
 use crate::ui;
+use crate::ui::util::format_size;
 
+const STALE_VIEW_REFETCH_INTERVAL: Duration = Duration::from_secs(2);
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,9 +62,11 @@ pub struct App {
   pub preview_scrollbar_state: ScrollbarState,
   pub preview_tab: PreviewTab,
   pub preview_raw: Option<String>,
+  pub preview_raw_notice: Option<String>,
   last_preview_id: Option<String>,
 
   pub raw_content: Option<String>,
+  pub raw_notice: Option<String>,
   pub raw_scroll: u16,
 
   pub search_query: String,
@@ -73,8 +77,11 @@ pub struct App {
   pub error: Option<String>,
   error_ticks: u16,
   pub loading: bool,
+  view_stale: bool,
+  last_fetch_at: Option<Instant>,
 
   pub ws_connected: bool,
+  ws_ever_connected: bool,
   pub spinner_frame: usize,
 
   pub list_area: Rect,
@@ -109,9 +116,11 @@ impl App {
       preview_scrollbar_state: ScrollbarState::default(),
       preview_tab: PreviewTab::Text,
       preview_raw: None,
+      preview_raw_notice: None,
       last_preview_id: None,
 
       raw_content: None,
+      raw_notice: None,
       raw_scroll: 0,
 
       search_query: String::new(),
@@ -122,8 +131,11 @@ impl App {
       error: None,
       error_ticks: 0,
       loading: false,
+      view_stale: false,
+      last_fetch_at: None,
 
       ws_connected: false,
+      ws_ever_connected: false,
       spinner_frame: 0,
 
       list_area: Rect::default(),
@@ -147,9 +159,12 @@ impl App {
         Event::Key(key) => self.handle_key(key).await,
         Event::Mouse(mouse) => self.handle_mouse(mouse).await,
         Event::Resize => {}
-        Event::Tick => self.on_tick(),
+        Event::Tick => {
+          self.on_tick();
+          self.refetch_if_stale().await;
+        }
         Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
-        Event::WsStatus(connected) => self.ws_connected = connected,
+        Event::WsStatus(connected) => self.handle_ws_status(connected).await,
       }
     }
 
@@ -169,6 +184,15 @@ impl App {
         delay = (delay * 2).min(Duration::from_secs(30));
       }
     });
+  }
+
+  async fn handle_ws_status(&mut self, connected: bool) {
+    let reconnected = connected && !self.ws_connected && self.ws_ever_connected;
+    self.ws_connected = connected;
+    self.ws_ever_connected |= connected;
+    if reconnected {
+      self.fetch_messages().await;
+    }
   }
 
   async fn handle_key(&mut self, key: KeyEvent) {
@@ -277,8 +301,12 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    match self.api.get_raw_message(&id).await {
-      Ok(raw) => self.preview_raw = Some(raw),
+    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
+    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
+      Ok(raw) => {
+        self.preview_raw = Some(raw);
+        self.preview_raw_notice = notice;
+      }
       Err(e) => self.set_error(format!("Failed to load raw: {}", e)),
     }
   }
@@ -320,6 +348,7 @@ impl App {
       KeyCode::Char('q') | KeyCode::Esc => {
         self.mode = Mode::Normal;
         self.raw_content = None;
+        self.raw_notice = None;
         self.raw_scroll = 0;
       }
       KeyCode::Char('j') | KeyCode::Down => {
@@ -433,6 +462,15 @@ impl App {
     }
   }
 
+  async fn refetch_if_stale(&mut self) {
+    let throttle_elapsed = self
+      .last_fetch_at
+      .is_none_or(|at| at.elapsed() >= STALE_VIEW_REFETCH_INTERVAL);
+    if self.view_stale && throttle_elapsed {
+      self.fetch_messages().await;
+    }
+  }
+
   fn set_error(&mut self, msg: String) {
     self.error = Some(msg);
     self.error_ticks = 0;
@@ -474,6 +512,7 @@ impl App {
 
   pub async fn fetch_messages(&mut self) {
     self.loading = true;
+    self.last_fetch_at = Some(Instant::now());
     let query = if self.search_query.is_empty() {
       None
     } else {
@@ -488,6 +527,7 @@ impl App {
       Ok(resp) => {
         self.messages = resp.messages;
         self.total = resp.total;
+        self.view_stale = false;
         self.error = None;
         self.error_ticks = 0;
         if self.selected >= self.messages.len() && !self.messages.is_empty() {
@@ -508,6 +548,7 @@ impl App {
       self.preview = None;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       return;
     };
 
@@ -520,6 +561,7 @@ impl App {
     self.preview_loading = true;
     self.preview_scroll = 0;
     self.preview_raw = None;
+    self.preview_raw_notice = None;
     self.preview_tab = PreviewTab::Text;
 
     match self.api.get_message(&target_id).await {
@@ -587,6 +629,7 @@ impl App {
       }
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.load_preview().await;
     }
@@ -599,6 +642,7 @@ impl App {
       self.preview = None;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
     }
   }
@@ -608,9 +652,11 @@ impl App {
       return;
     };
     let id = msg.id.clone();
-    match self.api.get_raw_message(&id).await {
+    let notice = raw_truncation_notice(msg.size, &self.api.export_url(&id));
+    match self.api.get_raw_message(&id, RAW_PREVIEW_LIMIT_BYTES).await {
       Ok(raw) => {
         self.raw_content = Some(raw);
+        self.raw_notice = notice;
         self.raw_scroll = 0;
         self.mode = Mode::RawView;
       }
@@ -627,6 +673,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -638,6 +685,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -649,6 +697,9 @@ impl App {
     };
 
     match event {
+      WsEvent::MessageNew(_) if !self.search_query.is_empty() => {
+        self.view_stale = true;
+      }
       WsEvent::MessageNew(summary) => {
         self.total += 1;
         if self.offset == 0 {
@@ -661,8 +712,13 @@ impl App {
         }
       }
       WsEvent::MessageDelete { id } => {
-        self.total = (self.total - 1).max(0);
-        if let Some(pos) = self.messages.iter().position(|m| m.id == id) {
+        let position = self.messages.iter().position(|m| m.id == id);
+        if position.is_some() || self.search_query.is_empty() {
+          self.total = (self.total - 1).max(0);
+        } else {
+          self.view_stale = true;
+        }
+        if let Some(pos) = position {
           self.messages.remove(pos);
           if self.selected >= self.messages.len() && self.selected > 0 {
             self.selected -= 1;
@@ -671,6 +727,7 @@ impl App {
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
             self.preview_raw = None;
+            self.preview_raw_notice = None;
             self.load_preview().await;
           }
         }
@@ -697,6 +754,7 @@ impl App {
         self.preview = None;
         self.last_preview_id = None;
         self.preview_raw = None;
+        self.preview_raw_notice = None;
         self.sync_list_state();
       }
     }
@@ -717,6 +775,19 @@ impl App {
   pub fn spinner_char(&self) -> char {
     SPINNER_FRAMES[self.spinner_frame]
   }
+}
+
+/// Returns the banner shown above a raw preview that was cut at
+/// [`RAW_PREVIEW_LIMIT_BYTES`], or `None` when the whole message fits.
+fn raw_truncation_notice(size: i64, export_url: &str) -> Option<String> {
+  (size > RAW_PREVIEW_LIMIT_BYTES).then(|| {
+    format!(
+      "Showing the first {} of {}. Full source: {}",
+      format_size(RAW_PREVIEW_LIMIT_BYTES),
+      format_size(size),
+      export_url
+    )
+  })
 }
 
 async fn connect_ws(url: &str, tx: &mpsc::UnboundedSender<Event>) -> Result<()> {
@@ -758,6 +829,34 @@ mod tests {
       tags: vec![],
       created_at: "2026-04-21T00:00:00Z".to_string(),
     }
+  }
+
+  async fn spawn_recording_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    tokio::spawn(async move {
+      loop {
+        let Ok((mut socket, _)) = listener.accept().await else {
+          return;
+        };
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap_or(0);
+        let head = String::from_utf8_lossy(&buf[..n]);
+        if let Some(line) = head.lines().next() {
+          recorded.lock().unwrap().push(line.to_string());
+        }
+        let _ = socket
+          .write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+          )
+          .await;
+      }
+    });
+    (base_url, requests)
   }
 
   fn app_with_messages(count: usize) -> App {
@@ -865,5 +964,196 @@ mod tests {
     assert_eq!(app.total_pages(), 2);
     app.total = 125;
     assert_eq!(app.total_pages(), 3);
+  }
+
+  #[tokio::test]
+  async fn ws_reconnect_refetches_current_view() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    app.offset = 50;
+    app.search_query = "invoice".into();
+    app.selected = 3;
+
+    app.handle_ws_status(true).await;
+    assert!(
+      requests.lock().unwrap().is_empty(),
+      "first connection must not refetch"
+    );
+
+    app.handle_ws_status(false).await;
+    app.handle_ws_status(true).await;
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(
+      requests,
+      vec!["GET /api/v1/messages?limit=50&offset=50&q=invoice HTTP/1.1".to_string()]
+    );
+    assert_eq!(app.offset, 50);
+    assert_eq!(app.search_query, "invoice");
+    assert_eq!(app.selected, 3);
+    assert!(app.ws_connected);
+  }
+
+  fn ws_event(kind: &str, data: serde_json::Value) -> String {
+    serde_json::json!({ "type": kind, "data": data }).to_string()
+  }
+
+  fn new_message_event(id: &str) -> String {
+    ws_event(
+      "message:new",
+      serde_json::to_value(sample_summary(id, false)).unwrap(),
+    )
+  }
+
+  #[tokio::test]
+  async fn live_message_is_not_merged_into_search_results() {
+    let mut app = app_with_messages(3);
+    app.search_query = "invoice".into();
+
+    app.handle_ws_message(&new_message_event("live")).await;
+
+    assert_eq!(app.total, 3);
+    assert_eq!(app.messages.len(), 3);
+    assert!(app.messages.iter().all(|m| m.id != "live"));
+    assert!(app.view_stale);
+  }
+
+  #[tokio::test]
+  async fn live_message_is_inserted_without_search() {
+    let mut app = app_with_messages(3);
+
+    app.handle_ws_message(&new_message_event("live")).await;
+
+    assert_eq!(app.total, 4);
+    assert_eq!(app.messages[0].id, "live");
+    assert!(!app.view_stale);
+  }
+
+  #[tokio::test]
+  async fn delete_outside_search_results_keeps_total() {
+    let mut app = app_with_messages(3);
+    app.search_query = "invoice".into();
+
+    app
+      .handle_ws_message(&ws_event(
+        "message:delete",
+        serde_json::json!({ "id": "elsewhere" }),
+      ))
+      .await;
+
+    assert_eq!(app.total, 3);
+  }
+
+  #[tokio::test]
+  async fn delete_inside_search_results_decrements_total() {
+    let mut app = app_with_messages(3);
+    app.search_query = "invoice".into();
+    app.selected = 2;
+
+    app
+      .handle_ws_message(&ws_event(
+        "message:delete",
+        serde_json::json!({ "id": "id-0" }),
+      ))
+      .await;
+
+    assert_eq!(app.total, 2);
+    assert_eq!(app.messages.len(), 2);
+  }
+
+  #[tokio::test]
+  async fn delete_without_search_decrements_total_even_if_not_listed() {
+    let mut app = app_with_messages(3);
+    app.offset = 50;
+
+    app
+      .handle_ws_message(&ws_event(
+        "message:delete",
+        serde_json::json!({ "id": "elsewhere" }),
+      ))
+      .await;
+
+    assert_eq!(app.total, 2);
+  }
+
+  #[tokio::test]
+  async fn stale_search_view_refetches_only_after_throttle() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    app.search_query = "invoice".into();
+    app.view_stale = true;
+    app.last_fetch_at = Some(Instant::now());
+
+    app.refetch_if_stale().await;
+    assert!(
+      requests.lock().unwrap().is_empty(),
+      "throttle window not elapsed"
+    );
+
+    app.last_fetch_at = Instant::now().checked_sub(STALE_VIEW_REFETCH_INTERVAL);
+    app.refetch_if_stale().await;
+
+    assert_eq!(
+      requests.lock().unwrap().clone(),
+      vec!["GET /api/v1/messages?limit=50&offset=0&q=invoice HTTP/1.1".to_string()]
+    );
+  }
+
+  #[tokio::test]
+  async fn fresh_view_does_not_refetch_on_tick() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+
+    app.refetch_if_stale().await;
+
+    assert!(requests.lock().unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn show_raw_requests_a_capped_preview() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    app.messages = vec![sample_summary("id-0", true)];
+
+    app.show_raw().await;
+
+    assert_eq!(
+      requests.lock().unwrap().clone(),
+      vec![format!(
+        "GET /api/v1/messages/id-0/raw?limit={RAW_PREVIEW_LIMIT_BYTES} HTTP/1.1"
+      )]
+    );
+  }
+
+  #[tokio::test]
+  async fn messages_clear_resets_raw_preview_and_notice() {
+    let mut app = app_with_messages(3);
+    app.preview_raw = Some("raw body".into());
+    app.preview_raw_notice = Some("truncated".into());
+
+    app
+      .handle_ws_message(&ws_event("messages:clear", serde_json::Value::Null))
+      .await;
+
+    assert_eq!(app.preview_raw, None);
+    assert_eq!(app.preview_raw_notice, None);
+  }
+
+  #[test]
+  fn raw_notice_is_absent_when_message_fits_the_preview() {
+    assert_eq!(
+      raw_truncation_notice(RAW_PREVIEW_LIMIT_BYTES, "http://x/export"),
+      None
+    );
+  }
+
+  #[test]
+  fn raw_notice_names_both_sizes_and_the_export_url() {
+    let notice = raw_truncation_notice(25 * 1024 * 1024, "http://x/api/v1/messages/id-0/export")
+      .expect("oversized message must carry a notice");
+    assert_eq!(
+      notice,
+      "Showing the first 128.0K of 25.0M. Full source: http://x/api/v1/messages/id-0/export"
+    );
   }
 }

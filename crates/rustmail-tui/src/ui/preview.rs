@@ -227,7 +227,12 @@ fn render_header_lines(msg: &crate::api::Message, theme: &Theme) -> Vec<Line<'st
 
 fn render_raw_lines(app: &App, theme: &Theme) -> Vec<Line<'static>> {
   match &app.preview_raw {
-    Some(raw) => raw.lines().map(|l| Line::from(l.to_string())).collect(),
+    Some(raw) => app
+      .preview_raw_notice
+      .iter()
+      .map(|notice| Line::from(Span::styled(notice.clone(), theme.status_info)))
+      .chain(raw.lines().map(|l| Line::from(l.to_string())))
+      .collect(),
     None => vec![Line::from(Span::styled(
       format!(" {} Loading raw content...", app.spinner_char()),
       theme.empty_hint,

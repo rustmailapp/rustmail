@@ -21,6 +21,7 @@ pub struct Theme {
 
   pub status_ok: Style,
   pub status_err: Style,
+  pub status_info: Style,
 
   pub popup_border: Style,
 
@@ -55,6 +56,7 @@ pub const DEFAULT: Theme = Theme {
 
   status_ok: Style::new().fg(Color::Green),
   status_err: Style::new().fg(Color::Red),
+  status_info: Style::new().fg(Color::Yellow),
 
   popup_border: Style::new().fg(Color::Cyan),
 

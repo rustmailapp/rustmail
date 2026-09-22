@@ -65,7 +65,13 @@ fn render_main(frame: &mut Frame, app: &mut App, theme: &theme::Theme) {
 fn render_raw_view(frame: &mut Frame, app: &App, theme: &theme::Theme) {
   let area = frame.area();
 
-  let content = app.raw_content.as_deref().unwrap_or("");
+  let raw = app.raw_content.as_deref().unwrap_or("");
+  let content: Vec<Line> = app
+    .raw_notice
+    .iter()
+    .map(|notice| Line::from(Span::styled(notice.as_str(), theme.status_info)))
+    .chain(raw.lines().map(Line::from))
+    .collect();
 
   let block = Block::bordered()
     .title(Line::from(" Raw Message (RFC 5322) ").centered())
