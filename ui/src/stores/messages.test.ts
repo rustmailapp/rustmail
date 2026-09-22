@@ -251,6 +251,30 @@ describe("paging by cursor", () => {
     ]);
   });
 
+  it("says so when the cursor keeps moving under an older page", async () => {
+    listMessages.mockResolvedValue(page(range(10), 20, "id-9"));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockImplementation(async ({ before }: { before?: string }) => {
+      if (before !== undefined) {
+        deliver(
+          JSON.stringify({ type: "message:delete", data: { id: before } }),
+        );
+      }
+      return page([message(10)], 20);
+    });
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenCalledWith({
+      limit: PAGE_SIZE,
+      before: `id-${10 - LIST_READ_ATTEMPTS}`,
+    });
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
+    ]);
+  });
+
   it("stops paging once the server has no older page", async () => {
     await seed(range(2));
     listMessages.mockClear();

@@ -982,6 +982,8 @@ function scheduleSearchRefresh(): void {
   }, SEARCH_REFRESH_WINDOW_MS);
 }
 
+const OLDER_PAGE_FAILED = "Could not load older messages.";
+
 /**
  * Reads the page older than the last loaded row, and appends it.
  *
@@ -989,8 +991,10 @@ function scheduleSearchRefresh(): void {
  * event got here, so the row goes and the read starts again from the one
  * before it. A page read from a cursor that has since moved, because its row
  * was deleted or let go, would not join the rows above it, so it is read again
- * from where the list now ends. Any other failure is reported rather than
- * thrown, since the list's scroll position is what calls this.
+ * from where the list now ends, and reported once
+ * {@link LIST_READ_ATTEMPTS} reads have all missed. Any other failure is
+ * reported rather than thrown, since the list's scroll position is what calls
+ * this.
  */
 async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
@@ -1032,9 +1036,10 @@ async function loadMore(): Promise<void> {
       if (raced) void refreshTotal();
       return;
     }
+    notify(OLDER_PAGE_FAILED);
   } catch {
     if (isCurrentView(view) && startedOn === latestFetch) {
-      notify("Could not load older messages.");
+      notify(OLDER_PAGE_FAILED);
     }
   } finally {
     setLoadingMore(false);
