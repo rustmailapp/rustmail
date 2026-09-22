@@ -1794,3 +1794,113 @@ async fn the_response_reports_the_clamped_limit() {
 
   assert_eq!(body["limit"], 200);
 }
+
+async fn star(repo: &MessageRepository, id: &str) {
+  repo
+    .update_message(id, None, Some(true), None)
+    .await
+    .unwrap();
+}
+
+async fn tag(repo: &MessageRepository, id: &str, tag: &str) {
+  repo
+    .update_message(id, None, None, Some(&[tag.to_string()]))
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn starred_true_lists_only_starred_messages() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+  star(&repo, &ids[1]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?starred=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone()]);
+}
+
+#[tokio::test]
+async fn total_counts_only_messages_passing_the_filter() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 4).await;
+  star(&repo, &ids[1]).await;
+  star(&repo, &ids[3]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?starred=true&limit=1").await).await;
+
+  assert_eq!(body["total"], 2);
+}
+
+#[tokio::test]
+async fn unread_true_drops_read_messages() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 2).await;
+  repo
+    .update_message(&ids[0], Some(true), None, None)
+    .await
+    .unwrap();
+
+  let body = json_body(get(app, "/api/v1/messages?unread=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[1].clone()]);
+}
+
+#[tokio::test]
+async fn has_attachments_true_lists_only_messages_with_attachments() {
+  let (app, repo, _) = setup().await;
+  insert_numbered(&repo, 1).await;
+  let with_file = repo
+    .insert("a@t.com", &["b@t.com".into()], &email_with_inline_image())
+    .await
+    .unwrap();
+
+  let body = json_body(get(app, "/api/v1/messages?has_attachments=true").await).await;
+
+  assert_eq!(listed_ids(&body), [with_file.id]);
+}
+
+#[tokio::test]
+async fn repeated_tags_match_messages_carrying_any_of_them() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+  tag(&repo, &ids[0], "a").await;
+  tag(&repo, &ids[2], "b").await;
+
+  let body = json_body(get(app, "/api/v1/messages?tag=a&tag=b").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[2].clone(), ids[0].clone()]);
+}
+
+#[tokio::test]
+async fn filters_narrow_a_search_and_its_total() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+  star(&repo, &ids[0]).await;
+
+  let body = json_body(get(app, "/api/v1/messages?q=hello&starred=true").await).await;
+
+  assert_eq!(listed_ids(&body), [ids[0].clone()]);
+  assert_eq!(body["total"], 1);
+}
+
+#[tokio::test]
+async fn more_tags_than_a_message_can_carry_are_a_bad_request() {
+  let (app, _, _) = setup().await;
+  let tags: String = (0..21).map(|i| format!("&tag=t{i}")).collect();
+
+  let response = get(app, &format!("/api/v1/messages?limit=1{tags}")).await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}
+
+#[tokio::test]
+async fn a_malformed_filter_value_is_a_bad_request() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/api/v1/messages?starred=yes").await;
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  assert!(json_body(response).await["error"].is_string());
+}

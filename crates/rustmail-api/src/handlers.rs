@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{AppState, WsEvent};
-use rustmail_storage::{PageStart, StorageError};
+use rustmail_storage::{MessageFilter, PageStart, StorageError};
 
 /// Captured mail is immutable once stored, so anything derived from a
 /// message's bytes can be cached indefinitely. `private` keeps shared caches
@@ -26,12 +26,54 @@ const DEFAULT_PAGE_LIMIT: i64 = 50;
 /// Largest page a list request is served, whatever it asks for.
 const MAX_PAGE_LIMIT: i64 = 200;
 
-#[derive(Deserialize)]
-pub struct ListParams {
-  pub q: Option<String>,
-  pub limit: Option<i64>,
-  pub offset: Option<i64>,
-  pub before: Option<String>,
+/// A list request's query string, parsed.
+///
+/// Read from raw pairs rather than derived, because `tag` may repeat.
+/// Unknown keys are ignored, as they always were.
+#[derive(Default)]
+struct ListParams {
+  q: Option<String>,
+  limit: Option<i64>,
+  offset: Option<i64>,
+  before: Option<String>,
+  filter: MessageFilter,
+}
+
+impl ListParams {
+  fn parse(pairs: Vec<(String, String)>) -> Result<Self, AppError> {
+    let mut params = Self::default();
+    for (key, value) in pairs {
+      match key.as_str() {
+        "q" => params.q = Some(value),
+        "limit" => params.limit = Some(parse_integer(&key, &value)?),
+        "offset" => params.offset = Some(parse_integer(&key, &value)?),
+        "before" => params.before = Some(value),
+        "starred" => params.filter.starred = parse_flag(&key, &value)?,
+        "unread" => params.filter.unread = parse_flag(&key, &value)?,
+        "has_attachments" => params.filter.has_attachments = parse_flag(&key, &value)?,
+        "tag" => params.filter.tags.push(value),
+        _ => {}
+      }
+    }
+    if params.filter.tags.len() > MAX_TAGS {
+      return Err(AppError::BadRequest(format!(
+        "Too many tag filters (max {MAX_TAGS})"
+      )));
+    }
+    Ok(params)
+  }
+}
+
+fn parse_integer(key: &str, value: &str) -> Result<i64, AppError> {
+  value
+    .parse()
+    .map_err(|_| AppError::BadRequest(format!("{key} must be an integer")))
+}
+
+fn parse_flag(key: &str, value: &str) -> Result<bool, AppError> {
+  value
+    .parse()
+    .map_err(|_| AppError::BadRequest(format!("{key} must be true or false")))
 }
 
 #[derive(Deserialize)]
@@ -43,17 +85,18 @@ pub struct UpdateBody {
 
 pub async fn list_messages(
   State(state): State<AppState>,
-  Query(params): Query<ListParams>,
+  Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<impl IntoResponse, AppError> {
+  let params = ListParams::parse(pairs)?;
   let limit = params
     .limit
     .unwrap_or(DEFAULT_PAGE_LIMIT)
     .clamp(1, MAX_PAGE_LIMIT);
   let start = match (params.before.as_deref(), params.offset) {
-    (Some(_), Some(_)) => return Err(AppError::BadRequest(CURSOR_WITH_OFFSET)),
+    (Some(_), Some(_)) => return Err(AppError::BadRequest(CURSOR_WITH_OFFSET.to_string())),
     (Some(before), None) => PageStart::Before(state.repo.cursor(before).await.map_err(
       |error| match error {
-        StorageError::NotFound(_) => AppError::BadRequest(UNKNOWN_CURSOR),
+        StorageError::NotFound(_) => AppError::BadRequest(UNKNOWN_CURSOR.to_string()),
         other => AppError::Storage(other),
       },
     )?),
@@ -62,12 +105,21 @@ pub async fn list_messages(
   let lookahead = limit + 1;
 
   let (mut messages, count) = if let Some(query) = &params.q {
-    let msgs = state.repo.search_page(query, start, lookahead).await?;
-    let total = state.repo.search_count(query).await?;
+    let msgs = state
+      .repo
+      .search_page(query, &params.filter, start, lookahead)
+      .await?;
+    let total = state
+      .repo
+      .search_count_filtered(query, &params.filter)
+      .await?;
     (msgs, total)
   } else {
-    let msgs = state.repo.list_page(start, lookahead).await?;
-    let total = state.repo.count().await?;
+    let msgs = state
+      .repo
+      .list_page(&params.filter, start, lookahead)
+      .await?;
+    let total = state.repo.count_filtered(&params.filter).await?;
     (msgs, total)
   };
   let has_more = messages.len() as i64 > limit;
@@ -811,7 +863,7 @@ const UNKNOWN_CURSOR: &str =
 
 pub enum AppError {
   Storage(StorageError),
-  BadRequest(&'static str),
+  BadRequest(String),
 }
 
 impl From<StorageError> for AppError {
@@ -823,7 +875,7 @@ impl From<StorageError> for AppError {
 impl IntoResponse for AppError {
   fn into_response(self) -> axum::response::Response {
     let (status, message) = match &self {
-      AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, (*reason).to_string()),
+      AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, reason.clone()),
       AppError::Storage(StorageError::NotFound(_)) => {
         (StatusCode::NOT_FOUND, "Resource not found".to_string())
       }

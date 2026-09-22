@@ -35,6 +35,6 @@ mod schema;
 pub use error::StorageError;
 pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
 pub use prepared::PreparedMessage;
-pub use query::{Cursor, PageStart};
+pub use query::{Cursor, MessageFilter, PageStart};
 pub use repo::{MessageRepository, format_iso8601};
 pub use schema::{connect_options, initialize_database};

@@ -46,14 +46,44 @@ paths:
         pass the previous response's `next_cursor` to get the next page. A
         cursor page costs the same at any depth and does not shift when new
         mail arrives, where `offset` does both. `offset` is still accepted,
-        but not together with `before`. `total` reflects the count before
-        pagination is applied.
+        but not together with `before`. `starred`, `unread`,
+        `has_attachments` and `tag` narrow the listing on the server; they
+        combine with `AND`, with each other and with `q`. `total` counts the
+        messages matching `q` and the filters, before pagination is applied.
       tags: [Messages]
       parameters:
         - $ref: '#/components/parameters/QueryParam'
         - $ref: '#/components/parameters/LimitParam'
         - $ref: '#/components/parameters/OffsetParam'
         - $ref: '#/components/parameters/BeforeParam'
+        - name: starred
+          in: query
+          schema:
+            type: boolean
+          description: When `true`, only starred messages. `false` does not filter.
+        - name: unread
+          in: query
+          schema:
+            type: boolean
+          description: When `true`, only messages not marked as read. `false` does not filter.
+        - name: has_attachments
+          in: query
+          schema:
+            type: boolean
+          description: When `true`, only messages with at least one attachment. `false` does not filter.
+        - name: tag
+          in: query
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 20
+            items:
+              type: string
+          description: >
+            Only messages carrying this tag, compared exactly and
+            case-sensitively. May repeat (`tag=a&tag=b`): a message matches if
+            it carries any of the given tags. More than 20 is a `400`.
       responses:
         '200':
           description: Paginated list of message summaries
@@ -77,7 +107,9 @@ paths:
         '400':
           description: >
             `before` names no stored message (it may have been deleted; restart
-            from the first page), or `before` and `offset` were both given.
+            from the first page), `before` and `offset` were both given, more
+            than 20 `tag` values were given, or `limit`, `offset` or a boolean
+            filter has a malformed value.
           content:
             application/json:
               schema:
