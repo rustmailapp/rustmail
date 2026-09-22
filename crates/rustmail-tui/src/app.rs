@@ -8,6 +8,7 @@ use ratatui::crossterm::event::{
 use ratatui::prelude::*;
 use ratatui::widgets::{ListState, ScrollbarState};
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 
 use crate::api::{
   ApiClient, ListResponse, Message, MessageSummary, RAW_PREVIEW_LIMIT_BYTES, WsEvent,
@@ -75,6 +76,7 @@ pub struct App {
   api: ApiClient,
   ws_url: String,
   event_tx: mpsc::Sender<Event>,
+  tasks: JoinSet<()>,
   fetch_generation: u64,
   last_request_id: u64,
   pending_deltas: PendingDeltas,
@@ -135,6 +137,7 @@ impl App {
       api: ApiClient::new(base_url),
       ws_url,
       event_tx,
+      tasks: JoinSet::new(),
       fetch_generation: 0,
       last_request_id: 0,
       pending_deltas: PendingDeltas::default(),
@@ -187,6 +190,16 @@ impl App {
   }
 
   pub async fn run(
+    &mut self,
+    terminal: &mut DefaultTerminal,
+    events: &mut event::EventHandler,
+  ) -> Result<()> {
+    let result = self.event_loop(terminal, events).await;
+    self.shutdown_tasks().await;
+    result
+  }
+
+  async fn event_loop(
     &mut self,
     terminal: &mut DefaultTerminal,
     events: &mut event::EventHandler,
@@ -266,21 +279,44 @@ impl App {
     self.last_request_id
   }
 
-  fn spawn_and_send<F>(&self, fut: F)
+  /// Aborts every background task this app owns and waits for them to stop.
+  async fn shutdown_tasks(&mut self) {
+    self.tasks.shutdown().await;
+  }
+
+  fn reap_finished_tasks(&mut self) {
+    while let Some(outcome) = self.tasks.try_join_next() {
+      if let Err(e) = outcome
+        && e.is_panic()
+      {
+        self.set_error(format!("Background task failed: {}", e));
+      }
+    }
+  }
+
+  fn spawn_owned<F>(&mut self, fut: F)
+  where
+    F: std::future::Future<Output = ()> + Send + 'static,
+  {
+    self.reap_finished_tasks();
+    self.tasks.spawn(fut);
+  }
+
+  fn spawn_and_send<F>(&mut self, fut: F)
   where
     F: std::future::Future<Output = Event> + Send + 'static,
   {
     let tx = self.event_tx.clone();
-    tokio::spawn(async move {
+    self.spawn_owned(async move {
       let event = fut.await;
       let _ = tx.send(event).await;
     });
   }
 
-  fn connect_websocket(&self) {
+  fn connect_websocket(&mut self) {
     let ws_url = self.ws_url.clone();
     let tx = self.event_tx.clone();
-    tokio::spawn(async move {
+    self.spawn_owned(async move {
       let mut delay = Duration::from_secs(2);
       loop {
         let _ = tx.send(Event::WsStatus(false)).await;
@@ -756,7 +792,7 @@ impl App {
     }
   }
 
-  fn spawn_patch(&self, id: String, is_read: Option<bool>, is_starred: Option<bool>) {
+  fn spawn_patch(&mut self, id: String, is_read: Option<bool>, is_starred: Option<bool>) {
     let api = self.api.clone();
     let patch_id = id.clone();
     self.spawn_and_send(async move {
@@ -1147,6 +1183,8 @@ fn forward_ws_frame(tx: &mpsc::Sender<Event>, text: String) {
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  const SHUTDOWN_TEST_DEADLINE: Duration = Duration::from_secs(5);
 
   fn sample_summary(id: &str, is_read: bool) -> MessageSummary {
     MessageSummary {
@@ -1773,6 +1811,40 @@ mod tests {
       })
       .await;
     assert_eq!(app.raw_content.as_deref(), Some("fresh raw"));
+  }
+
+  #[tokio::test]
+  async fn shutdown_aborts_in_flight_http_tasks() {
+    let mut app = app_with_messages(0);
+    let (guard, released) = tokio::sync::oneshot::channel::<()>();
+
+    app.spawn_and_send(async move {
+      let _guard = guard;
+      std::future::pending::<Event>().await
+    });
+    app.shutdown_tasks().await;
+
+    assert!(released.await.is_err(), "task must be dropped by shutdown");
+  }
+
+  #[tokio::test]
+  async fn shutdown_aborts_the_websocket_reconnect_loop() {
+    let (mut events, event_tx) = event::channel();
+    let mut app = App::new(
+      "http://127.0.0.1:1".into(),
+      "ws://127.0.0.1:1/ws".into(),
+      event_tx,
+    );
+
+    app.connect_websocket();
+    app.shutdown_tasks().await;
+    drop(app);
+
+    while events.try_next().is_some() {}
+    let closed = tokio::time::timeout(SHUTDOWN_TEST_DEADLINE, events.next())
+      .await
+      .expect("reconnect loop still holds the event sender");
+    assert!(closed.is_err());
   }
 
   #[tokio::test]

@@ -2,6 +2,7 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use ratatui::crossterm::event::{Event as CrosstermEvent, EventStream, KeyEvent, MouseEvent};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::api::{ListResponse, Message};
 
@@ -64,8 +65,19 @@ pub enum Event {
   },
 }
 
+/// Receiving end of the event queue. Owns the terminal reader task and aborts
+/// it on drop, so nothing keeps reading the terminal once the TUI exits.
 pub struct EventHandler {
   rx: mpsc::Receiver<Event>,
+  reader: Option<JoinHandle<()>>,
+}
+
+impl Drop for EventHandler {
+  fn drop(&mut self) {
+    if let Some(reader) = self.reader.take() {
+      reader.abort();
+    }
+  }
 }
 
 impl EventHandler {
@@ -84,14 +96,14 @@ impl EventHandler {
 
 pub fn channel() -> (EventHandler, mpsc::Sender<Event>) {
   let (tx, rx) = mpsc::channel(EVENT_QUEUE_CAPACITY);
-  (EventHandler { rx }, tx)
+  (EventHandler { rx, reader: None }, tx)
 }
 
 pub fn create_event_handler() -> (EventHandler, mpsc::Sender<Event>) {
-  let (handler, tx) = channel();
+  let (mut handler, tx) = channel();
 
   let event_tx = tx.clone();
-  tokio::spawn(async move {
+  handler.reader = Some(tokio::spawn(async move {
     let mut reader = EventStream::new();
     let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(100));
 
@@ -116,7 +128,7 @@ pub fn create_event_handler() -> (EventHandler, mpsc::Sender<Event>) {
         }
       }
     }
-  });
+  }));
 
   (handler, tx)
 }
@@ -134,6 +146,20 @@ mod tests {
     assert!(matches!(handler.try_next(), Some(Event::Tick)));
     assert!(matches!(handler.try_next(), Some(Event::Resize)));
     assert!(handler.try_next().is_none());
+  }
+
+  #[tokio::test]
+  async fn dropping_the_handler_aborts_its_reader_task() {
+    let (mut handler, _tx) = channel();
+    let (guard, released) = tokio::sync::oneshot::channel::<()>();
+    handler.reader = Some(tokio::spawn(async move {
+      let _guard = guard;
+      std::future::pending::<()>().await
+    }));
+
+    drop(handler);
+
+    assert!(released.await.is_err(), "reader must be aborted on drop");
   }
 
   #[tokio::test]
