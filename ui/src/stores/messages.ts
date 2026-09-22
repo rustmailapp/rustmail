@@ -47,7 +47,85 @@ const UNDO_WINDOW_MS = 5000;
  */
 const SEARCH_REFRESH_WINDOW_MS = 1000;
 
+/**
+ * The most live events held for the next frame.
+ *
+ * Only a tab that gets no frames, one in the background, comes near this; a
+ * backlog that long is cheaper to replace with one list read than to replay.
+ */
+const MAX_QUEUED_EVENTS = 10_000;
+
+/**
+ * How long a queued event waits for an animation frame before it is applied
+ * anyway.
+ *
+ * A hidden tab gets no frames at all, and its list must still be current when
+ * it comes back.
+ */
+const FRAME_FALLBACK_MS = 250;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
+
+/**
+ * Each loaded row's position; its index in {@link messages} is the position
+ * minus {@link headPosition}.
+ *
+ * Arrivals take positions above the head, so a prepend leaves every other
+ * entry where it was, and finding a row by id stays a lookup however long the
+ * list grows.
+ */
+const positions = new Map<string, number>();
+let headPosition = 0;
+
+function indexOfRow(id: string): number {
+  const position = positions.get(id);
+  return position === undefined ? -1 : position - headPosition;
+}
+
+/** The loaded message with `id`, tracking the list like a read of it would. */
+function findMessage(id: string): MessageSummary | undefined {
+  const rows = messages();
+  const index = indexOfRow(id);
+  return index < 0 ? undefined : rows[index];
+}
+
+function replaceRows(rows: MessageSummary[]): void {
+  positions.clear();
+  headPosition = 0;
+  rows.forEach((m, i) => positions.set(m.id, i));
+  setMessages(rows);
+}
+
+/** Puts `rows`, newest first, above the loaded ones. */
+function prependRows(rows: MessageSummary[]): void {
+  if (rows.length === 0) return;
+  headPosition -= rows.length;
+  rows.forEach((m, i) => positions.set(m.id, headPosition + i));
+  setMessages((prev) => [...rows, ...prev]);
+}
+
+function appendRows(rows: MessageSummary[]): void {
+  const tail = headPosition + messages().length;
+  rows.forEach((m, i) => positions.set(m.id, tail + i));
+  setMessages((prev) => [...prev, ...rows]);
+}
+
+function removeRow(id: string): void {
+  const index = indexOfRow(id);
+  if (index < 0) return;
+  const next = messages().toSpliced(index, 1);
+  positions.delete(id);
+  for (let i = index; i < next.length; i += 1) {
+    positions.set(next[i].id, headPosition + i);
+  }
+  setMessages(next);
+}
+
+function replaceRow(patched: MessageSummary): void {
+  const index = indexOfRow(patched.id);
+  if (index < 0) return;
+  setMessages((prev) => prev.with(index, patched));
+}
 const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
 const [loading, setLoading] = createSignal(false);
@@ -173,10 +251,10 @@ const visibleMessages = createMemo(() => {
 });
 
 const total = createMemo(() => {
-  const hidden = new Set(hiddenIds());
-  const hiddenCount = messages().filter((message) =>
-    hidden.has(message.id),
-  ).length;
+  const hidden = hiddenIds();
+  if (hidden.length === 0) return storedTotal();
+  messages();
+  const hiddenCount = hidden.filter((id) => indexOfRow(id) >= 0).length;
   return Math.max(0, storedTotal() - hiddenCount);
 });
 
@@ -274,9 +352,7 @@ function selectMessage(msg: MessageSummary): void {
  * worth saying.
  */
 function quoted(id: string): string {
-  const subject = messages()
-    .find((m) => m.id === id)
-    ?.subject?.trim();
+  const subject = findMessage(id)?.subject?.trim();
   if (!subject) return "the message";
 
   const characters = [...subject];
@@ -335,7 +411,7 @@ let latestFetch = 0;
 let currentListRead: AbortController | null = null;
 let searchStale = false;
 let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-/** Live events received while the current list read is in flight. */
+/** Live events applied while the current list read is in flight. */
 let eventsDuringRead: ReplayableEvent[] | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
@@ -353,11 +429,9 @@ const issuedDeletes = new Map<string, IssuedDelete>();
 /** Removes a confirmed deletion without assuming the current total includes it. */
 function forgetMessage(id: string): void {
   if (nextCursor() === id) {
-    const rows = messages();
-    const index = rows.findIndex((m) => m.id === id);
-    setNextCursor(rows[index - 1]?.id ?? null);
+    setNextCursor(messages()[indexOfRow(id) - 1]?.id ?? null);
   }
-  setMessages((prev) => prev.filter((m) => m.id !== id));
+  removeRow(id);
   unhide(id);
   if (selectedId() === id) setSelectedId(null);
 }
@@ -596,11 +670,11 @@ async function readFirstPage(): Promise<boolean> {
       batch(() => {
         snapshot += 1;
         countNeedsRefresh = raced;
-        setMessages(res.messages);
+        replaceRows(res.messages);
         setPageCursor(res.next_cursor, view);
         setStoredTotal(res.total);
         searchStale = false;
-        for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
+        applyEvents(eventsDuringRead ?? []);
       });
       if (raced) void refreshTotal();
       return true;
@@ -678,10 +752,7 @@ async function loadMore(): Promise<void> {
       batch(() => {
         snapshot += 1;
         countNeedsRefresh = raced;
-        setMessages((prev) => {
-          const seen = new Set(prev.map((m) => m.id));
-          return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
-        });
+        appendRows(res.messages.filter((m) => !positions.has(m.id)));
         setPageCursor(res.next_cursor, view);
         setStoredTotal(res.total);
       });
@@ -739,17 +810,34 @@ function readEvent(frame: unknown): WsEvent | undefined {
 }
 
 /**
- * Puts a live message at the top of the list and counts it in.
+ * Puts live messages, oldest first as they arrived, at the top of the list and
+ * counts them in.
  *
- * The socket is subscribed before a list read lands, over another connection,
- * so a message can reach the store both ways. The copy that comes second must
- * add neither a row nor a count.
+ * A search cannot place an arrival itself, since only the server knows whether
+ * it matches, so it schedules a refetch instead; filters are decided here. The
+ * socket is subscribed before a list read lands, over another connection, so a
+ * message can reach the store both ways. The copy that comes second must add
+ * neither a row nor a count.
  */
-function prependArrival(arrival: MessageSummary): void {
-  if (messages().some((m) => m.id === arrival.id)) return;
+function admitArrivals(arrivals: readonly MessageSummary[]): void {
+  if (arrivals.length === 0) return;
+  if (search()) {
+    scheduleSearchRefresh();
+    return;
+  }
+  const f = filters();
+  const seen = new Set<string>();
+  const fresh: MessageSummary[] = [];
+  for (let i = arrivals.length - 1; i >= 0; i -= 1) {
+    const arrival = arrivals[i];
+    if (positions.has(arrival.id) || seen.has(arrival.id)) continue;
+    seen.add(arrival.id);
+    if (matchesFilters(arrival, f)) fresh.push(arrival);
+  }
+  if (fresh.length === 0) return;
   batch(() => {
-    setMessages((prev) => [arrival, ...prev]);
-    setStoredTotal((t) => t + 1);
+    prependRows(fresh);
+    setStoredTotal((t) => t + fresh.length);
   });
   if (countNeedsRefresh) void refreshTotal();
 }
@@ -761,14 +849,14 @@ function prependArrival(arrival: MessageSummary): void {
  * idempotent, so a replay over a page that already reflects it counts nothing.
  */
 function patchMessage(id: string, patch: Partial<MessageSummary>): void {
-  const current = messages().find((m) => m.id === id);
+  const current = findMessage(id);
   if (current === undefined) return;
   const patched = { ...current, ...patch };
   const f = filters();
   const was = matchesFilters(current, f);
   const is = matchesFilters(patched, f);
   batch(() => {
-    setMessages((prev) => prev.map((m) => (m.id === id ? patched : m)));
+    replaceRow(patched);
     if (was !== is) setStoredTotal((t) => Math.max(0, t + (is ? 1 : -1)));
   });
 }
@@ -789,20 +877,28 @@ function isReplayable(event: WsEvent): event is ReplayableEvent {
 }
 
 /**
- * Applies an event that only adds a message or changes one.
+ * Applies `events` in order, each run of arrivals as one prepend.
  *
- * Applying one twice is harmless, which is what lets {@link fetchMessages}
- * replay the ones that arrived while its read was in flight.
+ * Applying a replayable event twice is harmless, which is what lets
+ * {@link fetchMessages} replay the ones that arrived while its read was in
+ * flight.
  */
-function applyLiveEvent(event: ReplayableEvent): void {
+function applyEvents(events: readonly WsEvent[]): void {
+  let arrivals: MessageSummary[] = [];
+  for (const event of events) {
+    if (event.type === "message:new") {
+      arrivals.push(event.data);
+      continue;
+    }
+    admitArrivals(arrivals);
+    arrivals = [];
+    applyEvent(event);
+  }
+  admitArrivals(arrivals);
+}
+
+function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
   switch (event.type) {
-    case "message:new":
-      if (search()) {
-        scheduleSearchRefresh();
-      } else if (matchesFilters(event.data, filters())) {
-        prependArrival(event.data);
-      }
-      break;
     case "message:read":
       patchMessage(event.data.id, { is_read: event.data.is_read });
       break;
@@ -812,7 +908,75 @@ function applyLiveEvent(event: ReplayableEvent): void {
     case "message:tags":
       patchMessage(event.data.id, { tags: event.data.tags });
       break;
+    case "message:delete":
+      cancelUndo(event.data.id);
+      reconcileDeletion(event.data.id);
+      break;
+    case "messages:clear":
+      batch(() => {
+        dropPendingDeletes();
+        replaceRows([]);
+        setNextCursor(null);
+        setStoredTotal(0);
+        setSelectedId(null);
+      });
+      break;
   }
+}
+
+let queuedEvents: WsEvent[] = [];
+let queueOverflowed = false;
+let frameRequest: number | null = null;
+let frameFallback: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Holds a live event for the next frame.
+ *
+ * At hundreds of events a second, applying each as it lands would recompute
+ * the list, its filters and its tags that many times between two paints.
+ */
+function enqueueEvent(event: WsEvent): void {
+  if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
+    queueOverflowed = true;
+    queuedEvents = [];
+  }
+  if (!queueOverflowed) queuedEvents.push(event);
+  if (frameFallback !== null) return;
+  frameRequest = globalThis.requestAnimationFrame?.(flushEvents) ?? null;
+  frameFallback = setTimeout(flushEvents, FRAME_FALLBACK_MS);
+}
+
+function cancelFlush(): void {
+  if (frameRequest !== null) {
+    globalThis.cancelAnimationFrame?.(frameRequest);
+    frameRequest = null;
+  }
+  if (frameFallback !== null) {
+    clearTimeout(frameFallback);
+    frameFallback = null;
+  }
+}
+
+/** Applies the events queued since the last frame, in one batch. */
+function flushEvents(): void {
+  cancelFlush();
+  const events = queuedEvents;
+  queuedEvents = [];
+  if (queueOverflowed) {
+    queueOverflowed = false;
+    fetchMessages().catch(() => notify("Could not catch up with live mail."));
+    return;
+  }
+  if (eventsDuringRead !== null) {
+    eventsDuringRead.push(...events.filter(isReplayable));
+  }
+  batch(() => applyEvents(events));
+}
+
+function dropQueuedEvents(): void {
+  cancelFlush();
+  queuedEvents = [];
+  queueOverflowed = false;
 }
 
 /**
@@ -883,27 +1047,7 @@ function openSocket(): WebSocket {
       return;
     }
 
-    if (isReplayable(event)) {
-      eventsDuringRead?.push(event);
-      applyLiveEvent(event);
-      return;
-    }
-
-    switch (event.type) {
-      case "message:delete":
-        cancelUndo(event.data.id);
-        reconcileDeletion(event.data.id);
-        break;
-      case "messages:clear":
-        batch(() => {
-          dropPendingDeletes();
-          setMessages([]);
-          setNextCursor(null);
-          setStoredTotal(0);
-          setSelectedId(null);
-        });
-        break;
-    }
+    enqueueEvent(event);
   };
 
   ws.onclose = () => {
@@ -932,6 +1076,7 @@ function closeSocket(): void {
 function disconnectWebSocket(): void {
   stopHttpFallback();
   closeSocket();
+  dropQueuedEvents();
   latestFetch += 1;
   currentListRead?.abort();
   currentListRead = null;
@@ -947,12 +1092,14 @@ function disconnectWebSocket(): void {
 export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
+  FRAME_FALLBACK_MS,
+  MAX_QUEUED_EVENTS,
   LIST_READ_ATTEMPTS,
   PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
-  messages,
+  findMessage,
   visibleMessages,
   filteredMessages,
   total,

@@ -13,7 +13,7 @@ import {
 } from "solid-js";
 import {
   deleteWithUndo,
-  messages,
+  findMessage,
   selectedId,
   setSelectedId,
   starMessage,
@@ -219,8 +219,7 @@ export default function MessageDetail() {
                   <div class="flex gap-1.5 flex-shrink-0">
                     {(() => {
                       const starred = () =>
-                        messages().find((m) => m.id === msg().id)?.is_starred ??
-                        false;
+                        findMessage(msg().id)?.is_starred ?? false;
                       return (
                         <button
                           onClick={() => starMessage(msg().id, !starred())}
@@ -713,8 +712,7 @@ function AuthView(props: { results: AuthResults }) {
 
 function TagEditor(props: { messageId: string }) {
   const [input, setInput] = createSignal("");
-  const tags = () =>
-    messages().find((m) => m.id === props.messageId)?.tags ?? [];
+  const tags = () => findMessage(props.messageId)?.tags ?? [];
 
   async function addTag(value: string) {
     const tag = value.trim().toLowerCase();

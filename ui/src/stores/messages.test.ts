@@ -29,7 +29,9 @@ vi.mock("../lib/api", async () => ({
 
 const { ApiError } = await import("../lib/api");
 const {
+  FRAME_FALLBACK_MS,
   LIST_READ_ATTEMPTS,
+  MAX_QUEUED_EVENTS,
   NOTICE_SUBJECT_MAX,
   PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
@@ -115,7 +117,42 @@ function range(count: number): MessageSummary[] {
   return Array.from({ length: count }, (_, i) => message(i));
 }
 
+/** Animation frames the store asked for and the test has not run yet. */
+const frames = new Map<number, FrameRequestCallback>();
+let lastFrame = 0;
+
+function stubFrames(): void {
+  frames.clear();
+  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+    lastFrame += 1;
+    frames.set(lastFrame, run);
+    return lastFrame;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (handle: number) => {
+    frames.delete(handle);
+  });
+}
+
+/**
+ * Fakes the clock but leaves animation frames to {@link nextFrame}.
+ *
+ * The fake timers would otherwise take over `requestAnimationFrame`, and a
+ * frame would then run only when a test happened to advance the clock by one.
+ */
+function useFakeClock(): void {
+  vi.useFakeTimers();
+  stubFrames();
+}
+
+/** Runs the animation frame the browser would paint next. */
+function nextFrame(): void {
+  const due = [...frames.values()];
+  frames.clear();
+  for (const run of due) run(0);
+}
+
 beforeEach(async () => {
+  stubFrames();
   undoDelete();
   for (const notice of notices()) dismissNotice(notice.id);
   vi.clearAllMocks();
@@ -642,7 +679,7 @@ describe("filteredMessages", () => {
 
 describe("deleteWithUndo", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    useFakeClock();
   });
 
   afterEach(() => {
@@ -811,12 +848,19 @@ function connectAndOpen(): void {
   openSocket();
 }
 
-function deliver(frame: unknown): void {
+/** Hands the store a frame off the socket, without running a frame. */
+function receive(frame: unknown): void {
   const socket = FakeSocket.last;
   if (socket?.onmessage == null) {
     throw new Error("the store never opened a socket");
   }
   socket.onmessage({ data: frame });
+}
+
+/** A frame arrives and the next animation frame runs. */
+function deliver(frame: unknown): void {
+  receive(frame);
+  nextFrame();
 }
 
 describe("WebSocket events", () => {
@@ -925,6 +969,121 @@ function openSocket(): void {
   }
   socket.onopen();
 }
+
+describe("live events per frame", () => {
+  beforeEach(async () => {
+    await seed(range(2));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+  });
+
+  function arrival(n: number, over: Partial<MessageSummary> = {}): string {
+    return JSON.stringify({ type: "message:new", data: message(n, over) });
+  }
+
+  it("holds an event until the next animation frame", () => {
+    receive(arrival(9));
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+  });
+
+  it("recomputes the list once for a frame of arrivals", () => {
+    let recomputed = 0;
+    const dispose = createRoot((dispose) => {
+      createEffect(
+        on(filteredMessages, () => (recomputed += 1), { defer: true }),
+      );
+      return dispose;
+    });
+
+    for (let n = 10; n < 60; n += 1) receive(arrival(n));
+    nextFrame();
+    dispose();
+
+    expect(recomputed).toBe(1);
+    expect(filteredMessages()).toHaveLength(52);
+    expect(total()).toBe(52);
+  });
+
+  it("applies events when no frame comes, as in a background tab", async () => {
+    useFakeClock();
+    try {
+      receive(arrival(9));
+
+      await vi.advanceTimersByTimeAsync(FRAME_FALLBACK_MS);
+
+      expect(filteredMessages().map((m) => m.id)[0]).toBe("id-9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts an arrival repeated within one frame once", () => {
+    receive(arrival(9));
+    receive(arrival(9));
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+    expect(total()).toBe(3);
+  });
+
+  it("applies a flag change to a message that arrived in the same frame", () => {
+    receive(arrival(9));
+    receive(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: true },
+      }),
+    );
+    nextFrame();
+
+    expect(filteredMessages()[0]).toMatchObject({
+      id: "id-9",
+      is_starred: true,
+    });
+  });
+
+  it("applies a deletion in the order it arrived", () => {
+    receive(arrival(9));
+    receive(JSON.stringify({ type: "message:delete", data: { id: "id-9" } }));
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("reads the list again instead of replaying a backlog too long to hold", async () => {
+    listMessages.mockResolvedValue(page([message(5)], 1));
+
+    for (let n = 0; n <= MAX_QUEUED_EVENTS; n += 1) receive(arrival(1000 + n));
+    nextFrame();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
+  });
+
+  it("drops the events still queued when the socket is closed", () => {
+    receive(arrival(9));
+
+    disconnectWebSocket();
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+});
 
 describe("resync when the socket opens", () => {
   type Page = { messages: MessageSummary[]; total: number };
@@ -1037,7 +1196,7 @@ describe("resync when the socket opens", () => {
 
 describe("loading while the socket will not open", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
@@ -1132,7 +1291,7 @@ describe("live traffic during a search", () => {
   const ARRIVAL_INTERVAL_MS = 10;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
@@ -1300,7 +1459,7 @@ describe("a superseded list read", () => {
  */
 describe("a deletion reported over both connections", () => {
   beforeEach(async () => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
