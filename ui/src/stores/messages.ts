@@ -471,7 +471,6 @@ async function readFirstPage(): Promise<boolean> {
   currentListRead?.abort();
   const controller = new AbortController();
   currentListRead = controller;
-  searchStale = false;
   setLoading(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
@@ -493,6 +492,7 @@ async function readFirstPage(): Promise<boolean> {
         countNeedsRefresh = raced;
         setMessages(res.messages);
         setStoredTotal(res.total);
+        searchStale = false;
         for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
       });
       if (raced) void refreshTotal();

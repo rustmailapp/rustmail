@@ -961,6 +961,20 @@ describe("live traffic during a search", () => {
     expect(loading()).toBe(false);
     expect(filteredMessages().map((m) => m.id)).not.toEqual(["id-5"]);
   });
+
+  it("keeps the search stale when the servicing read fails, so the schedule still runs", async () => {
+    deliver(arrival(100));
+
+    listMessages.mockRejectedValueOnce(new Error("offline"));
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    expect(listMessages).toHaveBeenCalledTimes(1);
+
+    listMessages.mockResolvedValueOnce({ messages: [message(5)], total: 1 });
+    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
+  });
 });
 
 describe("a superseded list read", () => {
