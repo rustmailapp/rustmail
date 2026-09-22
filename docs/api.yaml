@@ -17,8 +17,9 @@ info:
 
 
     A `GET` or `HEAD` still running after 30 seconds is abandoned and
-    answered `503` with an empty body. Writes are never cut short, so a
-    `503` never stands for a change that still lands. The WebSocket is exempt.
+    answered `503` with the usual `Error` body. Writes are never cut short,
+    so a `503` never stands for a change that still lands. The WebSocket is
+    exempt.
 
 servers:
   - url: http://localhost:8025
@@ -121,6 +122,8 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: before and offset cannot be combined; page with next_cursor or with offset, not both
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
     delete:
       operationId: deleteAllMessages
@@ -164,6 +167,8 @@ paths:
                 html_body: '<p>Hello Bob!</p>'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
     patch:
       operationId: updateMessage
@@ -236,6 +241,8 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/headers:
     parameters:
@@ -267,6 +274,8 @@ paths:
                   value: "Welcome aboard"
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/attachments:
     parameters:
@@ -298,6 +307,8 @@ paths:
                     size: 48321
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/attachments/{aid}:
     parameters:
@@ -320,6 +331,8 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/inline/{cid}:
     parameters:
@@ -349,6 +362,8 @@ paths:
                 format: binary
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/export:
     parameters:
@@ -389,6 +404,8 @@ paths:
                 $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/messages/{id}/release:
     parameters:
@@ -463,6 +480,8 @@ paths:
                     details: "arc=pass"
         '404':
           $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/assert/count:
     get:
@@ -522,6 +541,8 @@ paths:
               example:
                 count: 0
                 ok: false
+        '503':
+          $ref: '#/components/responses/TimedOut'
 
   /api/v1/ws:
     get:
@@ -587,6 +608,8 @@ components:
       in: query
       schema:
         type: integer
+        minimum: 1
+        maximum: 200
         default: 50
       description: >
         Maximum number of results to return. Values outside 1–200 are clamped
@@ -860,6 +883,15 @@ components:
           example: message not found
 
   responses:
+
+    TimedOut:
+      description: The read ran past the 30-second request timeout and was abandoned
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: the request ran past the server's time limit; retry it, or narrow it with limit or filters
 
     NotFound:
       description: Resource not found

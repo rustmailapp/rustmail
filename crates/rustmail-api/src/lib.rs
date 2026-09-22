@@ -48,7 +48,7 @@ pub use state::{AppState, WsEvent, WsFrame, WsFrameError};
 
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::{HeaderValue, Method};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, patch, post};
@@ -139,7 +139,7 @@ async fn time_out_reads(State(state): State<AppState>, request: Request, next: N
   }
   tokio::time::timeout(state.api_timeout, next.run(request))
     .await
-    .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
+    .unwrap_or_else(|_| handlers::AppError::TimedOut.into_response())
 }
 
 fn is_read(method: &Method) -> bool {
@@ -197,6 +197,23 @@ mod tests {
       .unwrap();
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+  }
+
+  #[tokio::test]
+  async fn a_timed_out_read_carries_the_error_body() {
+    let pool = single_connection_pool().await;
+    let _only_connection = pool.acquire().await.unwrap();
+
+    let response = short_timeout_router(&pool)
+      .oneshot(request(Method::GET, "/api/v1/messages"))
+      .await
+      .unwrap();
+
+    let bytes = axum::body::to_bytes(response.into_body(), 1024)
+      .await
+      .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(body["error"].is_string());
   }
 
   #[tokio::test]

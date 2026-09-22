@@ -863,10 +863,13 @@ const CURSOR_WITH_OFFSET: &str =
   "before and offset cannot be combined; page with next_cursor or with offset, not both";
 const UNKNOWN_CURSOR: &str =
   "before does not name a stored message; it may have been deleted, so restart from the first page";
+const READ_TIMED_OUT: &str =
+  "the request ran past the server's time limit; retry it, or narrow it with limit or filters";
 
 pub enum AppError {
   Storage(StorageError),
   BadRequest(String),
+  TimedOut,
 }
 
 impl From<StorageError> for AppError {
@@ -879,6 +882,7 @@ impl IntoResponse for AppError {
   fn into_response(self) -> axum::response::Response {
     let (status, message) = match &self {
       AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, reason.clone()),
+      AppError::TimedOut => (StatusCode::SERVICE_UNAVAILABLE, READ_TIMED_OUT.to_string()),
       AppError::Storage(StorageError::NotFound(_)) => {
         (StatusCode::NOT_FOUND, "Resource not found".to_string())
       }
