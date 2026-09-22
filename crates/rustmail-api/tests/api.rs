@@ -2007,3 +2007,62 @@ async fn an_unknown_client_route_serves_the_ui_shell() {
     "text/html; charset=utf-8"
   );
 }
+
+async fn get_with_if_none_match(
+  app: axum::Router,
+  uri: &str,
+  etag: &str,
+) -> axum::response::Response {
+  app
+    .oneshot(
+      Request::builder()
+        .uri(uri)
+        .header("if-none-match", etag)
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn the_ui_shell_carries_an_etag() {
+  let (app, _, _) = setup().await;
+
+  let response = get(app, "/").await;
+
+  let etag = response.headers()["etag"].to_str().unwrap();
+  assert!(
+    etag.starts_with("W/\"") && etag.ends_with('"'),
+    "not a weak ETag, though gzip changes the bytes it is served as: {etag}"
+  );
+}
+
+#[tokio::test]
+async fn a_current_etag_revalidates_the_ui_shell_without_a_body() {
+  let (app, _, _) = setup().await;
+  let first = get(app.clone(), "/").await;
+  let etag = first.headers()["etag"].to_str().unwrap().to_string();
+
+  let response = get_with_if_none_match(app, "/", &etag).await;
+
+  assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+  assert_eq!(response.headers()["etag"], etag.as_str());
+  let body = axum::body::to_bytes(response.into_body(), 1024)
+    .await
+    .unwrap();
+  assert!(body.is_empty());
+}
+
+#[tokio::test]
+async fn a_stale_etag_gets_the_whole_ui_shell() {
+  let (app, _, _) = setup().await;
+
+  let response = get_with_if_none_match(app, "/", "\"stale\"").await;
+
+  assert_eq!(response.status(), StatusCode::OK);
+  assert_eq!(
+    response.headers()["content-type"],
+    "text/html; charset=utf-8"
+  );
+}
