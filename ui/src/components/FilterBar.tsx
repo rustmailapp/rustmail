@@ -12,7 +12,7 @@ import {
   toggleTagFilter,
   tagFiltersFull,
   allTags,
-  total,
+  listSize,
   MAX_TAG_FILTERS,
 } from "../stores/messages";
 
@@ -310,7 +310,7 @@ export default function FilterBar() {
         <Show when={hasActiveFilters()}>
           <div class="ml-auto flex items-center gap-2">
             <span class="text-[11px] text-zinc-400 dark:text-zinc-600">
-              {total()} {total() === 1 ? "match" : "matches"}
+              {listSize()} {listSize() === 1 ? "match" : "matches"}
             </span>
             <button
               onClick={clearFilters}

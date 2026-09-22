@@ -350,6 +350,24 @@ test.describe("unread filter", () => {
       Number(await selectedOption(page).getAttribute("aria-setsize")),
     ).toBe(before - readBehind);
   });
+
+  test("counts the selection it keeps in the matches it shows", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await page.getByRole("button", { name: "Unread" }).click();
+    await tabToList(page);
+    await page.keyboard.press("ArrowDown");
+    await expect
+      .poll(() => selectedOption(page).getAttribute("data-id"))
+      .toBe(messageId(1));
+    await expect(
+      selectedOption(page).locator(".rounded-full.bg-transparent"),
+    ).toHaveCount(1);
+
+    const setSize = await selectedOption(page).getAttribute("aria-setsize");
+    await expect(page.getByText(`${setSize} matches`)).toBeVisible();
+  });
 });
 
 test.describe("detail pane loading", () => {
