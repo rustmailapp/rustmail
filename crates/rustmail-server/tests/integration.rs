@@ -1908,3 +1908,82 @@ async fn smtp_rejects_a_malformed_declared_size() {
   let mail = send_line(&mut stream, "MAIL FROM:<alice@test.com> SIZE=lots").await;
   assert!(mail.starts_with("501 5.5.4 "), "got: {mail}");
 }
+
+/// Ceiling on how long a clean stop may take with nothing left in flight.
+///
+/// Tighter than the server's shutdown drain deadline, so a server that merely
+/// waits that deadline out instead of draining fails here.
+#[cfg(unix)]
+const PROMPT_EXIT_SECS: u64 = 4;
+
+#[cfg(unix)]
+async fn stop_after_one_delivery(signal: &str) {
+  let smtp_port = portpicker::pick_unused_port().expect("no free port");
+  let http_port = portpicker::pick_unused_port().expect("no free port");
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+
+  let mut guard = ChildGuard::new(
+    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+      .args([
+        "serve",
+        "--smtp-port",
+        &smtp_port.to_string(),
+        "--http-port",
+        &http_port.to_string(),
+        "--log-level",
+        "warn",
+      ])
+      .arg("--db-path")
+      .arg(&db_path)
+      .stdout(std::process::Stdio::null())
+      .stderr(std::process::Stdio::null())
+      .spawn()
+      .expect("failed to spawn rustmail serve"),
+  );
+  let pid = guard.0.as_ref().and_then(|child| child.id()).unwrap();
+
+  let smtp_addr: std::net::SocketAddr = format!("127.0.0.1:{smtp_port}").parse().unwrap();
+  wait_for_tcp(smtp_addr).await;
+  smtp_send(smtp_addr, "a@test.com", "b@test.com", "Before stop", "body").await;
+
+  let kill = tokio::process::Command::new("kill")
+    .arg(format!("-{signal}"))
+    .arg(pid.to_string())
+    .status()
+    .await
+    .unwrap();
+  assert!(kill.success());
+
+  let status = guard.wait_with_timeout(PROMPT_EXIT_SECS).await;
+  assert!(
+    status.success(),
+    "SIG{signal} should stop cleanly, got {status:?}"
+  );
+
+  let wal_path = data_dir.path().join("rustmail.db-wal");
+  let wal_len = std::fs::metadata(&wal_path).map_or(0, |meta| meta.len());
+  assert_eq!(wal_len, 0, "the WAL must be checkpointed on the way out");
+
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect(&format!("sqlite:{}", db_path.display()))
+    .await
+    .unwrap();
+  let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+  assert_eq!(stored, 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn sigterm_drains_and_checkpoints_before_exit() {
+  stop_after_one_delivery("TERM").await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn ctrl_c_drains_and_checkpoints_before_exit() {
+  stop_after_one_delivery("INT").await;
+}
