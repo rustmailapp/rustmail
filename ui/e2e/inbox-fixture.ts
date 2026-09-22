@@ -66,7 +66,7 @@ export function optionSelector(index: number): string {
   return `#msg-option-${messageId(index)}`;
 }
 
-function summary(index: number): MessageSummary {
+export function summary(index: number): MessageSummary {
   return {
     id: messageId(index),
     sender: `sender-${index}@example.test`,

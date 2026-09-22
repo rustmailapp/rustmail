@@ -98,6 +98,74 @@ function findMessage(id: string): MessageSummary | undefined {
   return index < 0 ? undefined : rows[index];
 }
 
+/**
+ * Whether live arrivals wait above the list instead of entering it.
+ *
+ * Set while the reader is scrolled away from the top: a prepend there would
+ * slide every row they are reading down by one, hundreds of times a second.
+ */
+const [liveHeld, setLiveHeldSignal] = createSignal(false);
+/** Arrivals waiting for the reader to come back to the top, oldest first. */
+const heldRows = new Map<string, MessageSummary>();
+/** How many arrivals are waiting, including any {@link heldRows} let go. */
+const [heldArrivals, setHeldArrivals] = createSignal(0);
+/** Whether more arrived than {@link heldRows} keeps, so only a read can show them. */
+let heldOverflowed = false;
+/** Whether a search went stale while held, to be read again on the way back. */
+const [heldRefresh, setHeldRefresh] = createSignal(false);
+
+function dropHeldArrivals(): void {
+  heldRows.clear();
+  heldOverflowed = false;
+  setHeldArrivals(0);
+  setHeldRefresh(false);
+}
+
+function holdArrivals(arrivals: readonly MessageSummary[]): void {
+  for (const arrival of arrivals) {
+    if (heldOverflowed) continue;
+    if (heldRows.size === MAX_LIVE_ROWS) {
+      heldOverflowed = true;
+      heldRows.clear();
+      continue;
+    }
+    heldRows.set(arrival.id, arrival);
+  }
+  setHeldArrivals((count) => count + arrivals.length);
+}
+
+/**
+ * Holds live arrivals back while `held`, and shows what waited once it is not.
+ *
+ * The list tells the store where the reader is; the store decides nothing
+ * from scroll positions itself.
+ */
+function setLiveHeld(held: boolean): void {
+  if (held === liveHeld()) return;
+  setLiveHeldSignal(held);
+  if (!held) revealArrivals();
+}
+
+/**
+ * Puts the waiting arrivals on top, or reads the first page again when what
+ * waited cannot be shown from memory: a stale search, or more than was kept.
+ */
+function revealArrivals(): void {
+  const refresh = heldRefresh() || heldOverflowed;
+  const waiting = [...heldRows.values()].reverse();
+  if (!refresh && waiting.length === 0) return;
+  batch(() => {
+    dropHeldArrivals();
+    if (!refresh) {
+      prependRows(waiting.filter((m) => !positions.has(m.id)));
+      trimRows();
+    }
+  });
+  if (refresh) {
+    fetchMessages().catch(() => notify("Could not load the new messages."));
+  }
+}
+
 function replaceRows(rows: MessageSummary[]): void {
   positions.clear();
   headPosition = 0;
@@ -456,6 +524,7 @@ function forgetMessage(id: string): void {
     setNextCursor(messages()[indexOfRow(id) - 1]?.id ?? null);
   }
   removeRow(id);
+  if (heldRows.delete(id)) setHeldArrivals((count) => count - 1);
   unhide(id);
   if (selectedId() === id) setSelectedId(null);
 }
@@ -695,6 +764,7 @@ async function readFirstPage(): Promise<boolean> {
         snapshot += 1;
         countNeedsRefresh = raced;
         replaceRows(res.messages);
+        dropHeldArrivals();
         setPageCursor(res.next_cursor, view);
         setStoredTotal(res.total);
         searchStale = false;
@@ -731,6 +801,10 @@ function scheduleSearchRefresh(): void {
   searchRefreshTimer = setTimeout(() => {
     searchRefreshTimer = null;
     if (!searchStale || !search() || loading()) return;
+    if (liveHeld()) {
+      setHeldRefresh(true);
+      return;
+    }
     fetchMessages().catch(() =>
       notify("Could not refresh the search results."),
     );
@@ -857,17 +931,25 @@ function admitArrivals(arrivals: readonly MessageSummary[]): void {
   const fresh: MessageSummary[] = [];
   for (let i = arrivals.length - 1; i >= 0; i -= 1) {
     const arrival = arrivals[i];
-    if (positions.has(arrival.id) || seen.has(arrival.id)) continue;
+    if (seen.has(arrival.id) || isKnown(arrival.id)) continue;
     seen.add(arrival.id);
     if (matchesFilters(arrival, f)) fresh.push(arrival);
   }
   if (fresh.length === 0) return;
   batch(() => {
-    prependRows(fresh);
-    trimRows();
+    if (liveHeld()) {
+      holdArrivals(fresh.toReversed());
+    } else {
+      prependRows(fresh);
+      trimRows();
+    }
     setStoredTotal((t) => t + fresh.length);
   });
   if (countNeedsRefresh) void refreshTotal();
+}
+
+function isKnown(id: string): boolean {
+  return positions.has(id) || heldRows.has(id);
 }
 
 /**
@@ -877,6 +959,11 @@ function admitArrivals(arrivals: readonly MessageSummary[]): void {
  * idempotent, so a replay over a page that already reflects it counts nothing.
  */
 function patchMessage(id: string, patch: Partial<MessageSummary>): void {
+  const waiting = heldRows.get(id);
+  if (waiting !== undefined) {
+    heldRows.set(id, { ...waiting, ...patch });
+    return;
+  }
   const current = findMessage(id);
   if (current === undefined) return;
   const patched = { ...current, ...patch };
@@ -943,6 +1030,7 @@ function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
     case "messages:clear":
       batch(() => {
         dropPendingDeletes();
+        dropHeldArrivals();
         replaceRows([]);
         setNextCursor(null);
         setStoredTotal(0);
@@ -1146,6 +1234,9 @@ export {
   loading,
   loadingMore,
   hasMore,
+  heldArrivals,
+  heldRefresh,
+  setLiveHeld,
   listSize,
   loadMore,
   search,

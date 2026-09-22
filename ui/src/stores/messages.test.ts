@@ -59,6 +59,9 @@ const {
   toggleTagFilter,
   allTags,
   listSize,
+  heldArrivals,
+  heldRefresh,
+  setLiveHeld,
   total,
   undoDelete,
   undoableId,
@@ -1146,6 +1149,137 @@ describe("the live list's length", () => {
       limit: PAGE_SIZE,
       before: `id-${LAST_KEPT}`,
     });
+  });
+});
+
+describe("arrivals while the reader is scrolled away", () => {
+  beforeEach(async () => {
+    await seed(range(2));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+  });
+
+  afterEach(() => {
+    setLiveHeld(false);
+  });
+
+  function arrival(n: number, over: Partial<MessageSummary> = {}): string {
+    return JSON.stringify({ type: "message:new", data: message(n, over) });
+  }
+
+  function ids(): string[] {
+    return filteredMessages().map((m) => m.id);
+  }
+
+  it("keeps an arrival out of the list, and counts it as new", () => {
+    setLiveHeld(true);
+
+    deliver(arrival(9));
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(3);
+  });
+
+  it("puts the held arrivals on top once the reader is back there", () => {
+    setLiveHeld(true);
+    deliver(arrival(8));
+    deliver(arrival(9));
+
+    setLiveHeld(false);
+
+    expect(ids()).toEqual(["id-9", "id-8", "id-0", "id-1"]);
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(4);
+  });
+
+  it("holds only arrivals the filters match", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+    setLiveHeld(true);
+
+    deliver(arrival(8));
+    deliver(arrival(9, { is_starred: true }));
+
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(2);
+  });
+
+  it("counts an arrival the list already holds as nothing new", () => {
+    setLiveHeld(true);
+
+    deliver(arrival(0));
+
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(2);
+  });
+
+  it("applies a flag change to a held arrival", () => {
+    setLiveHeld(true);
+    deliver(arrival(9));
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: true },
+      }),
+    );
+
+    setLiveHeld(false);
+
+    expect(filteredMessages()[0]).toMatchObject({
+      id: "id-9",
+      is_starred: true,
+    });
+  });
+
+  it("forgets a held arrival that is deleted", () => {
+    setLiveHeld(true);
+    deliver(arrival(9));
+    deliver(JSON.stringify({ type: "message:delete", data: { id: "id-9" } }));
+
+    setLiveHeld(false);
+
+    expect(heldArrivals()).toBe(0);
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("reads the first page on return when more arrived than it holds", async () => {
+    setLiveHeld(true);
+    for (let n = 0; n <= MAX_LIVE_ROWS; n += 1) receive(arrival(1000 + n));
+    nextFrame();
+    listMessages.mockResolvedValue(page([message(5)], 1));
+
+    setLiveHeld(false);
+    await vi.waitFor(() => expect(loading()).toBe(false));
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(ids()).toEqual(["id-5"]);
+  });
+
+  it("holds a search refresh back, and runs it on return", async () => {
+    useFakeClock();
+    try {
+      setSearch("invoice");
+      await seed([message(0)]);
+      listMessages.mockClear();
+      setLiveHeld(true);
+
+      deliver(arrival(9));
+      await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+      expect(listMessages).not.toHaveBeenCalled();
+      expect(heldRefresh()).toBe(true);
+
+      setLiveHeld(false);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(listMessages).toHaveBeenCalledTimes(1);
+      expect(heldRefresh()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

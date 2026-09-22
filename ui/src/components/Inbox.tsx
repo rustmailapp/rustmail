@@ -23,6 +23,9 @@ import {
   hasActiveFilters,
   clearFilters,
   search,
+  heldArrivals,
+  heldRefresh,
+  setLiveHeld,
 } from "../stores/messages";
 import { formatDate, formatSize } from "../lib/format";
 import type { MessageSummary } from "../lib/types";
@@ -37,6 +40,13 @@ const ROW_ESTIMATE_PX = 85;
 const OVERSCAN_ROWS = 8;
 /** Distance from the end of the loaded list that starts the next page. */
 const LOAD_MORE_ROW_THRESHOLD = 10;
+/**
+ * How far down the list may be scrolled and still count as at the top.
+ *
+ * At the top, live mail enters the list as it arrives; past this it waits
+ * behind the "new" pill so the rows being read stay where they are.
+ */
+const LIVE_TOP_TOLERANCE_PX = 4;
 
 /**
  * Keys that move the selection when the list has focus.
@@ -64,6 +74,7 @@ export default function Inbox() {
       return filteredMessages().length;
     },
     getScrollElement: () => scroller ?? null,
+    getItemKey: (index) => filteredMessages()[index]?.id ?? index,
     estimateSize: () => ROW_ESTIMATE_PX,
     overscan: OVERSCAN_ROWS,
   });
@@ -123,6 +134,15 @@ export default function Inbox() {
     return rendered ? optionId(id) : undefined;
   };
 
+  function followScroll(): void {
+    if (scroller) setLiveHeld(scroller.scrollTop > LIVE_TOP_TOLERANCE_PX);
+  }
+
+  function showNewest(): void {
+    scroller?.scrollTo({ top: 0 });
+    setLiveHeld(false);
+  }
+
   function handleKeyDown(e: KeyboardEvent) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const target = SELECTION_KEYS[e.key];
@@ -134,8 +154,19 @@ export default function Inbox() {
   return (
     <div
       ref={scroller}
+      onScroll={followScroll}
       class="flex flex-col overflow-y-auto h-full has-[[role=listbox]:focus-visible]:ring-2 has-[[role=listbox]:focus-visible]:ring-inset has-[[role=listbox]:focus-visible]:ring-orange-500/60"
     >
+      <Show when={heldArrivals() > 0 || heldRefresh()}>
+        <div class="sticky top-0 z-10 h-0 flex justify-center">
+          <button
+            onClick={showNewest}
+            class="mt-2 rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-orange-400 transition cursor-pointer"
+          >
+            {heldArrivals() > 0 ? `${heldArrivals()} new` : "New results"}
+          </button>
+        </div>
+      </Show>
       <Show when={!loading() && filteredMessages().length === 0}>
         <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-500">
           <Show
