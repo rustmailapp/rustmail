@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rustls::ServerConfig as RustlsServerConfig;
 use tokio::io::AsyncWriteExt;
@@ -11,6 +12,13 @@ use crate::message::Delivery;
 use crate::session::Session;
 
 const MAX_CONCURRENT_SESSIONS: usize = 100;
+/// Pause after the first failed `accept()` in a row.
+///
+/// Errors such as `EMFILE` repeat instantly until descriptors free up, so
+/// retrying without a pause burns a core and floods the log.
+const ACCEPT_BACKOFF_INITIAL: Duration = Duration::from_millis(10);
+/// Longest pause between `accept()` retries while errors persist.
+const ACCEPT_BACKOFF_MAX: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone)]
 pub struct TlsConfig {
@@ -73,10 +81,12 @@ impl SmtpServer {
     info!(addr = %addr, "SMTP server listening");
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SESSIONS));
+    let mut accept_backoff = ACCEPT_BACKOFF_INITIAL;
 
     loop {
       match listener.accept().await {
         Ok((mut stream, peer)) => {
+          accept_backoff = ACCEPT_BACKOFF_INITIAL;
           let permit = match semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
@@ -99,9 +109,37 @@ impl SmtpServer {
           });
         }
         Err(e) => {
-          error!(error = %e, "Failed to accept TCP connection");
+          error!(error = %e, retry_in_ms = accept_backoff.as_millis(), "Failed to accept TCP connection");
+          tokio::time::sleep(accept_backoff).await;
+          accept_backoff = next_accept_backoff(accept_backoff);
         }
       }
     }
+  }
+}
+
+fn next_accept_backoff(current: Duration) -> Duration {
+  (current * 2).min(ACCEPT_BACKOFF_MAX)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn accept_backoff_doubles_after_each_failure() {
+    assert_eq!(
+      next_accept_backoff(ACCEPT_BACKOFF_INITIAL),
+      ACCEPT_BACKOFF_INITIAL * 2
+    );
+  }
+
+  #[test]
+  fn accept_backoff_stops_growing_at_its_cap() {
+    assert_eq!(next_accept_backoff(ACCEPT_BACKOFF_MAX), ACCEPT_BACKOFF_MAX);
+    assert_eq!(
+      next_accept_backoff(ACCEPT_BACKOFF_MAX - Duration::from_millis(1)),
+      ACCEPT_BACKOFF_MAX
+    );
   }
 }

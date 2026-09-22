@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::io;
 use std::net::SocketAddr;
+use std::num::IntErrorKind;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -26,7 +27,14 @@ const RSET_OK: &str = "250 Reset OK\r\n";
 const UNKNOWN_CMD: &str = "500 Unknown command\r\n";
 const BAD_SEQUENCE: &str = "503 Bad sequence of commands\r\n";
 const STARTTLS_READY: &str = "220 Ready to start TLS\r\n";
+const SIZE_EXCEEDED: &str = "552 5.3.4 Message size exceeds fixed maximum message size\r\n";
+const SIZE_MALFORMED: &str = "501 5.5.4 Malformed SIZE parameter\r\n";
+const SIZE_PARAM: &str = "SIZE=";
 const MAX_LINE_LENGTH: usize = 4096;
+/// Longest SMTP verb is `STARTTLS`; anything longer is not a command worth logging whole.
+const MAX_LOGGED_VERB_CHARS: usize = 8;
+/// The line that ends the DATA phase, which is not part of the message.
+const DATA_TERMINATOR: &[u8] = b".\r\n";
 const MAX_RECIPIENTS: usize = 100;
 /// Commands a client may issue without ever completing a mail transaction.
 ///
@@ -185,6 +193,8 @@ impl Session {
       } else if upper.starts_with("MAIL FROM:") {
         if !self.greeted {
           self.write(BAD_SEQUENCE).await?;
+        } else if let Some(refusal) = declared_size_refusal(trimmed, self.max_message_size) {
+          self.write(refusal).await?;
         } else {
           self.mail_from = Some(extract_address(trimmed));
           self.rcpt_to.clear();
@@ -236,7 +246,12 @@ impl Session {
       } else if upper == "NOOP" {
         self.write(OK).await?;
       } else {
-        warn!(peer = %self.peer, cmd = trimmed, "Unknown SMTP command");
+        warn!(
+          peer = %self.peer,
+          verb = command_verb(trimmed),
+          len = trimmed.len(),
+          "Unknown SMTP command"
+        );
         self.write(UNKNOWN_CMD).await?;
       }
     }
@@ -355,21 +370,25 @@ impl Session {
 
     loop {
       line_buf.clear();
-      let bytes_read = self.read_line_untimed(&mut line_buf).await?;
+      let budget = self.max_message_size.saturating_sub(data.len()) + DATA_TERMINATOR.len();
+      let bytes_read = match self.read_line_untimed(&mut line_buf, budget).await {
+        Ok(bytes_read) => bytes_read,
+        Err(SessionError::LineTooLong) => {
+          self.drain_data(!line_buf.ends_with(b"\n")).await?;
+          return Err(SessionError::MessageTooLarge);
+        }
+        Err(e) => return Err(e),
+      };
       if bytes_read == 0 {
         return Ok(None);
       }
 
-      let trimmed = line_buf
-        .strip_suffix(b"\r\n")
-        .or_else(|| line_buf.strip_suffix(b"\n"))
-        .unwrap_or(&line_buf);
-      if trimmed == b"." {
+      if is_data_terminator(&line_buf) {
         break;
       }
 
       if data.len() + line_buf.len() > self.max_message_size {
-        self.drain_data().await;
+        self.drain_data(false).await?;
         return Err(SessionError::MessageTooLarge);
       }
 
@@ -418,22 +437,32 @@ impl Session {
     }
   }
 
-  async fn drain_data(&mut self) {
-    let mut line = Vec::new();
+  /// Discards the rest of a refused message, up to and including its terminating dot.
+  ///
+  /// Lines are not collected, so no line is too long to skip; the DATA phase
+  /// timeout is what bounds the drain. A peer that disconnects before the dot
+  /// is an error, since there is nobody left to answer.
+  ///
+  /// `mid_line` says the size check cut a line short, so the bytes up to the
+  /// next newline are its tail and cannot be the terminating dot.
+  async fn drain_data(&mut self, mut mid_line: bool) -> Result<(), SessionError> {
+    let mut line_head = Vec::with_capacity(DATA_TERMINATOR.len());
     loop {
-      line.clear();
-      match self.read_line_untimed(&mut line).await {
-        Ok(0) => return,
-        Ok(_) => {
-          let trimmed = line
-            .strip_suffix(b"\r\n")
-            .or_else(|| line.strip_suffix(b"\n"))
-            .unwrap_or(&line);
-          if trimmed == b"." {
-            return;
-          }
+      let available = self.stream_mut()?.fill_buf().await?;
+      if available.is_empty() {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof).into());
+      }
+      let newline = available.iter().position(|&b| b == b'\n');
+      let taken = newline.map_or(available.len(), |pos| pos + 1);
+      let head_room = DATA_TERMINATOR.len().saturating_sub(line_head.len());
+      line_head.extend_from_slice(&available[..taken.min(head_room)]);
+      self.stream_mut()?.consume(taken);
+      if newline.is_some() {
+        if !mid_line && is_data_terminator(&line_head) {
+          return Ok(());
         }
-        Err(_) => return,
+        mid_line = false;
+        line_head.clear();
       }
     }
   }
@@ -443,19 +472,26 @@ impl Session {
   }
 
   async fn read_bounded_line_raw(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
-    timeout(IO_TIMEOUT, self.read_line_untimed(buf))
+    timeout(IO_TIMEOUT, self.read_line_untimed(buf, MAX_LINE_LENGTH))
       .await
       .map_err(|_| SessionError::Timeout)?
   }
 
-  /// Reads one line, arming no timer of its own.
+  /// Reads one line of at most `max_len` bytes, arming no timer of its own.
   ///
   /// A single large message is tens of thousands of lines, so timing each read
   /// individually spends most of the read path registering and dropping timers.
   /// Callers bound the whole phase instead: commands through
   /// [`Self::read_bounded_line_raw`], message bodies through the one timeout
   /// around the DATA phase.
-  async fn read_line_untimed(&mut self, buf: &mut Vec<u8>) -> Result<usize, SessionError> {
+  ///
+  /// The length check runs after every read, so whether a line is refused
+  /// never depends on how TCP happened to split it.
+  async fn read_line_untimed(
+    &mut self,
+    buf: &mut Vec<u8>,
+    max_len: usize,
+  ) -> Result<usize, SessionError> {
     loop {
       let available = self.stream_mut()?.fill_buf().await?;
       if available.is_empty() {
@@ -464,18 +500,15 @@ impl Session {
         }
         break;
       }
-      if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-        buf.extend_from_slice(&available[..=pos]);
-        let consumed = pos + 1;
-        self.stream_mut()?.consume(consumed);
-        break;
-      } else {
-        buf.extend_from_slice(available);
-        let len = available.len();
-        self.stream_mut()?.consume(len);
-      }
-      if buf.len() > MAX_LINE_LENGTH {
+      let newline = available.iter().position(|&b| b == b'\n');
+      let taken = newline.map_or(available.len(), |pos| pos + 1);
+      buf.extend_from_slice(&available[..taken]);
+      self.stream_mut()?.consume(taken);
+      if buf.len() > max_len {
         return Err(SessionError::LineTooLong);
+      }
+      if newline.is_some() {
+        break;
       }
     }
     Ok(buf.len())
@@ -510,6 +543,44 @@ fn redact_auth(cmd: &str) -> Cow<'_, str> {
   } else {
     cmd.into()
   }
+}
+
+/// The reply that refuses a `MAIL FROM` whose `SIZE=` parameter is over `max_message_size`
+/// or not a number, or `None` when the command declares no size or one that fits.
+fn declared_size_refusal(line: &str, max_message_size: usize) -> Option<&'static str> {
+  let value = line.split_ascii_whitespace().skip(1).find_map(|param| {
+    param
+      .get(..SIZE_PARAM.len())
+      .filter(|name| name.eq_ignore_ascii_case(SIZE_PARAM))
+      .map(|_| &param[SIZE_PARAM.len()..])
+  })?;
+  match value.parse::<u64>() {
+    Ok(size) if usize::try_from(size).is_ok_and(|size| size <= max_message_size) => None,
+    Ok(_) => Some(SIZE_EXCEEDED),
+    Err(error) if *error.kind() == IntErrorKind::PosOverflow => Some(SIZE_EXCEEDED),
+    Err(_) => Some(SIZE_MALFORMED),
+  }
+}
+
+fn is_data_terminator(line: &[u8]) -> bool {
+  let trimmed = line
+    .strip_suffix(b"\r\n")
+    .or_else(|| line.strip_suffix(b"\n"))
+    .unwrap_or(line);
+  trimmed == b"."
+}
+
+/// The first word of `line`, cut short, which is all of an unknown command that gets logged.
+///
+/// An unknown command is often message body text that a client sent out of
+/// turn, so the rest of the line may carry personal data or credentials.
+fn command_verb(line: &str) -> &str {
+  let verb = line.split_ascii_whitespace().next().unwrap_or_default();
+  let cut = verb
+    .char_indices()
+    .nth(MAX_LOGGED_VERB_CHARS)
+    .map_or(verb.len(), |(index, _)| index);
+  &verb[..cut]
 }
 
 fn extract_address(line: &str) -> String {
@@ -548,6 +619,47 @@ mod tests {
     assert_eq!(
       extract_address("MAIL FROM: user@example.com"),
       "user@example.com"
+    );
+  }
+
+  #[test]
+  fn logs_only_the_verb_of_an_unknown_command() {
+    assert_eq!(command_verb("XFOO secret token here"), "XFOO");
+  }
+
+  #[test]
+  fn cuts_a_long_unknown_verb_short() {
+    assert_eq!(command_verb("Passwordhunter2:abc"), "Password");
+    assert_eq!(command_verb("ééééééééééé"), "éééééééé");
+  }
+
+  #[test]
+  fn logs_nothing_for_a_blank_line() {
+    assert_eq!(command_verb("   "), "");
+  }
+
+  #[test]
+  fn recognises_the_terminating_dot_with_either_line_ending() {
+    assert!(is_data_terminator(b".\r\n"));
+    assert!(is_data_terminator(b".\n"));
+    assert!(!is_data_terminator(b"..\r\n"));
+    assert!(!is_data_terminator(b".x\r\n"));
+  }
+
+  #[test]
+  fn ignores_a_mail_from_without_a_declared_size() {
+    assert_eq!(declared_size_refusal("MAIL FROM:<a@t.com>", 100), None);
+    assert_eq!(
+      declared_size_refusal("MAIL FROM:<a@t.com> BODY=8BITMIME", 100),
+      None
+    );
+  }
+
+  #[test]
+  fn refuses_a_declared_size_too_large_to_parse() {
+    assert_eq!(
+      declared_size_refusal("MAIL FROM:<a@t.com> SIZE=99999999999999999999999", 100),
+      Some(SIZE_EXCEEDED)
     );
   }
 

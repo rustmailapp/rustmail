@@ -59,6 +59,14 @@ impl Delivery {
 pub struct DeliveryAck(oneshot::Sender<DeliveryOutcome>);
 
 impl DeliveryAck {
+  /// Whether the session stopped waiting for this answer.
+  ///
+  /// By then it has already told the sender to retry, so storing the message
+  /// would capture it twice.
+  pub fn is_abandoned(&self) -> bool {
+    self.0.is_closed()
+  }
+
   /// Reports that the message reached storage.
   pub fn stored(self) {
     let _ = self.0.send(DeliveryOutcome::Stored);
