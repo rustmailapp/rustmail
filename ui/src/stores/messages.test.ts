@@ -196,10 +196,13 @@ describe("paging by cursor", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: "id-1",
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
     expect(filteredMessages().map((m) => m.id)).toEqual([
       "id-0",
       "id-1",
@@ -266,13 +269,32 @@ describe("paging by cursor", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenCalledWith({
-      limit: PAGE_SIZE,
-      before: `id-${10 - LIST_READ_ATTEMPTS}`,
-    });
+    expect(listMessages).toHaveBeenCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: `id-${10 - LIST_READ_ATTEMPTS}`,
+      },
+      expect.any(AbortSignal),
+    );
     expect(notices().map((n) => n.text)).toEqual([
       "Could not load older messages.",
     ]);
+  });
+
+  it("abandons an older-page read the filters supersede", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    const paging = loadMore();
+    const [, signal] = listMessages.mock.lastCall as [unknown, AbortSignal];
+
+    toggleFilter("starred");
+    const aborted = signal.aborted;
+    read.resolve(page([]));
+    await paging;
+
+    expect(aborted).toBe(true);
   });
 
   it("stops paging once the server has no older page", async () => {
@@ -295,10 +317,13 @@ describe("paging by cursor", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: "id-1",
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
   });
 
   it("reads on from the row before a cursor the server no longer knows", async () => {
@@ -311,10 +336,13 @@ describe("paging by cursor", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: "id-1",
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
     expect(filteredMessages().map((m) => m.id)).toEqual([
       "id-0",
       "id-1",
@@ -546,11 +574,14 @@ describe("filtering on the server", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: "id-0",
-      filters: STARRED_ONLY,
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-0",
+        filters: STARRED_ONLY,
+      },
+      expect.any(AbortSignal),
+    );
   });
 
   it("does not read again when clearing filters that were never set", async () => {
@@ -1276,10 +1307,13 @@ describe("the live list's length", () => {
 
     await loadMore();
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: `id-${LAST_KEPT}`,
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: `id-${LAST_KEPT}`,
+      },
+      expect.any(AbortSignal),
+    );
   });
 });
 
@@ -2103,10 +2137,13 @@ describe("a deletion reported over both connections", () => {
     read.resolve({ messages: [message(2), message(3)], total: 4 });
     await paging;
 
-    expect(listMessages).toHaveBeenLastCalledWith({
-      limit: PAGE_SIZE,
-      before: "id-1",
-    });
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
     expect(filteredMessages().map((m) => m.id)).toEqual([
       "id-1",
       "id-2",

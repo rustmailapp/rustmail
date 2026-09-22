@@ -563,6 +563,8 @@ let deletionRevision = 0;
 let clearRevision = 0;
 let latestFetch = 0;
 let currentListRead: AbortController | null = null;
+/** The older-page read in flight, abandoned once a first-page read supersedes it. */
+let currentPageRead: AbortController | null = null;
 let searchStale = false;
 let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 /** Live events applied while the current list read is in flight. */
@@ -920,6 +922,7 @@ async function readFirstPage(): Promise<boolean> {
     liveHeld() && isCurrentView(cursorView) && messages().length > 0;
   const readList = inPlace ? readLoadedWindow : readTopPage;
   currentListRead?.abort();
+  currentPageRead?.abort();
   const controller = new AbortController();
   currentListRead = controller;
   setLoading(true);
@@ -1001,6 +1004,8 @@ async function loadMore(): Promise<void> {
   if (!isCurrentView(cursorView)) return;
   const view = currentView();
   const startedOn = latestFetch;
+  const controller = new AbortController();
+  currentPageRead = controller;
   setLoadingMore(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
@@ -1010,11 +1015,10 @@ async function loadMore(): Promise<void> {
       const revision = deletionRevision;
       let res: ListResponse;
       try {
-        res = await api.listMessages({
-          limit: PAGE_SIZE,
-          ...viewQuery(view),
-          before,
-        });
+        res = await api.listMessages(
+          { limit: PAGE_SIZE, ...viewQuery(view), before },
+          controller.signal,
+        );
       } catch (error) {
         if (!isUnknownCursor(error)) throw error;
         if (!isCurrentView(view) || startedOn !== latestFetch) return;
@@ -1042,6 +1046,7 @@ async function loadMore(): Promise<void> {
       notify(OLDER_PAGE_FAILED);
     }
   } finally {
+    if (currentPageRead === controller) currentPageRead = null;
     setLoadingMore(false);
   }
 }
@@ -1388,6 +1393,8 @@ function disconnectWebSocket(): void {
   latestFetch += 1;
   currentListRead?.abort();
   currentListRead = null;
+  currentPageRead?.abort();
+  currentPageRead = null;
   eventsDuringRead = null;
   setLoading(false);
   if (searchRefreshTimer !== null) {
