@@ -94,14 +94,14 @@ Fired when all messages are deleted. This event has no `data` field.
 
 The WebSocket handshake is not covered by CORS, so RustMail checks it itself. A handshake that carries an `Origin` header is answered `403 Forbidden` unless the origin is either:
 
-- the one RustMail is reached at — the address in the browser's own `Host` header, which is what the bundled UI sends; or
+- the one RustMail is reached at: the address in the browser's own `Host` header, which is what the bundled UI sends; or
 - one passed to `--allowed-origin` (repeatable, or comma-separated in `RUSTMAIL_ALLOWED_ORIGINS`).
 
 Without this, any page open in the same browser could subscribe to the event stream and read sender, recipients and subject of every incoming email.
 
-The comparison is against the address the browser dialled, which on its own would leave DNS rebinding open — a page whose hostname is re-pointed at the machine running RustMail keeps a matching origin. That is covered separately, by the `Host` check described in [Hosts and origins](/configuration/cli-flags#hosts-and-origins).
+The comparison is against the address the browser dialled, which on its own would leave DNS rebinding open: a page whose hostname is re-pointed at the machine running RustMail keeps a matching origin. That is covered separately, by the `Host` check described in [Hosts and origins](/configuration/cli-flags#hosts-and-origins).
 
-Clients that send **no** `Origin` header at all — the TUI, `websocat`, CI scripts, anything that is not a browser — are unaffected. Browsers do not let a page omit or forge the header, so its absence is only ever a non-browser client.
+Clients that send **no** `Origin` header at all (the TUI, `websocat`, CI scripts, anything that is not a browser) are unaffected. Browsers do not let a page omit or forge the header, so its absence is only ever a non-browser client.
 
 Behind a reverse proxy, name the public origin explicitly unless the proxy forwards the browser's `Host`:
 
