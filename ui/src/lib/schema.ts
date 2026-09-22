@@ -30,6 +30,8 @@ export const message = z.extend(messageSummary, {
 export const listResponse = z.object({
   messages: z.array(messageSummary),
   total: z.number(),
+  limit: z.number(),
+  next_cursor: z.nullable(z.string()),
 });
 
 export const attachment = z.object({
@@ -61,6 +63,9 @@ export const authResults = z.object({
   dmarc: z.array(authCheck),
   arc: z.array(authCheck),
 });
+
+/** The part of an error body a client acts on: its machine-readable `code`. */
+export const errorCode = z.object({ code: z.string() });
 
 const identified = z.object({ id: z.string() });
 

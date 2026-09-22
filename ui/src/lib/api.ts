@@ -3,6 +3,7 @@ import * as schema from "./schema";
 import type {
   Attachment,
   AuthResults,
+  FilterState,
   ListResponse,
   Message,
   MessageHeader,
@@ -79,6 +80,46 @@ function fieldPath(path: readonly PropertyKey[]): string {
 }
 
 /**
+ * A response whose status says the request did not succeed.
+ *
+ * Carries the status so a caller can tell a request the server rejected from
+ * one that never got an answer, and the body's `code`, when it names one, so a
+ * caller can tell one rejection from another without parsing the message.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+
+  constructor(res: Response, code: string | null = null) {
+    super(`API error: ${res.status} ${res.statusText}`);
+    this.name = "ApiError";
+    this.status = res.status;
+    this.code = code;
+  }
+}
+
+/**
+ * The error a rejected response stands for, with the `code` its body names.
+ *
+ * A body that is not JSON, or names no code, is still a rejection: only the
+ * code is missing, so that is the only thing left out.
+ */
+async function rejection(
+  res: Response,
+  signal: AbortSignal,
+): Promise<ApiError> {
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    signal.throwIfAborted();
+    return new ApiError(res);
+  }
+  const parsed = schema.errorCode.safeParse(body);
+  return new ApiError(res, parsed.success ? parsed.data.code : null);
+}
+
+/**
  * Checks a decoded body against `shape`, or rejects naming `route`.
  *
  * Only the first issue is reported. A drifted response usually breaks the same
@@ -136,9 +177,7 @@ async function fetchJson<S extends z.ZodMiniType>(
 ): Promise<z.infer<S>> {
   return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) throw await rejection(res, signal);
     return parse(route, shape, await readJson(route, res, signal));
   });
 }
@@ -146,9 +185,7 @@ async function fetchJson<S extends z.ZodMiniType>(
 async function fetchText(url: string, init?: RequestInit): Promise<string> {
   return withDeadline(init?.signal, REQUEST_TIMEOUT_MS, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) throw await rejection(res, signal);
     return res.text();
   });
 }
@@ -160,23 +197,36 @@ async function fetchVoid(
 ): Promise<void> {
   await withDeadline(init?.signal, timeoutMs, async (signal) => {
     const res = await fetch(url, { ...init, signal });
-    if (!res.ok) {
-      throw new Error(`API error: ${res.status} ${res.statusText}`);
-    }
+    if (!res.ok) throw await rejection(res, signal);
   });
 }
 
+/** What a list read asks `GET /messages` for. */
+export interface ListQuery {
+  limit: number;
+  /** Full-text search; an empty string reads the whole inbox. */
+  q?: string;
+  /** The `next_cursor` of the page before: read the messages older than it. */
+  before?: string;
+  /** Narrows the read, and its `total`, to the messages these match. */
+  filters?: FilterState;
+}
+
+function setFilterParams(params: URLSearchParams, filters: FilterState): void {
+  if (filters.starred) params.set("starred", "true");
+  if (filters.unread) params.set("unread", "true");
+  if (filters.attachments) params.set("has_attachments", "true");
+  for (const tag of filters.tags) params.append("tag", tag);
+}
+
 export async function listMessages(
-  limit = 50,
-  offset = 0,
-  q?: string,
+  query: ListQuery,
   signal?: AbortSignal,
 ): Promise<ListResponse> {
-  const params = new URLSearchParams({
-    limit: String(limit),
-    offset: String(offset),
-  });
-  if (q) params.set("q", q);
+  const params = new URLSearchParams({ limit: String(query.limit) });
+  if (query.q) params.set("q", query.q);
+  if (query.before !== undefined) params.set("before", query.before);
+  if (query.filters) setFilterParams(params, query.filters);
   return fetchJson(
     "GET /messages",
     `${BASE}/messages?${params}`,

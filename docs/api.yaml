@@ -115,13 +115,23 @@ paths:
             `before` names no stored message (it may have been deleted; restart
             from the first page), `before` and `offset` were both given, more
             than 20 `tag` values were given, or `limit`, `offset` or a boolean
-            filter has a malformed value.
+            filter has a malformed value. Only the unknown-cursor case carries
+            `code: unknown_cursor`; tell the cases apart by `code`, not by the
+            status or the `error` text.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-              example:
-                error: before and offset cannot be combined; page with next_cursor or with offset, not both
+              examples:
+                unknownCursor:
+                  summary: before names no stored message
+                  value:
+                    error: before does not name a stored message; it may have been deleted, so restart from the first page
+                    code: unknown_cursor
+                cursorWithOffset:
+                  summary: before and offset were both given
+                  value:
+                    error: before and offset cannot be combined; page with next_cursor or with offset, not both
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -635,7 +645,7 @@ components:
         Keyset cursor: the id of a message. Returns only messages strictly
         older than it, in the same order. Use a previous response's
         `next_cursor`. Works with `q`. An id that names no stored message is
-        a `400`.
+        a `400` with `code: unknown_cursor`.
 
   schemas:
 
@@ -881,6 +891,12 @@ components:
           type: string
           description: Human-readable error message
           example: message not found
+        code:
+          type: string
+          enum: [unknown_cursor]
+          description: >
+            Machine-readable reason, present only where a client needs to act
+            on it. `unknown_cursor`: `before` names no stored message.
 
   responses:
 

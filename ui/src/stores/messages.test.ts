@@ -1,3 +1,4 @@
+import { createEffect, createRoot, on } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageSummary } from "../lib/types";
 import { dismissNotice, notices } from "./notices";
@@ -16,7 +17,9 @@ const {
   markStarred: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({
+vi.mock("../lib/api", async () => ({
+  ApiError: (await vi.importActual<typeof import("../lib/api")>("../lib/api"))
+    .ApiError,
   deleteAllMessages,
   deleteMessage,
   listMessages,
@@ -24,9 +27,15 @@ vi.mock("../lib/api", () => ({
   markStarred,
 }));
 
+const { ApiError } = await import("../lib/api");
 const {
+  FRAME_FALLBACK_MS,
   LIST_READ_ATTEMPTS,
+  MAX_LIVE_ROWS,
+  MAX_QUEUED_EVENTS,
+  MAX_TAG_FILTERS,
   NOTICE_SUBJECT_MAX,
+  PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   UNDO_WINDOW_MS,
@@ -38,6 +47,8 @@ const {
   flushPendingDelete,
   fetchMessages,
   filteredMessages,
+  filters,
+  hasMore,
   loading,
   moveSelection,
   loadMore,
@@ -47,6 +58,13 @@ const {
   setSearch,
   setSelectedId,
   toggleFilter,
+  toggleTagFilter,
+  allTags,
+  listSize,
+  liveSummary,
+  heldArrivals,
+  heldRefresh,
+  setLiveHeld,
   total,
   undoDelete,
   undoableId,
@@ -81,8 +99,24 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+type Page = {
+  messages: MessageSummary[];
+  total: number;
+  limit: number;
+  next_cursor: string | null;
+};
+
+/** A list response as the server shapes one, older pages behind `cursor`. */
+function page(
+  msgs: MessageSummary[],
+  total = msgs.length,
+  cursor: string | null = null,
+): Page {
+  return { messages: msgs, total, limit: PAGE_SIZE, next_cursor: cursor };
+}
+
 async function seed(msgs: MessageSummary[]): Promise<void> {
-  listMessages.mockResolvedValue({ messages: msgs, total: msgs.length });
+  listMessages.mockResolvedValue(page(msgs));
   await fetchMessages();
 }
 
@@ -90,7 +124,42 @@ function range(count: number): MessageSummary[] {
   return Array.from({ length: count }, (_, i) => message(i));
 }
 
+/** Animation frames the store asked for and the test has not run yet. */
+const frames = new Map<number, FrameRequestCallback>();
+let lastFrame = 0;
+
+function stubFrames(): void {
+  frames.clear();
+  vi.stubGlobal("requestAnimationFrame", (run: FrameRequestCallback) => {
+    lastFrame += 1;
+    frames.set(lastFrame, run);
+    return lastFrame;
+  });
+  vi.stubGlobal("cancelAnimationFrame", (handle: number) => {
+    frames.delete(handle);
+  });
+}
+
+/**
+ * Fakes the clock but leaves animation frames to {@link nextFrame}.
+ *
+ * The fake timers would otherwise take over `requestAnimationFrame`, and a
+ * frame would then run only when a test happened to advance the clock by one.
+ */
+function useFakeClock(): void {
+  vi.useFakeTimers();
+  stubFrames();
+}
+
+/** Runs the animation frame the browser would paint next. */
+function nextFrame(): void {
+  const due = [...frames.values()];
+  frames.clear();
+  for (const run of due) run(0);
+}
+
 beforeEach(async () => {
+  stubFrames();
   undoDelete();
   for (const notice of notices()) dismissNotice(notice.id);
   vi.clearAllMocks();
@@ -104,6 +173,11 @@ beforeEach(async () => {
   await seed([]);
 });
 
+afterEach(() => {
+  disconnectWebSocket();
+  vi.unstubAllGlobals();
+});
+
 describe("store reactivity", () => {
   it("recomputes the filtered list when messages land", async () => {
     expect(filteredMessages()).toEqual([]);
@@ -111,6 +185,189 @@ describe("store reactivity", () => {
     await seed(range(2));
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+});
+
+describe("paging by cursor", () => {
+  it("reads the next page from the cursor the last page returned", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockResolvedValue(page([message(2), message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+      "id-3",
+    ]);
+  });
+
+  it("does not page on from a cursor read under another search", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockClear();
+    setSearch("invoice");
+
+    await loadMore();
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not page on from a cursor read under other filters", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockClear();
+    const dispose = createRoot((dispose) => {
+      createEffect(
+        on(filteredMessages, () => void loadMore(), { defer: true }),
+      );
+      return dispose;
+    });
+
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    dispose();
+
+    for (const [query] of listMessages.mock.calls) {
+      expect(query).not.toHaveProperty("before");
+    }
+  });
+
+  it("says so when an older page does not load", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    await loadMore();
+
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
+    ]);
+  });
+
+  it("says so when the cursor keeps moving under an older page", async () => {
+    listMessages.mockResolvedValue(page(range(10), 20, "id-9"));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockImplementation(async ({ before }: { before?: string }) => {
+      if (before !== undefined) {
+        deliver(
+          JSON.stringify({ type: "message:delete", data: { id: before } }),
+        );
+      }
+      return page([message(10)], 20);
+    });
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: `id-${10 - LIST_READ_ATTEMPTS}`,
+      },
+      expect.any(AbortSignal),
+    );
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
+    ]);
+  });
+
+  it("abandons an older-page read the filters supersede", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
+    await fetchMessages();
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    const paging = loadMore();
+    const [, signal] = listMessages.mock.lastCall as [unknown, AbortSignal];
+
+    toggleFilter("starred");
+    const aborted = signal.aborted;
+    read.resolve(page([]));
+    await paging;
+
+    expect(aborted).toBe(true);
+  });
+
+  it("stops paging once the server has no older page", async () => {
+    await seed(range(2));
+    listMessages.mockClear();
+
+    await loadMore();
+
+    expect(hasMore()).toBe(false);
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("moves the cursor back a row when its message is deleted", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    deleteWithUndo("id-2");
+    flushPendingDelete();
+    await vi.waitFor(() => expect(total()).toBe(4));
+    listMessages.mockResolvedValue(page([message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("reads on from the row before a cursor the server no longer knows", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    listMessages.mockRejectedValueOnce(
+      new ApiError(new Response(null, { status: 400 }), "unknown_cursor"),
+    );
+    listMessages.mockResolvedValueOnce(page([message(3)], 4));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-3",
+    ]);
+  });
+
+  it("keeps the last row when an older page is rejected for another reason", async () => {
+    listMessages.mockResolvedValue(page(range(3), 5, "id-2"));
+    await fetchMessages();
+    listMessages.mockRejectedValueOnce(
+      new ApiError(new Response(null, { status: 400 })),
+    );
+
+    await loadMore();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-0",
+      "id-1",
+      "id-2",
+    ]);
+    expect(total()).toBe(5);
+    expect(notices().map((n) => n.text)).toEqual([
+      "Could not load older messages.",
+    ]);
   });
 });
 
@@ -285,6 +542,168 @@ describe("selectMessage", () => {
   });
 });
 
+describe("filtering on the server", () => {
+  const STARRED_ONLY = {
+    starred: true,
+    unread: false,
+    attachments: false,
+    tags: [],
+  };
+
+  it("asks the server for the starred messages in one read", async () => {
+    await seed(range(3));
+    listMessages.mockClear();
+    listMessages.mockResolvedValue(page([message(7, { is_starred: true })]));
+
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(filteredMessages()).toHaveLength(1));
+
+    expect(listMessages).toHaveBeenCalledExactlyOnceWith(
+      { limit: PAGE_SIZE, filters: STARRED_ONLY },
+      expect.any(AbortSignal),
+    );
+    expect(total()).toBe(1);
+  });
+
+  it("reads the next page under the same filters", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(
+      page([message(0, { is_starred: true })], 2, "id-0"),
+    );
+    await fetchMessages();
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-0",
+        filters: STARRED_ONLY,
+      },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("does not read again when clearing filters that were never set", async () => {
+    listMessages.mockClear();
+
+    clearFilters();
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("says so when the filtered read fails", async () => {
+    listMessages.mockRejectedValue(new Error("offline"));
+
+    toggleFilter("unread");
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not apply the filters.",
+      ]),
+    );
+  });
+
+  it("counts a message out when a flag change stops it matching", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(
+      page([
+        message(0, { is_starred: true }),
+        message(1, { is_starred: true }),
+      ]),
+    );
+    await fetchMessages();
+    connectAndOpen();
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-0", is_starred: false },
+      }),
+    );
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
+    expect(total()).toBe(1);
+  });
+
+  it("keeps offering the inbox's tags while filtering by one of them", async () => {
+    await seed([
+      message(0, { tags: ["alpha"] }),
+      message(1, { tags: ["beta"] }),
+    ]);
+    listMessages.mockResolvedValue(page([message(0, { tags: ["alpha"] })]));
+
+    toggleTagFilter("alpha");
+    await vi.waitFor(() => expect(filteredMessages()).toHaveLength(1));
+
+    expect(allTags()).toEqual(["alpha", "beta"]);
+  });
+
+  it("does not filter by more tags than the server accepts", async () => {
+    const tags = Array.from({ length: MAX_TAG_FILTERS + 1 }, (_, i) => `t${i}`);
+    for (const tag of tags.slice(0, MAX_TAG_FILTERS)) toggleTagFilter(tag);
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+
+    toggleTagFilter(tags[MAX_TAG_FILTERS]);
+
+    expect(filters().tags).toEqual(tags.slice(0, MAX_TAG_FILTERS));
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+});
+
+describe("listSize", () => {
+  it("counts the selected row the unread filter keeps after it is read", async () => {
+    toggleFilter("unread");
+    listMessages.mockResolvedValue(page([message(0), message(1)]));
+    await fetchMessages();
+    connectAndOpen();
+    setSelectedId("id-0");
+
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: "id-0", is_read: true },
+      }),
+    );
+
+    expect(total()).toBe(1);
+    expect(listSize()).toBe(2);
+  });
+});
+
+describe("live arrivals under filters", () => {
+  beforeEach(() => {
+    connectAndOpen();
+  });
+
+  function arrival(over: Partial<MessageSummary>): string {
+    return JSON.stringify({ type: "message:new", data: message(9, over) });
+  }
+
+  it("leaves out an arrival the filters exclude, and its count", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+
+    deliver(arrival({}));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0"]);
+    expect(total()).toBe(1);
+  });
+
+  it("adds an arrival the filters match", async () => {
+    toggleFilter("unread");
+    listMessages.mockResolvedValue(page([message(0)]));
+    await fetchMessages();
+
+    deliver(arrival({}));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-9", "id-0"]);
+    expect(total()).toBe(2);
+  });
+});
+
 describe("filteredMessages", () => {
   it("keeps the selected message once the filter stops matching it", async () => {
     await seed([message(0, { is_read: true }), message(1), message(2)]);
@@ -366,7 +785,7 @@ describe("filteredMessages", () => {
 
 describe("deleteWithUndo", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    useFakeClock();
   });
 
   afterEach(() => {
@@ -526,12 +945,28 @@ class FakeSocket {
   close(): void {}
 }
 
-function deliver(frame: unknown): void {
+/** Connects the store to a fake socket and opens it, as the server would. */
+function connectAndOpen(): void {
+  FakeSocket.last = null;
+  vi.stubGlobal("WebSocket", FakeSocket);
+  vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+  connectWebSocket();
+  openSocket();
+}
+
+/** Hands the store a frame off the socket, without running a frame. */
+function receive(frame: unknown): void {
   const socket = FakeSocket.last;
   if (socket?.onmessage == null) {
     throw new Error("the store never opened a socket");
   }
   socket.onmessage({ data: frame });
+}
+
+/** A frame arrives and the next animation frame runs. */
+function deliver(frame: unknown): void {
+  receive(frame);
+  nextFrame();
 }
 
 describe("WebSocket events", () => {
@@ -640,6 +1075,493 @@ function openSocket(): void {
   }
   socket.onopen();
 }
+
+describe("live events per frame", () => {
+  beforeEach(async () => {
+    await seed(range(2));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+  });
+
+  function arrival(n: number, over: Partial<MessageSummary> = {}): string {
+    return JSON.stringify({ type: "message:new", data: message(n, over) });
+  }
+
+  it("holds an event until the next animation frame", () => {
+    receive(arrival(9));
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+  });
+
+  it("recomputes the list once for a frame of arrivals", () => {
+    let recomputed = 0;
+    const dispose = createRoot((dispose) => {
+      createEffect(
+        on(filteredMessages, () => (recomputed += 1), { defer: true }),
+      );
+      return dispose;
+    });
+
+    for (let n = 10; n < 60; n += 1) receive(arrival(n));
+    nextFrame();
+    dispose();
+
+    expect(recomputed).toBe(1);
+    expect(filteredMessages()).toHaveLength(52);
+    expect(total()).toBe(52);
+  });
+
+  it("applies events when no frame comes, as in a background tab", async () => {
+    useFakeClock();
+    try {
+      receive(arrival(9));
+
+      await vi.advanceTimersByTimeAsync(FRAME_FALLBACK_MS);
+
+      expect(filteredMessages().map((m) => m.id)[0]).toBe("id-9");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts an arrival repeated within one frame once", () => {
+    receive(arrival(9));
+    receive(arrival(9));
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-9",
+      "id-0",
+      "id-1",
+    ]);
+    expect(total()).toBe(3);
+  });
+
+  it("applies a flag change to a message that arrived in the same frame", () => {
+    receive(arrival(9));
+    receive(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: true },
+      }),
+    );
+    nextFrame();
+
+    expect(filteredMessages()[0]).toMatchObject({
+      id: "id-9",
+      is_starred: true,
+    });
+  });
+
+  it("applies a deletion in the order it arrived", () => {
+    receive(arrival(9));
+    receive(JSON.stringify({ type: "message:delete", data: { id: "id-9" } }));
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("reads the list again instead of replaying a backlog too long to hold", async () => {
+    listMessages.mockResolvedValue(page([message(5)], 1));
+
+    for (let n = 0; n <= MAX_QUEUED_EVENTS; n += 1) receive(arrival(1000 + n));
+    nextFrame();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
+  });
+
+  it("drops the events still queued when the socket is closed", () => {
+    receive(arrival(9));
+
+    disconnectWebSocket();
+    nextFrame();
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+  });
+});
+
+describe("the live list's length", () => {
+  const LAST_KEPT = MAX_LIVE_ROWS - 2;
+
+  beforeEach(async () => {
+    listMessages.mockResolvedValue(
+      page(range(MAX_LIVE_ROWS), 2 * MAX_LIVE_ROWS, `id-${MAX_LIVE_ROWS - 1}`),
+    );
+    await fetchMessages();
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+  });
+
+  it("lets the oldest row go when an arrival would pass the cap", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    const ids = filteredMessages().map((m) => m.id);
+    expect(ids).toHaveLength(MAX_LIVE_ROWS);
+    expect(ids[0]).toBe("id--1");
+    expect(ids.at(-1)).toBe(`id-${LAST_KEPT}`);
+  });
+
+  it("keeps a row awaiting deletion counted out after letting it go", () => {
+    deleteWithUndo(`id-${MAX_LIVE_ROWS - 1}`);
+    expect(total()).toBe(2 * MAX_LIVE_ROWS - 1);
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    expect(total()).toBe(2 * MAX_LIVE_ROWS);
+  });
+
+  it("brings back a row awaiting undo that an arrival would have let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    deleteWithUndo(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    undoDelete();
+
+    expect(filteredMessages().at(-1)?.id).toBe(oldest);
+    expect(total()).toBe(2 * MAX_LIVE_ROWS + 1);
+  });
+
+  it("lets a row go once it can no longer be undone", () => {
+    deleteWithUndo(`id-${MAX_LIVE_ROWS - 1}`);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    undoDelete();
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-2) }));
+
+    expect(filteredMessages()).toHaveLength(MAX_LIVE_ROWS);
+  });
+
+  it("keeps the open message's star current once its row is let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    setSelectedId(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: oldest, is_starred: true },
+      }),
+    );
+
+    expect(liveSummary(message(MAX_LIVE_ROWS - 1)).is_starred).toBe(true);
+  });
+
+  it("keeps the open message's tags current once its row is let go", () => {
+    const oldest = `id-${MAX_LIVE_ROWS - 1}`;
+    setSelectedId(oldest);
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:tags",
+        data: { id: oldest, tags: ["urgent"] },
+      }),
+    );
+
+    expect(liveSummary(message(MAX_LIVE_ROWS - 1)).tags).toEqual(["urgent"]);
+  });
+
+  it("still counts the rows it let go", () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+
+    expect(total()).toBe(2 * MAX_LIVE_ROWS + 1);
+  });
+
+  it("drops a page read from a cursor the cap has since moved", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    listMessages.mockResolvedValueOnce(
+      page([message(LAST_KEPT + 1), message(MAX_LIVE_ROWS)], 0),
+    );
+    const paging = loadMore();
+
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    read.resolve(page([message(MAX_LIVE_ROWS)], 0));
+    await paging;
+
+    expect(
+      filteredMessages()
+        .map((m) => m.id)
+        .slice(-3),
+    ).toEqual([
+      `id-${LAST_KEPT}`,
+      `id-${LAST_KEPT + 1}`,
+      `id-${MAX_LIVE_ROWS}`,
+    ]);
+  });
+
+  it("reads the rows it let go again from the last one kept", async () => {
+    deliver(JSON.stringify({ type: "message:new", data: message(-1) }));
+    listMessages.mockResolvedValue(page([message(LAST_KEPT + 1)], 0));
+
+    await loadMore();
+
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: `id-${LAST_KEPT}`,
+      },
+      expect.any(AbortSignal),
+    );
+  });
+});
+
+describe("arrivals while the reader is scrolled away", () => {
+  beforeEach(async () => {
+    await seed(range(2));
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+  });
+
+  afterEach(() => {
+    setLiveHeld(false);
+  });
+
+  function arrival(n: number, over: Partial<MessageSummary> = {}): string {
+    return JSON.stringify({ type: "message:new", data: message(n, over) });
+  }
+
+  function ids(): string[] {
+    return filteredMessages().map((m) => m.id);
+  }
+
+  it("keeps an arrival out of the list, and counts it as new", () => {
+    setLiveHeld(true);
+
+    deliver(arrival(9));
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(3);
+  });
+
+  /** Answers list reads from `rows`, a page at a time, as the server would. */
+  function serve(rows: MessageSummary[]): void {
+    listMessages.mockImplementation(
+      async ({ limit, before }: { limit: number; before?: string }) => {
+        const start =
+          before === undefined ? 0 : rows.findIndex((m) => m.id === before) + 1;
+        const slice = rows.slice(start, start + limit);
+        const more = start + limit < rows.length;
+        return page(
+          slice,
+          rows.length,
+          more ? (slice.at(-1)?.id ?? null) : null,
+        );
+      },
+    );
+  }
+
+  async function resync(): Promise<void> {
+    openSocket();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+  }
+
+  it("holds what a resync finds new instead of moving the rows", async () => {
+    setLiveHeld(true);
+    serve([message(9), ...range(2)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(3);
+  });
+
+  it("shows what a held resync found once the reader is back on top", async () => {
+    setLiveHeld(true);
+    serve([message(9), ...range(2)]);
+    await resync();
+
+    setLiveHeld(false);
+
+    expect(ids()).toEqual(["id-9", "id-0", "id-1"]);
+  });
+
+  it("drops a loaded row a held resync finds deleted", async () => {
+    setLiveHeld(true);
+    serve([message(0)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0"]);
+    expect(total()).toBe(1);
+  });
+
+  it("updates a loaded row a held resync finds changed", async () => {
+    setLiveHeld(true);
+    serve([message(0), message(1, { is_starred: true })]);
+
+    await resync();
+
+    expect(filteredMessages().map((m) => m.is_starred)).toEqual([false, true]);
+  });
+
+  it("reconciles loaded rows past the first page on a held resync", async () => {
+    const rows = range(PAGE_SIZE + 50);
+    serve(rows);
+    await fetchMessages();
+    await loadMore();
+    setLiveHeld(true);
+    const gone = `id-${PAGE_SIZE + 20}`;
+    serve([message(-1), ...rows.filter((m) => m.id !== gone)]);
+
+    await resync();
+
+    expect(ids()).toEqual(rows.map((m) => m.id).filter((id) => id !== gone));
+    expect(heldArrivals()).toBe(1);
+    expect(hasMore()).toBe(false);
+  });
+
+  it("stops a held resync a page past a deleted tail", async () => {
+    listMessages.mockResolvedValue(page(range(3), 3 + 2 * PAGE_SIZE, "id-2"));
+    await fetchMessages();
+    setLiveHeld(true);
+    const older = Array.from({ length: 2 * PAGE_SIZE }, (_, i) =>
+      message(1000 + i),
+    );
+    serve([message(0), message(1), ...older]);
+    listMessages.mockClear();
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(hasMore()).toBe(true);
+  });
+
+  it("puts the held arrivals on top once the reader is back there", () => {
+    setLiveHeld(true);
+    deliver(arrival(8));
+    deliver(arrival(9));
+
+    setLiveHeld(false);
+
+    expect(ids()).toEqual(["id-9", "id-8", "id-0", "id-1"]);
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(4);
+  });
+
+  it("holds only arrivals the filters match", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+    setLiveHeld(true);
+
+    deliver(arrival(8));
+    deliver(arrival(9, { is_starred: true }));
+
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(2);
+  });
+
+  it("counts an arrival the list already holds as nothing new", () => {
+    setLiveHeld(true);
+
+    deliver(arrival(0));
+
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(2);
+  });
+
+  it("applies a flag change to a held arrival", () => {
+    setLiveHeld(true);
+    deliver(arrival(9));
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: true },
+      }),
+    );
+
+    setLiveHeld(false);
+
+    expect(filteredMessages()[0]).toMatchObject({
+      id: "id-9",
+      is_starred: true,
+    });
+  });
+
+  it("drops a held arrival that stops matching the filters", async () => {
+    toggleFilter("starred");
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    await fetchMessages();
+    setLiveHeld(true);
+    deliver(arrival(9, { is_starred: true }));
+
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-9", is_starred: false },
+      }),
+    );
+    setLiveHeld(false);
+
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(1);
+    expect(ids()).toEqual(["id-0"]);
+  });
+
+  it("forgets a held arrival that is deleted", () => {
+    setLiveHeld(true);
+    deliver(arrival(9));
+    deliver(JSON.stringify({ type: "message:delete", data: { id: "id-9" } }));
+
+    setLiveHeld(false);
+
+    expect(heldArrivals()).toBe(0);
+    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+  });
+
+  it("reads the first page on return when more arrived than it holds", async () => {
+    setLiveHeld(true);
+    for (let n = 0; n <= MAX_LIVE_ROWS; n += 1) receive(arrival(1000 + n));
+    nextFrame();
+    listMessages.mockResolvedValue(page([message(5)], 1));
+
+    setLiveHeld(false);
+    await vi.waitFor(() => expect(loading()).toBe(false));
+
+    expect(listMessages).toHaveBeenCalledTimes(1);
+    expect(ids()).toEqual(["id-5"]);
+  });
+
+  it("holds a search refresh back, and runs it on return", async () => {
+    useFakeClock();
+    try {
+      setSearch("invoice");
+      await seed([message(0)]);
+      listMessages.mockClear();
+      setLiveHeld(true);
+
+      deliver(arrival(9));
+      await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+      expect(listMessages).not.toHaveBeenCalled();
+      expect(heldRefresh()).toBe(true);
+
+      setLiveHeld(false);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(listMessages).toHaveBeenCalledTimes(1);
+      expect(heldRefresh()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("resync when the socket opens", () => {
   type Page = { messages: MessageSummary[]; total: number };
@@ -752,7 +1674,7 @@ describe("resync when the socket opens", () => {
 
 describe("loading while the socket will not open", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
@@ -847,7 +1769,7 @@ describe("live traffic during a search", () => {
   const ARRIVAL_INTERVAL_MS = 10;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
@@ -875,9 +1797,7 @@ describe("live traffic during a search", () => {
     await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
 
     expect(listMessages).toHaveBeenCalledExactlyOnceWith(
-      100,
-      0,
-      "invoice",
+      { limit: PAGE_SIZE, q: "invoice" },
       expect.any(AbortSignal),
     );
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
@@ -980,14 +1900,12 @@ describe("live traffic during a search", () => {
 describe("a superseded list read", () => {
   it("is aborted when a newer read starts", async () => {
     const signals: AbortSignal[] = [];
-    listMessages.mockImplementation(
-      (_limit: number, _offset: number, _q: unknown, signal: AbortSignal) => {
-        signals.push(signal);
-        return new Promise((_resolve, reject) =>
-          signal.addEventListener("abort", () => reject(signal.reason)),
-        );
-      },
-    );
+    listMessages.mockImplementation((_query: unknown, signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise((_resolve, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason)),
+      );
+    });
 
     const first = fetchMessages();
     const second = fetchMessages();
@@ -1019,7 +1937,7 @@ describe("a superseded list read", () => {
  */
 describe("a deletion reported over both connections", () => {
   beforeEach(async () => {
-    vi.useFakeTimers();
+    useFakeClock();
     FakeSocket.last = null;
     vi.stubGlobal("WebSocket", FakeSocket);
     vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
@@ -1137,14 +2055,14 @@ describe("a deletion reported over both connections", () => {
 
       expect(filteredMessages().map((m) => m.id)).toEqual(["id-1"]);
       expect(total()).toBe(1);
-      expect(listMessages).toHaveBeenLastCalledWith(1, 0, undefined);
+      expect(listMessages).toHaveBeenLastCalledWith({ limit: 1 });
     },
   );
 
   it.each([3, 4])(
     "keeps all loaded pages when their total during the DELETE was %i",
     async (pageTotal) => {
-      listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+      listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
       await fetchMessages();
       const pending = deferred<void>();
       deleteMessage.mockReturnValue(pending.promise);
@@ -1201,8 +2119,8 @@ describe("a deletion reported over both connections", () => {
     expect(total()).toBe(1);
   });
 
-  it("retries an old page using the offset after deletion", async () => {
-    listMessages.mockResolvedValue({ messages: range(2), total: 4 });
+  it("re-reads an older page that raced a deletion from the same cursor", async () => {
+    listMessages.mockResolvedValue(page(range(2), 4, "id-1"));
     await fetchMessages();
     const read = deferred<{ messages: MessageSummary[]; total: number }>();
     listMessages.mockReturnValueOnce(read.promise);
@@ -1219,7 +2137,13 @@ describe("a deletion reported over both connections", () => {
     read.resolve({ messages: [message(2), message(3)], total: 4 });
     await paging;
 
-    expect(listMessages).toHaveBeenLastCalledWith(100, 1, undefined);
+    expect(listMessages).toHaveBeenLastCalledWith(
+      {
+        limit: PAGE_SIZE,
+        before: "id-1",
+      },
+      expect.any(AbortSignal),
+    );
     expect(filteredMessages().map((m) => m.id)).toEqual([
       "id-1",
       "id-2",
@@ -1322,7 +2246,7 @@ describe("a deletion reported over both connections", () => {
   it("stops re-reading the list when deletions keep confirming", async () => {
     const COUNT_ONLY_READ = 1;
     let pageReads = 0;
-    listMessages.mockImplementation(async (limit: number) => {
+    listMessages.mockImplementation(async ({ limit }: { limit: number }) => {
       if (limit === COUNT_ONLY_READ) return { messages: [], total: 1 };
       pageReads += 1;
       deliver(deletion(`purged-${pageReads}`));

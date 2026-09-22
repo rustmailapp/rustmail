@@ -13,7 +13,7 @@ import {
 } from "solid-js";
 import {
   deleteWithUndo,
-  messages,
+  liveSummary,
   selectedId,
   setSelectedId,
   starMessage,
@@ -27,6 +27,7 @@ import type {
   AuthCheck,
   AuthResults,
   MessageHeader,
+  MessageSummary,
 } from "../lib/types";
 
 type Tab = "html" | "text" | "headers" | "auth" | "raw";
@@ -218,9 +219,7 @@ export default function MessageDetail() {
                   </div>
                   <div class="flex gap-1.5 flex-shrink-0">
                     {(() => {
-                      const starred = () =>
-                        messages().find((m) => m.id === msg().id)?.is_starred ??
-                        false;
+                      const starred = () => liveSummary(msg()).is_starred;
                       return (
                         <button
                           onClick={() => starMessage(msg().id, !starred())}
@@ -294,7 +293,7 @@ export default function MessageDetail() {
                 </div>
               </div>
 
-              <TagEditor messageId={msg().id} />
+              <TagEditor message={msg()} />
 
               <Show when={failed(attachments)}>
                 <div class="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400">
@@ -711,16 +710,15 @@ function AuthView(props: { results: AuthResults }) {
   );
 }
 
-function TagEditor(props: { messageId: string }) {
+function TagEditor(props: { message: MessageSummary }) {
   const [input, setInput] = createSignal("");
-  const tags = () =>
-    messages().find((m) => m.id === props.messageId)?.tags ?? [];
+  const tags = () => liveSummary(props.message).tags;
 
   async function addTag(value: string) {
     const tag = value.trim().toLowerCase();
     if (!tag || tags().includes(tag)) return;
     try {
-      await api.setTags(props.messageId, [...tags(), tag]);
+      await api.setTags(props.message.id, [...tags(), tag]);
       setInput("");
     } catch {
       notify(`Could not add the tag "${tag}".`);
@@ -730,7 +728,7 @@ function TagEditor(props: { messageId: string }) {
   async function removeTag(tag: string) {
     try {
       await api.setTags(
-        props.messageId,
+        props.message.id,
         tags().filter((t) => t !== tag),
       );
     } catch {

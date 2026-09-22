@@ -1776,6 +1776,36 @@ async fn an_unknown_cursor_is_a_bad_request() {
 }
 
 #[tokio::test]
+async fn an_unknown_cursor_says_so_in_a_machine_readable_code() {
+  let (app, _, _) = setup().await;
+
+  let body = json_body(get(app, "/api/v1/messages?before=01ARZ3NDEKTSV4RRFFQ69G5FAV").await).await;
+
+  assert_eq!(body["code"], "unknown_cursor");
+}
+
+#[tokio::test]
+async fn other_bad_list_requests_carry_no_unknown_cursor_code() {
+  let (app, repo, _) = setup().await;
+  let ids = insert_numbered(&repo, 3).await;
+  let too_many_tags = (0..21)
+    .map(|i| format!("tag=t{i}"))
+    .collect::<Vec<_>>()
+    .join("&");
+  let uris = [
+    format!("/api/v1/messages?offset=1&before={}", ids[2]),
+    format!("/api/v1/messages?{too_many_tags}"),
+    "/api/v1/messages?starred=yes".to_string(),
+  ];
+
+  for uri in uris {
+    let response = get(app.clone(), &uri).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
+    assert!(json_body(response).await.get("code").is_none(), "{uri}");
+  }
+}
+
+#[tokio::test]
 async fn before_and_offset_together_are_a_bad_request() {
   let (app, repo, _) = setup().await;
   let ids = insert_numbered(&repo, 3).await;

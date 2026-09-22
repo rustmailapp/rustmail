@@ -33,7 +33,7 @@ test("a confirmed deletion stays removed after another page loads", async ({
     const url = new URL(response.url());
     return (
       url.pathname === "/api/v1/messages" &&
-      url.searchParams.get("offset") === "100"
+      url.searchParams.get("before") === "msg-0099"
     );
   });
   await page.keyboard.press("End");

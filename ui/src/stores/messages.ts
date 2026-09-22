@@ -1,11 +1,32 @@
 import { batch, createSignal, createMemo } from "solid-js";
 import type { ConfirmDialogOptions } from "../components/ConfirmDialog";
-import type { MessageSummary, FilterState, WsEvent } from "../lib/types";
+import type {
+  FilterState,
+  ListResponse,
+  MessageSummary,
+  WsEvent,
+} from "../lib/types";
 import * as api from "../lib/api";
 import * as schema from "../lib/schema";
 import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
+
+/**
+ * The most rows live mail keeps loaded at the top of the list.
+ *
+ * Each arrival pushes the oldest loaded row out past this, and scrolling down
+ * reads it back from the server, so memory and every per-frame pass over the
+ * list stay bounded however long the traffic runs. Only the reader scrolling
+ * down loads past it.
+ */
+const MAX_LIVE_ROWS = 5 * PAGE_SIZE;
+
+/** The most `tag` filters `GET /messages` accepts; one more is a `400`. */
+const MAX_TAG_FILTERS = 20;
+
+/** The `code` `GET /messages` rejects a `before` it does not know with. */
+const UNKNOWN_CURSOR_CODE = "unknown_cursor";
 
 /**
  * How many times a list read is retried when a deletion confirms mid-flight.
@@ -39,12 +60,229 @@ const UNDO_WINDOW_MS = 5000;
  */
 const SEARCH_REFRESH_WINDOW_MS = 1000;
 
+/**
+ * The most live events held for the next frame.
+ *
+ * Only a tab that gets no frames, one in the background, comes near this; a
+ * backlog that long is cheaper to replace with one list read than to replay.
+ */
+const MAX_QUEUED_EVENTS = 10_000;
+
+/**
+ * How long a queued event waits for an animation frame before it is applied
+ * anyway.
+ *
+ * A hidden tab gets no frames at all, and its list must still be current when
+ * it comes back.
+ */
+const FRAME_FALLBACK_MS = 250;
+
 const [messages, setMessages] = createSignal<MessageSummary[]>([]);
+
+/**
+ * Each loaded row's position; its index in {@link messages} is the position
+ * minus {@link headPosition}.
+ *
+ * Arrivals take positions above the head, so a prepend leaves every other
+ * entry where it was, and finding a row by id stays a lookup however long the
+ * list grows.
+ */
+const positions = new Map<string, number>();
+let headPosition = 0;
+
+function indexOfRow(id: string): number {
+  const position = positions.get(id);
+  return position === undefined ? -1 : position - headPosition;
+}
+
+/** The loaded message with `id`, tracking the list like a read of it would. */
+function findMessage(id: string): MessageSummary | undefined {
+  const rows = messages();
+  const index = indexOfRow(id);
+  return index < 0 ? undefined : rows[index];
+}
+
+/**
+ * Whether live arrivals wait above the list instead of entering it.
+ *
+ * Set while the reader is scrolled away from the top: a prepend there would
+ * slide every row they are reading down by one, hundreds of times a second.
+ */
+const [liveHeld, setLiveHeldSignal] = createSignal(false);
+/** Arrivals waiting for the reader to come back to the top, oldest first. */
+const heldRows = new Map<string, MessageSummary>();
+/** How many arrivals are waiting, including any {@link heldRows} let go. */
+const [heldArrivals, setHeldArrivals] = createSignal(0);
+/** Whether more arrived than {@link heldRows} keeps, so only a read can show them. */
+let heldOverflowed = false;
+/** Whether a search went stale while held, to be read again on the way back. */
+const [heldRefresh, setHeldRefresh] = createSignal(false);
+
+function dropHeldArrivals(): void {
+  heldRows.clear();
+  heldOverflowed = false;
+  setHeldArrivals(0);
+  setHeldRefresh(false);
+}
+
+function holdArrivals(arrivals: readonly MessageSummary[]): void {
+  for (const arrival of arrivals) {
+    if (heldOverflowed) continue;
+    if (heldRows.size === MAX_LIVE_ROWS) {
+      heldOverflowed = true;
+      heldRows.clear();
+      continue;
+    }
+    heldRows.set(arrival.id, arrival);
+  }
+  setHeldArrivals((count) => count + arrivals.length);
+}
+
+/**
+ * Holds live arrivals back while `held`, and shows what waited once it is not.
+ *
+ * The list tells the store where the reader is; the store decides nothing
+ * from scroll positions itself.
+ */
+function setLiveHeld(held: boolean): void {
+  if (held === liveHeld()) return;
+  setLiveHeldSignal(held);
+  if (!held) revealArrivals();
+}
+
+/**
+ * Puts the waiting arrivals on top, or reads the first page again when what
+ * waited cannot be shown from memory: a stale search, or more than was kept.
+ */
+function revealArrivals(): void {
+  const refresh = heldRefresh() || heldOverflowed;
+  const waiting = [...heldRows.values()].reverse();
+  if (!refresh && waiting.length === 0) return;
+  batch(() => {
+    dropHeldArrivals();
+    if (!refresh) {
+      prependRows(waiting.filter((m) => !positions.has(m.id)));
+      trimRows();
+    }
+  });
+  if (refresh) {
+    fetchMessages().catch(() => notify("Could not load the new messages."));
+  }
+}
+
+function replaceRows(rows: MessageSummary[]): void {
+  letGoWhileHidden.clear();
+  setRows(rows);
+}
+
+/** Makes `rows` the loaded list, keeping the open message's row if it leaves. */
+function setRows(rows: MessageSummary[]): void {
+  const selected = selectedId();
+  const open = selected === null ? undefined : findMessage(selected);
+  if (open !== undefined) setOpenRow(open);
+  positions.clear();
+  headPosition = 0;
+  rows.forEach((m, i) => positions.set(m.id, i));
+  setMessages(rows);
+}
+
+/** Puts `rows`, newest first, above the loaded ones. */
+function prependRows(rows: MessageSummary[]): void {
+  if (rows.length === 0) return;
+  headPosition -= rows.length;
+  rows.forEach((m, i) => positions.set(m.id, headPosition + i));
+  setMessages((prev) => [...rows, ...prev]);
+}
+
+function appendRows(rows: MessageSummary[]): void {
+  const tail = headPosition + messages().length;
+  rows.forEach((m, i) => positions.set(m.id, tail + i));
+  setMessages((prev) => [...prev, ...rows]);
+}
+
+function removeRow(id: string): void {
+  const index = indexOfRow(id);
+  if (index < 0) return;
+  const next = messages().toSpliced(index, 1);
+  positions.delete(id);
+  for (let i = index; i < next.length; i += 1) {
+    positions.set(next[i].id, headPosition + i);
+  }
+  setMessages(next);
+}
+
+/**
+ * Rows awaiting deletion that {@link trimRows} let go.
+ *
+ * The server still holds them, so its total still counts them, and the list
+ * must keep counting them out until the deletion settles or is undone.
+ */
+const letGoWhileHidden = new Set<string>();
+
+/**
+ * Lets the rows past {@link MAX_LIVE_ROWS} go, and pages on from the last kept.
+ *
+ * The row that can still be undone is kept, with every row above it, so undo
+ * puts it back where it was; the undo window bounds how long the list can run
+ * past the cap for it. The cursor stays in the view it was read under, since
+ * the rows let go belong to that view.
+ */
+function trimRows(): void {
+  const rows = messages();
+  const undoable = undoableId();
+  const keep = Math.max(
+    MAX_LIVE_ROWS,
+    undoable === null ? 0 : indexOfRow(undoable) + 1,
+  );
+  if (rows.length <= keep) return;
+  const hidden = hiddenIds();
+  const selected = selectedId();
+  for (const m of rows.slice(keep)) {
+    positions.delete(m.id);
+    if (hidden.includes(m.id)) letGoWhileHidden.add(m.id);
+    if (m.id === selected) setOpenRow(m);
+  }
+  const kept = rows.slice(0, keep);
+  setMessages(kept);
+  setNextCursor(kept[kept.length - 1].id);
+}
+
+function replaceRow(patched: MessageSummary): void {
+  const index = indexOfRow(patched.id);
+  if (index < 0) return;
+  setMessages((prev) => prev.with(index, patched));
+}
 const [storedTotal, setStoredTotal] = createSignal(0);
 const [selectedId, setSelectedId] = createSignal<string | null>(null);
+/**
+ * The open message's row as it was when the list let it go, kept current by
+ * live events, so the detail pane never reads its state from a list that no
+ * longer holds it.
+ */
+const [openRow, setOpenRow] = createSignal<MessageSummary | null>(null);
+
+/**
+ * The latest known state of `loaded`, the message the detail pane opened.
+ *
+ * Its loaded row when there is one, else the open row the list let go, else
+ * `loaded` itself as it was read.
+ */
+function liveSummary(loaded: MessageSummary): MessageSummary {
+  const row = findMessage(loaded.id);
+  if (row !== undefined) return row;
+  const open = openRow();
+  return open?.id === loaded.id ? open : loaded;
+}
 const [loading, setLoading] = createSignal(false);
 const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
+/**
+ * Where the next older page starts, or `null` once the oldest one is loaded.
+ *
+ * It is always the id of the last loaded row: the server hands it back with
+ * each page, and a deletion of that row moves it back to the row before.
+ */
+const [nextCursor, setNextCursor] = createSignal<string | null>(null);
 
 /**
  * Messages kept out of the list while their deletion is still pending.
@@ -65,30 +303,96 @@ const defaultFilters: FilterState = {
 };
 const [filters, setFilters] = createSignal<FilterState>({ ...defaultFilters });
 
-function hasActiveFilters(): boolean {
-  const f = filters();
+function narrows(f: FilterState): boolean {
   return f.starred || f.unread || f.attachments || f.tags.length > 0;
 }
 
-function clearFilters() {
-  setFilters({ ...defaultFilters });
+function hasActiveFilters(): boolean {
+  return narrows(filters());
 }
 
-function clearTagFilters() {
-  setFilters((f) => ({ ...f, tags: [] }));
+/** Whether `m` belongs in a list narrowed by `f`; any one tag is enough. */
+function matchesFilters(m: MessageSummary, f: FilterState): boolean {
+  if (f.starred && !m.is_starred) return false;
+  if (f.unread && m.is_read) return false;
+  if (f.attachments && !m.has_attachments) return false;
+  if (f.tags.length > 0 && !f.tags.some((t) => m.tags.includes(t)))
+    return false;
+  return true;
 }
 
-function toggleFilter(key: "starred" | "unread" | "attachments") {
-  setFilters((f) => ({ ...f, [key]: !f[key] }));
+/**
+ * Switches to `next` filters and reads the list under them.
+ *
+ * The server does the narrowing, so a sparse filter over a large inbox costs
+ * one read rather than a walk through every page.
+ */
+function applyFilters(next: FilterState): void {
+  setFilters(next);
+  fetchMessages().catch(() => notify("Could not apply the filters."));
 }
 
-function toggleTagFilter(tag: string) {
-  setFilters((f) => ({
+function clearFilters(): void {
+  if (!hasActiveFilters()) return;
+  applyFilters({ ...defaultFilters });
+}
+
+function clearTagFilters(): void {
+  if (filters().tags.length === 0) return;
+  applyFilters({ ...filters(), tags: [] });
+}
+
+function toggleFilter(key: "starred" | "unread" | "attachments"): void {
+  const f = filters();
+  applyFilters({ ...f, [key]: !f[key] });
+}
+
+/** Whether another tag filter would take the list read past the server's cap. */
+function tagFiltersFull(): boolean {
+  return filters().tags.length >= MAX_TAG_FILTERS;
+}
+
+function toggleTagFilter(tag: string): void {
+  const f = filters();
+  if (!f.tags.includes(tag) && tagFiltersFull()) return;
+  applyFilters({
     ...f,
     tags: f.tags.includes(tag)
       ? f.tags.filter((t) => t !== tag)
       : [...f.tags, tag],
-  }));
+  });
+}
+
+/** The search and filters a read was issued under. */
+type View = { q: string; filters: FilterState };
+
+/**
+ * The view {@link nextCursor} was read under.
+ *
+ * A cursor only continues the list it came from: a search or a filter changes
+ * before the read for it lands, and paging the old list under the new view
+ * would append rows the new view never asked for.
+ */
+let cursorView: View = { q: "", filters: defaultFilters };
+
+function setPageCursor(cursor: string | null, view: View): void {
+  cursorView = view;
+  setNextCursor(cursor);
+}
+
+function currentView(): View {
+  return { q: search(), filters: filters() };
+}
+
+function isCurrentView(view: View): boolean {
+  return view.q === search() && view.filters === filters();
+}
+
+function viewQuery(view: View): Pick<api.ListQuery, "q" | "filters"> {
+  return {
+    q: view.q || undefined,
+    filters: narrows(view.filters) ? view.filters : undefined,
+  };
 }
 
 const visibleMessages = createMemo(() => {
@@ -98,9 +402,11 @@ const visibleMessages = createMemo(() => {
 });
 
 const total = createMemo(() => {
-  const hidden = new Set(hiddenIds());
-  const hiddenCount = messages().filter((message) =>
-    hidden.has(message.id),
+  const hidden = hiddenIds();
+  if (hidden.length === 0) return storedTotal();
+  messages();
+  const hiddenCount = hidden.filter(
+    (id) => indexOfRow(id) >= 0 || letGoWhileHidden.has(id),
   ).length;
   return Math.max(0, storedTotal() - hiddenCount);
 });
@@ -108,7 +414,8 @@ const total = createMemo(() => {
 /**
  * The inbox list: loaded messages narrowed by the active filters.
  *
- * The unread filter alone makes an exception for the selected message.
+ * The server already narrowed what it returned; this keeps a row out once a
+ * live flag change stops it matching. The unread filter alone makes an exception for the selected message.
  * Selecting marks a message read, so that one filter is invalidated by the
  * act of selecting: every keypress would drop the row it had just landed on,
  * leaving the selection outside the list and sending navigation back to the
@@ -121,27 +428,54 @@ const filteredMessages = createMemo(() => {
     return visibleMessages();
   }
   const selected = selectedId();
-  return visibleMessages().filter((m) => {
-    if (f.starred && !m.is_starred) return false;
-    if (f.unread && m.is_read && m.id !== selected) return false;
-    if (f.attachments && !m.has_attachments) return false;
-    if (f.tags.length > 0 && !f.tags.some((t) => m.tags.includes(t)))
-      return false;
-    return true;
-  });
+  return visibleMessages().filter((m) =>
+    matchesFilters(m.id === selected ? { ...m, is_read: false } : m, f),
+  );
 });
 
-const allTags = createMemo(() => {
+function tagsByUse(rows: readonly MessageSummary[]): string[] {
   const counts = new Map<string, number>();
-  for (const m of visibleMessages()) {
+  for (const m of rows) {
     for (const t of m.tags) {
       counts.set(t, (counts.get(t) || 0) + 1);
     }
   }
   return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
-});
+}
 
-const hasMore = createMemo(() => messages().length < storedTotal());
+/**
+ * The tags on offer to filter by, most used first.
+ *
+ * A tag filter makes the server return only rows carrying one of the chosen
+ * tags, so while one is set the tags seen before it stay on offer: adding a
+ * second tag must not need the first one cleared.
+ */
+const allTags = createMemo<string[]>((before) => {
+  const loaded = tagsByUse(visibleMessages());
+  if (filters().tags.length === 0) return loaded;
+  const kept = new Set(before);
+  return [...before, ...loaded.filter((tag) => !kept.has(tag))];
+}, []);
+
+const hasMore = createMemo(() => nextCursor() !== null);
+
+/**
+ * How many rows the list is presenting as its set, for `aria-setsize`.
+ *
+ * The server total, plus the selected row when the unread filter keeps it
+ * only because it is selected: it is on screen, so it is part of the set.
+ */
+const listSize = createMemo(() => {
+  const f = filters();
+  const id = selectedId();
+  if (!f.unread || id === null) return total();
+  const selected = visibleMessages().find((m) => m.id === id);
+  const keptBySelection =
+    selected !== undefined &&
+    !matchesFilters(selected, f) &&
+    matchesFilters({ ...selected, is_read: false }, f);
+  return total() + (keptBySelection ? 1 : 0);
+});
 
 /** Where {@link moveSelection} should land, relative to the current selection. */
 type SelectionTarget = "next" | "prev" | "first" | "last";
@@ -171,9 +505,7 @@ function selectMessage(msg: MessageSummary): void {
  * worth saying.
  */
 function quoted(id: string): string {
-  const subject = messages()
-    .find((m) => m.id === id)
-    ?.subject?.trim();
+  const subject = findMessage(id)?.subject?.trim();
   if (!subject) return "the message";
 
   const characters = [...subject];
@@ -219,6 +551,7 @@ function clearUndoTimer(): void {
 }
 
 function unhide(id: string): void {
+  letGoWhileHidden.delete(id);
   setHiddenIds((ids) => ids.filter((hidden) => hidden !== id));
 }
 
@@ -230,9 +563,11 @@ let deletionRevision = 0;
 let clearRevision = 0;
 let latestFetch = 0;
 let currentListRead: AbortController | null = null;
+/** The older-page read in flight, abandoned once a first-page read supersedes it. */
+let currentPageRead: AbortController | null = null;
 let searchStale = false;
 let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-/** Live events received while the current list read is in flight. */
+/** Live events applied while the current list read is in flight. */
 let eventsDuringRead: ReplayableEvent[] | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
@@ -249,7 +584,12 @@ const issuedDeletes = new Map<string, IssuedDelete>();
 
 /** Removes a confirmed deletion without assuming the current total includes it. */
 function forgetMessage(id: string): void {
-  setMessages((prev) => prev.filter((m) => m.id !== id));
+  if (nextCursor() === id) {
+    setNextCursor(messages()[indexOfRow(id) - 1]?.id ?? null);
+  }
+  removeRow(id);
+  if (openRow()?.id === id) setOpenRow(null);
+  if (heldRows.delete(id)) setHeldArrivals((count) => count - 1);
   unhide(id);
   if (selectedId() === id) setSelectedId(null);
 }
@@ -265,14 +605,14 @@ async function refreshTotal(): Promise<void> {
   const request = ++latestCountRead;
   const currentSnapshot = snapshot;
   const currentRevision = deletionRevision;
-  const query = search();
+  const view = currentView();
   try {
-    const response = await api.listMessages(1, 0, query || undefined);
+    const response = await api.listMessages({ limit: 1, ...viewQuery(view) });
     if (
       request !== latestCountRead ||
       currentSnapshot !== snapshot ||
       currentRevision !== deletionRevision ||
-      query !== search()
+      !isCurrentView(view)
     )
       return;
     snapshot += 1;
@@ -283,7 +623,7 @@ async function refreshTotal(): Promise<void> {
       request === latestCountRead &&
       currentSnapshot === snapshot &&
       currentRevision === deletionRevision &&
-      query === search()
+      isCurrentView(view)
     ) {
       notify(
         "The message was deleted, but the inbox count could not be refreshed.",
@@ -464,36 +804,145 @@ async function fetchMessages(): Promise<void> {
   await readFirstPage();
 }
 
+/** A list read that has landed: the count it read, and how to show it. */
+type LandedRead = { total: number; show: () => void };
+
+async function readTopPage(
+  view: View,
+  signal: AbortSignal,
+): Promise<LandedRead> {
+  const res = await api.listMessages(
+    { limit: PAGE_SIZE, ...viewQuery(view) },
+    signal,
+  );
+  return {
+    total: res.total,
+    show: () => {
+      replaceRows(res.messages);
+      dropHeldArrivals();
+      setPageCursor(res.next_cursor, view);
+    },
+  };
+}
+
+/**
+ * Reads the list down through the loaded rows, reconciling them in place.
+ *
+ * This is the read while live mail is held: the reader is scrolled into these
+ * rows, so replacing them with the first page would move the list under them.
+ * Rows above the first loaded one are arrivals and wait behind the pill. A
+ * loaded row the read meets takes the server's copy, and one it passes without
+ * meeting is gone from the view. The read stops at the loaded tail, at the end
+ * of the list, after {@link PAGE_SIZE} rows past the last loaded one it met,
+ * which is where a deleted tail leaves it, or once more has arrived than the
+ * pill keeps, which only a fresh read on the way back to the top can show.
+ */
+async function readLoadedWindow(
+  view: View,
+  signal: AbortSignal,
+): Promise<LandedRead> {
+  const tail = messages().at(-1)?.id;
+  const read: MessageSummary[] = [];
+  let metAny = false;
+  let sinceLoaded = 0;
+  let before: string | undefined;
+  for (;;) {
+    const res = await api.listMessages(
+      {
+        limit: PAGE_SIZE,
+        ...viewQuery(view),
+        ...(before === undefined ? {} : { before }),
+      },
+      signal,
+    );
+    let metTail = false;
+    for (const m of res.messages) {
+      read.push(m);
+      metTail ||= m.id === tail;
+      if (positions.has(m.id)) {
+        metAny = true;
+        sinceLoaded = 0;
+      } else if (metAny) {
+        sinceLoaded += 1;
+      }
+    }
+    const ended = res.next_cursor === null;
+    const passedAll = ended || metTail || sinceLoaded >= PAGE_SIZE;
+    if (passedAll || (!metAny && read.length > MAX_LIVE_ROWS)) {
+      return {
+        total: res.total,
+        show: () => reconcileWindow(read, passedAll, ended, view),
+      };
+    }
+    before = res.next_cursor ?? undefined;
+  }
+}
+
+/**
+ * Applies what {@link readLoadedWindow} read, `passedAll` saying whether it got
+ * past every loaded row and `ended` whether it reached the end of the list.
+ */
+function reconcileWindow(
+  read: readonly MessageSummary[],
+  passedAll: boolean,
+  ended: boolean,
+  view: View,
+): void {
+  const server = new Map(read.map((m) => [m.id, m]));
+  const loaded = messages();
+  const firstLoaded = read.findIndex((m) => positions.has(m.id));
+  const arrivals = firstLoaded < 0 ? read : read.slice(0, firstLoaded);
+  let passedUpTo = passedAll ? loaded.length - 1 : -1;
+  if (!passedAll) {
+    loaded.forEach((m, i) => {
+      if (server.has(m.id)) passedUpTo = i;
+    });
+  }
+  const kept = loaded.flatMap((m, i) => {
+    const fresh = server.get(m.id);
+    if (fresh !== undefined) return [fresh];
+    return i <= passedUpTo ? [] : [m];
+  });
+  const last = kept.at(-1) ?? arrivals.at(-1);
+  const lastRead =
+    last === undefined ? -1 : read.findIndex((m) => m.id === last.id);
+  const more = !ended || lastRead < read.length - 1;
+  setRows(kept);
+  dropHeldArrivals();
+  holdArrivals(arrivals.toReversed());
+  setPageCursor(more && last !== undefined ? last.id : null, view);
+  if (!liveHeld()) revealArrivals();
+}
+
 /** Does the work of {@link fetchMessages}, resolving whether its page landed. */
 async function readFirstPage(): Promise<boolean> {
   const request = ++latestFetch;
-  const query = search();
+  const view = currentView();
+  const inPlace =
+    liveHeld() && isCurrentView(cursorView) && messages().length > 0;
+  const readList = inPlace ? readLoadedWindow : readTopPage;
   currentListRead?.abort();
+  currentPageRead?.abort();
   const controller = new AbortController();
   currentListRead = controller;
   setLoading(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
-      if (request !== latestFetch || query !== search()) return false;
+      if (request !== latestFetch || !isCurrentView(view)) return false;
       const revision = deletionRevision;
       eventsDuringRead = [];
-      const res = await api.listMessages(
-        PAGE_SIZE,
-        0,
-        query || undefined,
-        controller.signal,
-      );
-      if (request !== latestFetch || query !== search()) return false;
+      const landed = await readList(view, controller.signal);
+      if (request !== latestFetch || !isCurrentView(view)) return false;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
       batch(() => {
         snapshot += 1;
         countNeedsRefresh = raced;
-        setMessages(res.messages);
-        setStoredTotal(res.total);
+        landed.show();
+        setStoredTotal(landed.total);
         searchStale = false;
-        for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
+        applyEvents(eventsDuringRead ?? []);
       });
       if (raced) void refreshTotal();
       return true;
@@ -526,45 +975,84 @@ function scheduleSearchRefresh(): void {
   searchRefreshTimer = setTimeout(() => {
     searchRefreshTimer = null;
     if (!searchStale || !search() || loading()) return;
+    if (liveHeld()) {
+      setHeldRefresh(true);
+      return;
+    }
     fetchMessages().catch(() =>
       notify("Could not refresh the search results."),
     );
   }, SEARCH_REFRESH_WINDOW_MS);
 }
 
-async function loadMore() {
+const OLDER_PAGE_FAILED = "Could not load older messages.";
+
+/**
+ * Reads the page older than the last loaded row, and appends it.
+ *
+ * A cursor the server no longer knows belongs to a message deleted before its
+ * event got here, so the row goes and the read starts again from the one
+ * before it. A page read from a cursor that has since moved, because its row
+ * was deleted or let go, would not join the rows above it, so it is read again
+ * from where the list now ends, and reported once
+ * {@link LIST_READ_ATTEMPTS} reads have all missed. Any other failure is
+ * reported rather than thrown, since the list's scroll position is what calls
+ * this.
+ */
+async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
-  const query = search();
+  if (!isCurrentView(cursorView)) return;
+  const view = currentView();
   const startedOn = latestFetch;
+  const controller = new AbortController();
+  currentPageRead = controller;
   setLoadingMore(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
-      if (query !== search() || startedOn !== latestFetch) return;
+      if (!isCurrentView(view) || startedOn !== latestFetch) return;
+      const before = nextCursor();
+      if (before === null) return;
       const revision = deletionRevision;
-      const res = await api.listMessages(
-        PAGE_SIZE,
-        messages().length,
-        query || undefined,
-      );
-      if (query !== search() || startedOn !== latestFetch) return;
+      let res: ListResponse;
+      try {
+        res = await api.listMessages(
+          { limit: PAGE_SIZE, ...viewQuery(view), before },
+          controller.signal,
+        );
+      } catch (error) {
+        if (!isUnknownCursor(error)) throw error;
+        if (!isCurrentView(view) || startedOn !== latestFetch) return;
+        forgetMessage(before);
+        continue;
+      }
+      if (!isCurrentView(view) || startedOn !== latestFetch) return;
+      if (nextCursor() !== before) continue;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
       batch(() => {
         snapshot += 1;
         countNeedsRefresh = raced;
-        setMessages((prev) => {
-          const seen = new Set(prev.map((m) => m.id));
-          return [...prev, ...res.messages.filter((m) => !seen.has(m.id))];
-        });
+        appendRows(res.messages.filter((m) => !positions.has(m.id)));
+        setPageCursor(res.next_cursor, view);
         setStoredTotal(res.total);
       });
       if (raced) void refreshTotal();
       return;
     }
+    notify(OLDER_PAGE_FAILED);
+  } catch {
+    if (isCurrentView(view) && startedOn === latestFetch) {
+      notify(OLDER_PAGE_FAILED);
+    }
   } finally {
+    if (currentPageRead === controller) currentPageRead = null;
     setLoadingMore(false);
   }
+}
+
+function isUnknownCursor(error: unknown): boolean {
+  return error instanceof api.ApiError && error.code === UNKNOWN_CURSOR_CODE;
 }
 
 const RECONNECT_BASE_DELAY = 2000;
@@ -607,19 +1095,82 @@ function readEvent(frame: unknown): WsEvent | undefined {
 }
 
 /**
- * Puts a live message at the top of the list and counts it in.
+ * Puts live messages, oldest first as they arrived, at the top of the list and
+ * counts them in.
  *
- * The socket is subscribed before a list read lands, over another connection,
- * so a message can reach the store both ways. The copy that comes second must
- * add neither a row nor a count.
+ * A search cannot place an arrival itself, since only the server knows whether
+ * it matches, so it schedules a refetch instead; filters are decided here. The
+ * socket is subscribed before a list read lands, over another connection, so a
+ * message can reach the store both ways. The copy that comes second must add
+ * neither a row nor a count.
  */
-function prependArrival(arrival: MessageSummary): void {
-  if (messages().some((m) => m.id === arrival.id)) return;
+function admitArrivals(arrivals: readonly MessageSummary[]): void {
+  if (arrivals.length === 0) return;
+  if (search()) {
+    scheduleSearchRefresh();
+    return;
+  }
+  const f = filters();
+  const seen = new Set<string>();
+  const fresh: MessageSummary[] = [];
+  for (let i = arrivals.length - 1; i >= 0; i -= 1) {
+    const arrival = arrivals[i];
+    if (seen.has(arrival.id) || isKnown(arrival.id)) continue;
+    seen.add(arrival.id);
+    if (matchesFilters(arrival, f)) fresh.push(arrival);
+  }
+  if (fresh.length === 0) return;
   batch(() => {
-    setMessages((prev) => [arrival, ...prev]);
-    setStoredTotal((t) => t + 1);
+    if (liveHeld()) {
+      holdArrivals(fresh.toReversed());
+    } else {
+      prependRows(fresh);
+      trimRows();
+    }
+    setStoredTotal((t) => t + fresh.length);
   });
   if (countNeedsRefresh) void refreshTotal();
+}
+
+function isKnown(id: string): boolean {
+  return positions.has(id) || heldRows.has(id);
+}
+
+/**
+ * Changes a loaded or held message, and counts it in or out of a filtered
+ * total. A held arrival that stops matching is let go, since the list it waits
+ * to join would not show it.
+ *
+ * Deciding from the row's state rather than from the event keeps this
+ * idempotent, so a replay over a page that already reflects it counts nothing.
+ */
+function patchMessage(id: string, patch: Partial<MessageSummary>): void {
+  const open = openRow();
+  if (open?.id === id) setOpenRow({ ...open, ...patch });
+  const waiting = heldRows.get(id);
+  if (waiting !== undefined) {
+    const patched = { ...waiting, ...patch };
+    if (matchesFilters(patched, filters())) {
+      heldRows.set(id, patched);
+      return;
+    }
+    heldRows.delete(id);
+    batch(() => {
+      setHeldArrivals((count) => count - 1);
+      setStoredTotal((t) => Math.max(0, t - 1));
+    });
+    return;
+  }
+  const current = findMessage(id);
+  if (current === undefined) return;
+  const patched = { ...current, ...patch };
+  const f = filters();
+  const was = matchesFilters(current, f);
+  const is = matchesFilters(patched, f);
+  batch(() => {
+    replaceRow(patched);
+    if (was !== is) setStoredTotal((t) => Math.max(0, t + (is ? 1 : -1)));
+  });
 }
 
 /** The events a list read may have been served without. */
@@ -638,44 +1189,107 @@ function isReplayable(event: WsEvent): event is ReplayableEvent {
 }
 
 /**
- * Applies an event that only adds a message or changes one.
+ * Applies `events` in order, each run of arrivals as one prepend.
  *
- * Applying one twice is harmless, which is what lets {@link fetchMessages}
- * replay the ones that arrived while its read was in flight.
+ * Applying a replayable event twice is harmless, which is what lets
+ * {@link fetchMessages} replay the ones that arrived while its read was in
+ * flight.
  */
-function applyLiveEvent(event: ReplayableEvent): void {
+function applyEvents(events: readonly WsEvent[]): void {
+  let arrivals: MessageSummary[] = [];
+  for (const event of events) {
+    if (event.type === "message:new") {
+      arrivals.push(event.data);
+      continue;
+    }
+    admitArrivals(arrivals);
+    arrivals = [];
+    applyEvent(event);
+  }
+  admitArrivals(arrivals);
+}
+
+function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
   switch (event.type) {
-    case "message:new":
-      if (search()) {
-        scheduleSearchRefresh();
-      } else {
-        prependArrival(event.data);
-      }
-      break;
     case "message:read":
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === event.data.id ? { ...m, is_read: event.data.is_read } : m,
-        ),
-      );
+      patchMessage(event.data.id, { is_read: event.data.is_read });
       break;
     case "message:starred":
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === event.data.id
-            ? { ...m, is_starred: event.data.is_starred }
-            : m,
-        ),
-      );
+      patchMessage(event.data.id, { is_starred: event.data.is_starred });
       break;
     case "message:tags":
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === event.data.id ? { ...m, tags: event.data.tags } : m,
-        ),
-      );
+      patchMessage(event.data.id, { tags: event.data.tags });
+      break;
+    case "message:delete":
+      cancelUndo(event.data.id);
+      reconcileDeletion(event.data.id);
+      break;
+    case "messages:clear":
+      batch(() => {
+        dropPendingDeletes();
+        dropHeldArrivals();
+        replaceRows([]);
+        setNextCursor(null);
+        setStoredTotal(0);
+        setSelectedId(null);
+      });
       break;
   }
+}
+
+let queuedEvents: WsEvent[] = [];
+let queueOverflowed = false;
+let frameRequest: number | null = null;
+let frameFallback: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Holds a live event for the next frame.
+ *
+ * At hundreds of events a second, applying each as it lands would recompute
+ * the list, its filters and its tags that many times between two paints.
+ */
+function enqueueEvent(event: WsEvent): void {
+  if (queuedEvents.length >= MAX_QUEUED_EVENTS) {
+    queueOverflowed = true;
+    queuedEvents = [];
+  }
+  if (!queueOverflowed) queuedEvents.push(event);
+  if (frameFallback !== null) return;
+  frameRequest = globalThis.requestAnimationFrame?.(flushEvents) ?? null;
+  frameFallback = setTimeout(flushEvents, FRAME_FALLBACK_MS);
+}
+
+function cancelFlush(): void {
+  if (frameRequest !== null) {
+    globalThis.cancelAnimationFrame?.(frameRequest);
+    frameRequest = null;
+  }
+  if (frameFallback !== null) {
+    clearTimeout(frameFallback);
+    frameFallback = null;
+  }
+}
+
+/** Applies the events queued since the last frame, in one batch. */
+function flushEvents(): void {
+  cancelFlush();
+  const events = queuedEvents;
+  queuedEvents = [];
+  if (queueOverflowed) {
+    queueOverflowed = false;
+    fetchMessages().catch(() => notify("Could not catch up with live mail."));
+    return;
+  }
+  if (eventsDuringRead !== null) {
+    eventsDuringRead.push(...events.filter(isReplayable));
+  }
+  batch(() => applyEvents(events));
+}
+
+function dropQueuedEvents(): void {
+  cancelFlush();
+  queuedEvents = [];
+  queueOverflowed = false;
 }
 
 /**
@@ -746,26 +1360,7 @@ function openSocket(): WebSocket {
       return;
     }
 
-    if (isReplayable(event)) {
-      eventsDuringRead?.push(event);
-      applyLiveEvent(event);
-      return;
-    }
-
-    switch (event.type) {
-      case "message:delete":
-        cancelUndo(event.data.id);
-        reconcileDeletion(event.data.id);
-        break;
-      case "messages:clear":
-        batch(() => {
-          dropPendingDeletes();
-          setMessages([]);
-          setStoredTotal(0);
-          setSelectedId(null);
-        });
-        break;
-    }
+    enqueueEvent(event);
   };
 
   ws.onclose = () => {
@@ -794,9 +1389,12 @@ function closeSocket(): void {
 function disconnectWebSocket(): void {
   stopHttpFallback();
   closeSocket();
+  dropQueuedEvents();
   latestFetch += 1;
   currentListRead?.abort();
   currentListRead = null;
+  currentPageRead?.abort();
+  currentPageRead = null;
   eventsDuringRead = null;
   setLoading(false);
   if (searchRefreshTimer !== null) {
@@ -809,11 +1407,16 @@ function disconnectWebSocket(): void {
 export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
+  FRAME_FALLBACK_MS,
+  MAX_LIVE_ROWS,
+  MAX_QUEUED_EVENTS,
+  MAX_TAG_FILTERS,
   LIST_READ_ATTEMPTS,
+  PAGE_SIZE,
   SEARCH_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
-  messages,
+  liveSummary,
   visibleMessages,
   filteredMessages,
   total,
@@ -831,6 +1434,10 @@ export {
   loading,
   loadingMore,
   hasMore,
+  heldArrivals,
+  heldRefresh,
+  setLiveHeld,
+  listSize,
   loadMore,
   search,
   setSearch,
@@ -840,6 +1447,7 @@ export {
   clearTagFilters,
   toggleFilter,
   toggleTagFilter,
+  tagFiltersFull,
   allTags,
   fetchMessages,
   connectWebSocket,

@@ -10,12 +10,30 @@ const EPOCH = Date.UTC(2026, 0, 1);
 const MESSAGE_SIZE_BYTES = 2048;
 const NO_CONTENT = 204;
 const NOT_FOUND = 404;
+const BAD_REQUEST = 400;
+/** Mirrors the most `tag` filters the real handler accepts. */
+export const MAX_TAG_FILTERS = 20;
 /** Mirrors the clamp the real handler applies to `limit`. */
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 200;
 
 function clampLimit(limit: number): number {
   return Math.min(Math.max(limit, MIN_LIMIT), MAX_LIMIT);
+}
+
+/** Applies the list filters the real handler takes, ANDed, tags ORed. */
+function matching(
+  all: readonly MessageSummary[],
+  params: URLSearchParams,
+): MessageSummary[] {
+  const tags = params.getAll("tag");
+  return all.filter(
+    (m) =>
+      (params.get("starred") !== "true" || m.is_starred) &&
+      (params.get("unread") !== "true" || !m.is_read) &&
+      (params.get("has_attachments") !== "true" || m.has_attachments) &&
+      (tags.length === 0 || tags.some((tag) => m.tags.includes(tag))),
+  );
 }
 
 /**
@@ -50,7 +68,7 @@ export function optionSelector(index: number): string {
   return `#msg-option-${messageId(index)}`;
 }
 
-function summary(index: number): MessageSummary {
+export function summary(index: number): MessageSummary {
   return {
     id: messageId(index),
     sender: `sender-${index}@example.test`,
@@ -70,6 +88,8 @@ export interface ApiCalls {
   deleted: string[];
   patched: string[];
   fetched: string[];
+  /** The query string of every list read, in order. */
+  listed: string[];
 }
 
 /** Handle on the fake backend: what the UI wrote, and a way to push events. */
@@ -95,9 +115,13 @@ const SOCKET_POLL_MS = 25;
 export async function mockInbox(
   page: Page,
   total: number = TOTAL_MESSAGES,
+  shape: (index: number) => Partial<MessageSummary> = () => ({}),
 ): Promise<InboxBackend> {
-  const all = Array.from({ length: total }, (_, i) => summary(i));
-  const calls: ApiCalls = { deleted: [], patched: [], fetched: [] };
+  const all = Array.from({ length: total }, (_, i) => ({
+    ...summary(i),
+    ...shape(i),
+  }));
+  const calls: ApiCalls = { deleted: [], patched: [], fetched: [], listed: [] };
   let socket: WebSocketRoute | undefined;
 
   await page.routeWebSocket(WS, (ws) => {
@@ -144,12 +168,32 @@ export async function mockInbox(
       return route.fulfill({ status: NO_CONTENT, body: "" });
     }
     if (path === "/messages") {
+      calls.listed.push(url.search);
+      if (url.searchParams.getAll("tag").length > MAX_TAG_FILTERS) {
+        return route.fulfill({
+          status: BAD_REQUEST,
+          json: { error: `Too many tag filters (max ${MAX_TAG_FILTERS})` },
+        });
+      }
       const limit = clampLimit(Number(url.searchParams.get("limit")));
-      const offset = Number(url.searchParams.get("offset"));
+      const before = url.searchParams.get("before");
+      const cursorAt =
+        before === null ? -1 : all.findIndex((m) => m.id === before);
+      if (before !== null && cursorAt < 0) {
+        return route.fulfill({
+          status: BAD_REQUEST,
+          json: { error: "unknown cursor", code: "unknown_cursor" },
+        });
+      }
+      const older = matching(all.slice(cursorAt + 1), url.searchParams);
+      const rows = older.slice(0, limit);
       return route.fulfill({
         json: {
-          messages: all.slice(offset, offset + limit),
-          total: all.length,
+          messages: rows,
+          total: matching(all, url.searchParams).length,
+          limit,
+          next_cursor:
+            older.length > rows.length ? (rows.at(-1)?.id ?? null) : null,
         },
       });
     }
