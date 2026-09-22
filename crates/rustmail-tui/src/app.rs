@@ -75,6 +75,7 @@ pub struct App {
   pub loading: bool,
 
   pub ws_connected: bool,
+  ws_ever_connected: bool,
   pub spinner_frame: usize,
 
   pub list_area: Rect,
@@ -124,6 +125,7 @@ impl App {
       loading: false,
 
       ws_connected: false,
+      ws_ever_connected: false,
       spinner_frame: 0,
 
       list_area: Rect::default(),
@@ -149,7 +151,7 @@ impl App {
         Event::Resize => {}
         Event::Tick => self.on_tick(),
         Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
-        Event::WsStatus(connected) => self.ws_connected = connected,
+        Event::WsStatus(connected) => self.handle_ws_status(connected).await,
       }
     }
 
@@ -169,6 +171,15 @@ impl App {
         delay = (delay * 2).min(Duration::from_secs(30));
       }
     });
+  }
+
+  async fn handle_ws_status(&mut self, connected: bool) {
+    let reconnected = connected && !self.ws_connected && self.ws_ever_connected;
+    self.ws_connected = connected;
+    self.ws_ever_connected |= connected;
+    if reconnected {
+      self.fetch_messages().await;
+    }
   }
 
   async fn handle_key(&mut self, key: KeyEvent) {
@@ -760,6 +771,34 @@ mod tests {
     }
   }
 
+  async fn spawn_recording_server() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = requests.clone();
+    tokio::spawn(async move {
+      loop {
+        let Ok((mut socket, _)) = listener.accept().await else {
+          return;
+        };
+        let mut buf = vec![0u8; 8192];
+        let n = socket.read(&mut buf).await.unwrap_or(0);
+        let head = String::from_utf8_lossy(&buf[..n]);
+        if let Some(line) = head.lines().next() {
+          recorded.lock().unwrap().push(line.to_string());
+        }
+        let _ = socket
+          .write_all(
+            b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+          )
+          .await;
+      }
+    });
+    (base_url, requests)
+  }
+
   fn app_with_messages(count: usize) -> App {
     let mut app = App::new("http://127.0.0.1:1".into(), "ws://127.0.0.1:1/ws".into());
     app.messages = (0..count)
@@ -865,5 +904,33 @@ mod tests {
     assert_eq!(app.total_pages(), 2);
     app.total = 125;
     assert_eq!(app.total_pages(), 3);
+  }
+
+  #[tokio::test]
+  async fn ws_reconnect_refetches_current_view() {
+    let (base_url, requests) = spawn_recording_server().await;
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into());
+    app.offset = 50;
+    app.search_query = "invoice".into();
+    app.selected = 3;
+
+    app.handle_ws_status(true).await;
+    assert!(
+      requests.lock().unwrap().is_empty(),
+      "first connection must not refetch"
+    );
+
+    app.handle_ws_status(false).await;
+    app.handle_ws_status(true).await;
+
+    let requests = requests.lock().unwrap().clone();
+    assert_eq!(
+      requests,
+      vec!["GET /api/v1/messages?limit=50&offset=50&q=invoice HTTP/1.1".to_string()]
+    );
+    assert_eq!(app.offset, 50);
+    assert_eq!(app.search_query, "invoice");
+    assert_eq!(app.selected, 3);
+    assert!(app.ws_connected);
   }
 }
