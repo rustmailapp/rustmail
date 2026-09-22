@@ -559,14 +559,25 @@ impl MessageRepository {
 
   /// Deletes messages older than the given ISO 8601 cutoff. Returns IDs of deleted messages.
   ///
-  /// Opens with a write so the transaction takes the write lock before it
-  /// holds a snapshot: a read first would fail outright with
+  /// A read-only `EXISTS` check outside the write transaction skips the
+  /// write lock entirely on a no-op retention tick. When there is a match,
+  /// the deleting transaction opens with a write so it takes the write lock
+  /// before it holds a snapshot: a read first would fail outright with
   /// `SQLITE_BUSY_SNAPSHOT` whenever an insert commits in between.
   pub async fn delete_older_than(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
     retry_on_lock(|| self.delete_older_than_once(iso_cutoff)).await
   }
 
   async fn delete_older_than_once(&self, iso_cutoff: &str) -> Result<Vec<String>, StorageError> {
+    let has_match: bool =
+      sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM messages WHERE created_at < ?1)")
+        .bind(iso_cutoff)
+        .fetch_one(&self.pool)
+        .await?;
+    if !has_match {
+      return Ok(Vec::new());
+    }
+
     let mut txn = self.pool.begin().await?;
 
     sqlx::query(
@@ -588,17 +599,26 @@ impl MessageRepository {
 
   /// Trims stored messages to at most `max`, deleting oldest first. Returns IDs of deleted messages.
   ///
-  /// Ordered by `rowid` to match [`Self::list`], so the rows dropped here are
-  /// exactly the ones the UI shows as oldest. The newest doomed rowid is found
-  /// once and both deletes run by range below it, instead of repeating the
-  /// same offset scan per statement. The transaction starts `IMMEDIATE`
-  /// because that lookup is a read: taking the write lock up front keeps an
-  /// insert from committing between it and the deletes.
+  /// A read-only count outside the write transaction skips the write lock
+  /// entirely when the store is already at or under `max`. Ordered by
+  /// `rowid` to match [`Self::list`], so the rows dropped here are exactly
+  /// the ones the UI shows as oldest. The newest doomed rowid is found once
+  /// and both deletes run by range below it, instead of repeating the same
+  /// offset scan per statement. The transaction starts `IMMEDIATE` because
+  /// that lookup is a read: taking the write lock up front keeps an insert
+  /// from committing between it and the deletes.
   pub async fn trim_to_max(&self, max: i64) -> Result<Vec<String>, StorageError> {
     retry_on_lock(|| self.trim_to_max_once(max)).await
   }
 
   async fn trim_to_max_once(&self, max: i64) -> Result<Vec<String>, StorageError> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+      .fetch_one(&self.pool)
+      .await?;
+    if count <= max {
+      return Ok(Vec::new());
+    }
+
     let mut txn = self.pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let threshold: Option<(i64,)> =
@@ -1540,6 +1560,75 @@ mod tests {
 
     releaser.await.unwrap();
     assert_eq!(deleted.len(), 2);
+    assert_eq!(repo.count().await.unwrap(), 1);
+  }
+
+  #[tokio::test]
+  async fn delete_older_than_skips_the_write_lock_when_nothing_matches() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("recent", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let deleted = tokio::time::timeout(
+      Duration::from_millis(500),
+      repo.delete_older_than("2000-01-01T00:00:00Z"),
+    )
+    .await
+    .expect("a no-op purge must not wait on a write lock it never needs")
+    .unwrap();
+
+    sqlx::query("ROLLBACK")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    assert!(deleted.is_empty());
+    assert_eq!(repo.count().await.unwrap(), 1);
+  }
+
+  #[tokio::test]
+  async fn trim_to_max_skips_the_write_lock_when_under_the_cap() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("kept", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    let mut blocker = pool.acquire().await.unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    let deleted = tokio::time::timeout(Duration::from_millis(500), repo.trim_to_max(5))
+      .await
+      .expect("a no-op trim must not wait on a write lock it never needs")
+      .unwrap();
+
+    sqlx::query("ROLLBACK")
+      .execute(&mut *blocker)
+      .await
+      .unwrap();
+
+    assert!(deleted.is_empty());
     assert_eq!(repo.count().await.unwrap(), 1);
   }
 
