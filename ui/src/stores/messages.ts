@@ -461,6 +461,11 @@ function moveSelection(to: SelectionTarget): void {
  * reporting.
  */
 async function fetchMessages(): Promise<void> {
+  await readFirstPage();
+}
+
+/** Does the work of {@link fetchMessages}, resolving whether its page landed. */
+async function readFirstPage(): Promise<boolean> {
   const request = ++latestFetch;
   const query = search();
   currentListRead?.abort();
@@ -470,7 +475,7 @@ async function fetchMessages(): Promise<void> {
   setLoading(true);
   try {
     for (let attempt = 0; attempt < LIST_READ_ATTEMPTS; attempt += 1) {
-      if (request !== latestFetch || query !== search()) return;
+      if (request !== latestFetch || query !== search()) return false;
       const revision = deletionRevision;
       eventsDuringRead = [];
       const res = await api.listMessages(
@@ -479,7 +484,7 @@ async function fetchMessages(): Promise<void> {
         query || undefined,
         controller.signal,
       );
-      if (request !== latestFetch || query !== search()) return;
+      if (request !== latestFetch || query !== search()) return false;
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
@@ -491,10 +496,12 @@ async function fetchMessages(): Promise<void> {
         for (const event of eventsDuringRead ?? []) applyLiveEvent(event);
       });
       if (raced) void refreshTotal();
-      return;
+      return true;
     }
+    return false;
   } catch (error) {
     if (request === latestFetch) throw error;
+    return false;
   } finally {
     if (request === latestFetch) {
       currentListRead = null;
@@ -565,6 +572,18 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectDelay = RECONNECT_BASE_DELAY;
 let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * How long the first socket may take to open before the list is read over
+ * HTTP instead.
+ *
+ * A proxy that drops the upgrade leaves the socket pending or failing forever,
+ * and the inbox must still load without live updates.
+ */
+const SOCKET_OPEN_DEADLINE_MS = 3000;
+let httpFallbackTimer: ReturnType<typeof setTimeout> | null = null;
+let inboxLoaded = false;
+let onFirstSync: (() => void) | null = null;
 
 /**
  * The event a frame carries, or `undefined` if it carries nothing usable.
@@ -664,26 +683,60 @@ function applyLiveEvent(event: ReplayableEvent): void {
  *
  * The read comes after the open, the first time included: anything stored
  * before the socket subscribed is only in the list the server returns, and
- * anything after it is on the socket. `onSynced` runs once that first read
- * has landed.
+ * anything after it is on the socket. A socket that fails before it first
+ * opens, or misses {@link SOCKET_OPEN_DEADLINE_MS}, gets the list read over
+ * HTTP once instead. `onSynced` runs once, after the first read that lands.
  */
 function connectWebSocket(onSynced?: () => void): WebSocket {
-  return openSocket("Could not load the inbox.", onSynced);
+  stopHttpFallback();
+  inboxLoaded = false;
+  onFirstSync = onSynced ?? null;
+  httpFallbackTimer = setTimeout(loadOverHttp, SOCKET_OPEN_DEADLINE_MS);
+  return openSocket();
 }
 
-function openSocket(failure: string, onSynced?: () => void): WebSocket {
-  disconnectWebSocket();
+function stopHttpFallback(): void {
+  if (httpFallbackTimer !== null) {
+    clearTimeout(httpFallbackTimer);
+    httpFallbackTimer = null;
+  }
+}
+
+function loadOverHttp(): void {
+  if (httpFallbackTimer === null) return;
+  stopHttpFallback();
+  syncList();
+}
+
+function syncList(): void {
+  const failure = inboxLoaded
+    ? "Reconnected, but could not reload the inbox."
+    : "Could not load the inbox.";
+  readFirstPage().then(
+    (landed) => {
+      if (!landed) return;
+      inboxLoaded = true;
+      const synced = onFirstSync;
+      onFirstSync = null;
+      synced?.();
+    },
+    () => notify(failure),
+  );
+}
+
+function openSocket(): WebSocket {
+  closeSocket();
 
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const ws = new WebSocket(`${protocol}//${location.host}/api/v1/ws`);
   currentWs = ws;
+  let opened = false;
 
   ws.onopen = () => {
+    opened = true;
+    stopHttpFallback();
     reconnectDelay = RECONNECT_BASE_DELAY;
-    fetchMessages().then(
-      () => onSynced?.(),
-      () => notify(failure),
-    );
+    syncList();
   };
 
   ws.onmessage = (e) => {
@@ -717,18 +770,16 @@ function openSocket(failure: string, onSynced?: () => void): WebSocket {
 
   ws.onclose = () => {
     currentWs = null;
+    if (!opened) loadOverHttp();
     const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
-    reconnectTimer = setTimeout(
-      () => openSocket("Reconnected, but could not reload the inbox."),
-      jitter,
-    );
+    reconnectTimer = setTimeout(openSocket, jitter);
     reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
   };
 
   return ws;
 }
 
-function disconnectWebSocket() {
+function closeSocket(): void {
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -740,11 +791,17 @@ function disconnectWebSocket() {
   }
 }
 
+function disconnectWebSocket(): void {
+  stopHttpFallback();
+  closeSocket();
+}
+
 export {
   UNDO_WINDOW_MS,
   NOTICE_SUBJECT_MAX,
   LIST_READ_ATTEMPTS,
   SEARCH_REFRESH_WINDOW_MS,
+  SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
   messages,
   visibleMessages,

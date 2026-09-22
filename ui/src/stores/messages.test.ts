@@ -28,6 +28,7 @@ const {
   LIST_READ_ATTEMPTS,
   NOTICE_SUBJECT_MAX,
   SEARCH_REFRESH_WINDOW_MS,
+  SOCKET_OPEN_DEADLINE_MS,
   UNDO_WINDOW_MS,
   clearFilters,
   clearInbox,
@@ -746,6 +747,98 @@ describe("resync when the socket opens", () => {
 
     await vi.waitFor(() => expect(loading()).toBe(false));
     expect(filteredMessages().map((m) => m.is_read)).toEqual([true, false]);
+  });
+});
+
+describe("loading while the socket will not open", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    listMessages.mockClear();
+    listMessages.mockResolvedValue({ messages: range(2), total: 2 });
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function closeSocket(): void {
+    const socket = FakeSocket.last;
+    if (socket?.onclose == null) {
+      throw new Error("the store never opened a socket");
+    }
+    socket.onclose();
+  }
+
+  it("reads the list over HTTP once the socket misses its deadline", async () => {
+    const synced = vi.fn();
+    connectWebSocket(synced);
+
+    await vi.advanceTimersByTimeAsync(SOCKET_OPEN_DEADLINE_MS - 1);
+    expect(listMessages).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(synced).toHaveBeenCalledOnce();
+  });
+
+  it("reads the list over HTTP as soon as the socket fails to open", async () => {
+    const synced = vi.fn();
+    connectWebSocket(synced);
+
+    closeSocket();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(synced).toHaveBeenCalledOnce();
+  });
+
+  it("skips the HTTP read when the socket opens in time", async () => {
+    connectWebSocket();
+
+    openSocket();
+    await vi.advanceTimersByTimeAsync(SOCKET_OPEN_DEADLINE_MS);
+
+    expect(listMessages).toHaveBeenCalledOnce();
+  });
+
+  it("resyncs once when the socket opens after the HTTP read", async () => {
+    const synced = vi.fn();
+    connectWebSocket(synced);
+    await vi.advanceTimersByTimeAsync(SOCKET_OPEN_DEADLINE_MS);
+
+    openSocket();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(listMessages).toHaveBeenCalledTimes(2);
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-1"]);
+    expect(total()).toBe(2);
+    expect(synced).toHaveBeenCalledOnce();
+  });
+
+  it("selects on the read that lands, not on one the socket superseded", async () => {
+    const fallback = deferred<{ messages: MessageSummary[]; total: number }>();
+    const resync = deferred<{ messages: MessageSummary[]; total: number }>();
+    listMessages
+      .mockReturnValueOnce(fallback.promise)
+      .mockReturnValueOnce(resync.promise);
+    const synced = vi.fn(() => filteredMessages().length);
+    connectWebSocket(synced);
+    await vi.advanceTimersByTimeAsync(SOCKET_OPEN_DEADLINE_MS);
+
+    openSocket();
+    fallback.resolve({ messages: [], total: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(synced).not.toHaveBeenCalled();
+    resync.resolve({ messages: range(2), total: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(synced).toHaveBeenCalledOnce();
+    expect(synced).toHaveLastReturnedWith(2);
   });
 });
 
