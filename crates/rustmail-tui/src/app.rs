@@ -548,6 +548,7 @@ impl App {
       self.preview = None;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       return;
     };
 
@@ -560,6 +561,7 @@ impl App {
     self.preview_loading = true;
     self.preview_scroll = 0;
     self.preview_raw = None;
+    self.preview_raw_notice = None;
     self.preview_tab = PreviewTab::Text;
 
     match self.api.get_message(&target_id).await {
@@ -627,6 +629,7 @@ impl App {
       }
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.load_preview().await;
     }
@@ -639,6 +642,7 @@ impl App {
       self.preview = None;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
     }
   }
@@ -669,6 +673,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -680,6 +685,7 @@ impl App {
       self.selected = 0;
       self.last_preview_id = None;
       self.preview_raw = None;
+      self.preview_raw_notice = None;
       self.sync_list_state();
       self.fetch_messages().await;
     }
@@ -721,6 +727,7 @@ impl App {
           if self.last_preview_id.as_deref() == Some(&id) {
             self.last_preview_id = None;
             self.preview_raw = None;
+            self.preview_raw_notice = None;
             self.load_preview().await;
           }
         }
@@ -747,6 +754,7 @@ impl App {
         self.preview = None;
         self.last_preview_id = None;
         self.preview_raw = None;
+        self.preview_raw_notice = None;
         self.sync_list_state();
       }
     }
@@ -1115,6 +1123,20 @@ mod tests {
         "GET /api/v1/messages/id-0/raw?limit={RAW_PREVIEW_LIMIT_BYTES} HTTP/1.1"
       )]
     );
+  }
+
+  #[tokio::test]
+  async fn messages_clear_resets_raw_preview_and_notice() {
+    let mut app = app_with_messages(3);
+    app.preview_raw = Some("raw body".into());
+    app.preview_raw_notice = Some("truncated".into());
+
+    app
+      .handle_ws_message(&ws_event("messages:clear", serde_json::Value::Null))
+      .await;
+
+    assert_eq!(app.preview_raw, None);
+    assert_eq!(app.preview_raw_notice, None);
   }
 
   #[test]
