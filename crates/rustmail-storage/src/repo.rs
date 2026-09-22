@@ -156,6 +156,39 @@ impl MessageRepository {
     Ok(summary)
   }
 
+  /// Stores every message in `messages` in one transaction: all of them or
+  /// none.
+  ///
+  /// The commit, with its WAL frames and FTS5 segment flush, dominates the
+  /// cost of storing small mail, so committing a batch at once amortises it.
+  /// Summaries come back in input order, which is also the arrival order
+  /// [`Self::list`] sorts by.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if any insert fails, in which case
+  /// no message from the batch is stored.
+  pub async fn insert_batch(
+    &self,
+    messages: &[PreparedMessage],
+  ) -> Result<Vec<MessageSummary>, StorageError> {
+    retry_on_lock(|| self.insert_batch_once(messages)).await
+  }
+
+  async fn insert_batch_once(
+    &self,
+    messages: &[PreparedMessage],
+  ) -> Result<Vec<MessageSummary>, StorageError> {
+    let mut txn = self.pool.begin().await?;
+    let mut summaries = Vec::with_capacity(messages.len());
+    for message in messages {
+      summaries.push(insert_in(&mut txn, message).await?);
+    }
+    txn.commit().await?;
+    debug!(count = summaries.len(), "Message batch stored");
+    Ok(summaries)
+  }
+
   /// Lists messages ordered by newest first, with pagination.
   ///
   /// Ordering is by `rowid`, which is arrival order. ULIDs sort the same way
@@ -735,6 +768,55 @@ mod tests {
 
     assert_ne!(first.id, second.id, "every attempt mints its own id");
     assert_eq!(repo.count().await.unwrap(), 2);
+  }
+
+  fn prepared(subject: &str) -> PreparedMessage {
+    PreparedMessage::parse(
+      "a@test.com".to_string(),
+      &["b@test.com".into()],
+      raw_email(subject, "a@test.com", "b@test.com"),
+    )
+  }
+
+  async fn poison_subject(repo: &MessageRepository, subject: &str) {
+    sqlx::query(&format!(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = '{subject}' BEGIN SELECT RAISE(ABORT, 'poisoned'); END"
+    ))
+    .execute(&repo.pool)
+    .await
+    .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_batch_is_stored_in_arrival_order() {
+    let repo = test_repo().await;
+    let batch: Vec<PreparedMessage> = ["one", "two", "three"].map(prepared).into();
+
+    let summaries = repo.insert_batch(&batch).await.unwrap();
+
+    let subjects: Vec<_> = summaries.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("one"), Some("two"), Some("three")]);
+    let newest_first: Vec<String> = repo
+      .list(10, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .map(|s| s.id)
+      .collect();
+    let inserted: Vec<String> = summaries.into_iter().rev().map(|s| s.id).collect();
+    assert_eq!(newest_first, inserted);
+    assert_eq!(repo.search("two", 10, 0).await.unwrap().len(), 1);
+  }
+
+  #[tokio::test]
+  async fn a_failing_batch_stores_none_of_its_messages() {
+    let repo = test_repo().await;
+    poison_subject(&repo, "bad").await;
+    let batch: Vec<PreparedMessage> = ["good", "bad", "also-good"].map(prepared).into();
+
+    assert!(repo.insert_batch(&batch).await.is_err());
+    assert_eq!(repo.count().await.unwrap(), 0);
+    assert!(repo.search("good", 10, 0).await.unwrap().is_empty());
   }
 
   #[tokio::test]

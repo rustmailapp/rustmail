@@ -11,7 +11,9 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
-use rustmail_smtp::{Delivery, ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig};
+use rustmail_smtp::{
+  Delivery, DeliveryAck, ReceivedMessage, SmtpServer, SmtpServerConfig, TlsConfig,
+};
 use rustmail_storage::{
   MessageRepository, MessageSummary, PreparedMessage, format_iso8601, initialize_database,
 };
@@ -295,8 +297,12 @@ async fn run_assert(args: AssertArgs) -> Result<()> {
   let checker = {
     let repo = repo.clone();
     tokio::spawn(async move {
-      while let Some(delivery) = smtp_rx.recv().await {
-        if store_delivery(&repo, delivery).await.is_none() {
+      let mut batch = Vec::with_capacity(MAX_BATCH_MESSAGES);
+      while next_batch(&mut smtp_rx, &mut None, &mut batch).await {
+        if store_batch(&repo, std::mem::take(&mut batch))
+          .await
+          .is_empty()
+        {
           continue;
         }
         let count = repo
@@ -361,6 +367,14 @@ const FILE_DB_MAX_CONNECTIONS: u32 = 5;
 /// 10 s stop timeout, so the WAL is checkpointed before the container runtime
 /// resorts to `SIGKILL`.
 const SHUTDOWN_DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+/// Most queued deliveries taken into one batch.
+const MAX_BATCH_MESSAGES: usize = 32;
+/// Most raw mail, in bytes, committed in one transaction.
+///
+/// Small transactional mail gains the most from sharing a commit; large mail
+/// is bound by writing its bytes, so it gains little and would only hold the
+/// write lock longer.
+const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// Raw size from which a message is parsed off the async runtime.
 const BLOCKING_PARSE_THRESHOLD_BYTES: usize = 256 * 1024;
 /// How long closing the pool, and with it the final WAL checkpoint, may take.
@@ -384,26 +398,30 @@ async fn shutdown_signal() -> std::io::Result<()> {
   tokio::signal::ctrl_c().await
 }
 
-/// Receives the next queued delivery, closing the queue once `stop` fires.
+/// Receives the next run of queued deliveries into `batch`, closing the queue
+/// once `stop` fires.
 ///
-/// Closing refuses further hand-offs, so a session still in progress tells its
-/// sender to retry, while deliveries already queued keep coming. The caller
-/// therefore drains the queue and sees `None` once it is empty, even though
-/// SMTP sessions still hold senders.
-async fn next_delivery(
+/// Takes whatever is already queued, up to [`MAX_BATCH_MESSAGES`], without
+/// waiting for more: a lone message is stored as promptly as before, and a
+/// burst shares its commits. Closing refuses further hand-offs, so a session
+/// still in progress tells its sender to retry, while deliveries already
+/// queued keep coming. The caller therefore drains the queue and sees `false`
+/// once it is empty, even though SMTP sessions still hold senders.
+async fn next_batch(
   deliveries: &mut mpsc::Receiver<Delivery>,
   stop: &mut Option<oneshot::Receiver<()>>,
-) -> Option<Delivery> {
+  batch: &mut Vec<Delivery>,
+) -> bool {
   if let Some(signal) = stop {
     tokio::select! {
-      delivery = deliveries.recv() => return delivery,
+      received = deliveries.recv_many(batch, MAX_BATCH_MESSAGES) => return received > 0,
       _ = signal => {
         deliveries.close();
         *stop = None;
       }
     }
   }
-  deliveries.recv().await
+  deliveries.recv_many(batch, MAX_BATCH_MESSAGES).await > 0
 }
 
 /// Parses a captured message ahead of its write.
@@ -423,40 +441,129 @@ async fn prepare(received: ReceivedMessage) -> Result<PreparedMessage, tokio::ta
   tokio::task::spawn_blocking(move || PreparedMessage::parse(sender, &recipients, raw)).await
 }
 
-/// Stores a captured message and tells the waiting SMTP session what happened.
+/// Splits a received batch into groups of at most [`MAX_BATCH_BYTES`] of raw
+/// mail, each to be committed as one transaction.
 ///
-/// The session holds its reply until this answers, so the acknowledgement goes
-/// out the moment the write settles and ahead of anything downstream. Only a
-/// stored message yields a summary; a refused one is reported to the sender as
-/// a temporary failure, which is the whole point of waiting — a catcher that
-/// answered on the hand-off would lose it instead.
-async fn store_delivery(repo: &MessageRepository, delivery: Delivery) -> Option<MessageSummary> {
-  let (received, ack) = delivery.into_parts();
-  if ack.is_abandoned() {
-    tracing::warn!(
-      "Skipped a message whose session gave up waiting; the sender was asked to retry"
-    );
-    return None;
+/// Arrival order is kept across and within groups. A message larger than the
+/// cap forms a group of its own, so large mail still commits one at a time.
+fn transactions(deliveries: Vec<Delivery>) -> Vec<Vec<(ReceivedMessage, DeliveryAck)>> {
+  let mut groups: Vec<Vec<(ReceivedMessage, DeliveryAck)>> = Vec::new();
+  let mut group_bytes = 0;
+  for (received, ack) in deliveries.into_iter().map(Delivery::into_parts) {
+    let size = received.raw.len();
+    match groups.last_mut() {
+      Some(group) if group_bytes + size <= MAX_BATCH_BYTES => {
+        group_bytes += size;
+        group.push((received, ack));
+      }
+      _ => {
+        group_bytes = size;
+        groups.push(vec![(received, ack)]);
+      }
+    }
   }
-  let message = match prepare(received).await {
-    Ok(message) => message,
-    Err(e) => {
-      ack.rejected();
-      tracing::error!(error = %e, "Refused a message that could not be parsed; the sender was asked to retry");
-      return None;
+  groups
+}
+
+/// Stores a batch of captured messages and tells each waiting SMTP session
+/// what happened.
+///
+/// Each session holds its reply until this answers, and a message is only
+/// acknowledged once the transaction holding it has committed, so a `250`
+/// still means stored. A refused message is reported to its sender as a
+/// temporary failure, which is the whole point of waiting — a catcher that
+/// answered on the hand-off would lose it instead. Returns the stored
+/// messages in arrival order.
+async fn store_batch(repo: &MessageRepository, deliveries: Vec<Delivery>) -> Vec<MessageSummary> {
+  let mut stored = Vec::with_capacity(deliveries.len());
+  for group in transactions(deliveries) {
+    stored.extend(store_group(repo, group).await);
+  }
+  stored
+}
+
+/// Stores a batch, then announces each stored message to WebSocket clients in
+/// the order it was stored.
+async fn process_batch(
+  repo: &MessageRepository,
+  state: &AppState,
+  deliveries: Vec<Delivery>,
+) -> Vec<MessageSummary> {
+  let stored = store_batch(repo, deliveries).await;
+  for summary in &stored {
+    state.broadcast(WsEvent::MessageNew(summary.clone()));
+  }
+  stored
+}
+
+async fn store_group(
+  repo: &MessageRepository,
+  group: Vec<(ReceivedMessage, DeliveryAck)>,
+) -> Vec<MessageSummary> {
+  let mut messages = Vec::with_capacity(group.len());
+  let mut acks = Vec::with_capacity(group.len());
+  for (received, ack) in group {
+    if ack.is_abandoned() {
+      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
+      continue;
     }
-  };
-  match repo.insert_prepared(&message).await {
-    Ok(summary) => {
-      ack.stored();
-      Some(summary)
+    match prepare(received).await {
+      Ok(message) => {
+        messages.push(message);
+        acks.push(ack);
+      }
+      Err(e) => {
+        ack.rejected();
+        tracing::error!(error = %e, "Refused a message that could not be parsed; the sender was asked to retry");
+      }
     }
-    Err(e) => {
-      ack.rejected();
+  }
+  if messages.is_empty() {
+    return Vec::new();
+  }
+
+  match repo.insert_batch(&messages).await {
+    Ok(summaries) => {
+      acks.into_iter().for_each(DeliveryAck::stored);
+      summaries
+    }
+    Err(e) if messages.len() == 1 => {
+      acks.into_iter().for_each(DeliveryAck::rejected);
       tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
-      None
+      Vec::new()
+    }
+    Err(e) => {
+      warn!(error = %e, count = messages.len(), "A batch failed to commit; storing its messages one at a time");
+      store_one_by_one(repo, messages, acks).await
     }
   }
+}
+
+/// Stores each message in its own transaction, so a message the store
+/// refuses fails alone rather than taking its batch with it.
+async fn store_one_by_one(
+  repo: &MessageRepository,
+  messages: Vec<PreparedMessage>,
+  acks: Vec<DeliveryAck>,
+) -> Vec<MessageSummary> {
+  let mut stored = Vec::with_capacity(messages.len());
+  for (message, ack) in messages.iter().zip(acks) {
+    if ack.is_abandoned() {
+      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
+      continue;
+    }
+    match repo.insert_prepared(message).await {
+      Ok(summary) => {
+        ack.stored();
+        stored.push(summary);
+      }
+      Err(e) => {
+        ack.rejected();
+        tracing::error!(error = %e, "Refused a message the store would not take; the sender was asked to retry");
+      }
+    }
+  }
+  stored
 }
 
 /// Opens a SQLite connection pool for `db_url`.
@@ -764,16 +871,15 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     let state = state.clone();
     let mut stop = Some(processor_stop);
     tokio::spawn(async move {
-      while let Some(delivery) = next_delivery(&mut smtp_rx, &mut stop).await {
-        let Some(summary) = store_delivery(&repo, delivery).await else {
+      let mut batch = Vec::with_capacity(MAX_BATCH_MESSAGES);
+      while next_batch(&mut smtp_rx, &mut stop, &mut batch).await {
+        let stored = process_batch(&repo, &state, std::mem::take(&mut batch)).await;
+        let (Some(client), Some(url)) = (&webhook_client, &webhook_url) else {
           continue;
         };
-        state.broadcast(WsEvent::MessageNew(summary.clone()));
-
-        if let (Some(client), Some(url)) = (&webhook_client, &webhook_url) {
+        for payload in stored {
           let client = client.clone();
           let url = url.clone();
-          let payload = summary;
           let sem = webhook_semaphore.clone();
           tokio::spawn(async move {
             let _permit = match sem.acquire().await {
@@ -949,46 +1055,69 @@ mod version_tests {
 #[cfg(test)]
 mod delivery_tests {
   use super::*;
-  use rustmail_smtp::{DeliveryOutcome, ReceivedMessage};
+  use rustmail_smtp::DeliveryOutcome;
 
   fn sample() -> ReceivedMessage {
+    titled("Hello")
+  }
+
+  fn titled(subject: &str) -> ReceivedMessage {
     ReceivedMessage {
       sender: "alice@test.com".to_string(),
       recipients: vec!["bob@test.com".to_string()],
-      raw: b"Subject: Hello\r\n\r\nbody\r\n".to_vec(),
+      raw: format!("Subject: {subject}\r\n\r\nbody\r\n").into_bytes(),
     }
+  }
+
+  fn sized(size: usize) -> ReceivedMessage {
+    let mut message = sample();
+    message.raw.resize(size, b'x');
+    message
+  }
+
+  async fn memory_repo() -> MessageRepository {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    MessageRepository::new(pool)
+  }
+
+  fn deliveries(
+    messages: Vec<ReceivedMessage>,
+  ) -> (Vec<Delivery>, Vec<oneshot::Receiver<DeliveryOutcome>>) {
+    messages.into_iter().map(Delivery::new).unzip()
+  }
+
+  async fn outcomes(verdicts: Vec<oneshot::Receiver<DeliveryOutcome>>) -> Vec<DeliveryOutcome> {
+    let mut outcomes = Vec::with_capacity(verdicts.len());
+    for verdict in verdicts {
+      outcomes.push(verdict.await.unwrap());
+    }
+    outcomes
   }
 
   #[tokio::test]
   async fn a_stored_message_lets_the_session_accept_it() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = memory_repo().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, verdicts) = deliveries(vec![sample()]);
+    let stored = store_batch(&repo, batch).await;
 
-    assert!(summary.is_some(), "a healthy store must yield a summary");
-    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
+    assert_eq!(stored.len(), 1, "a healthy store must yield a summary");
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
   }
 
   #[tokio::test]
   async fn a_message_parsed_off_the_runtime_is_stored_whole() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
-    let mut message = sample();
-    message
-      .raw
-      .extend(std::iter::repeat_n(b'x', BLOCKING_PARSE_THRESHOLD_BYTES));
+    let repo = memory_repo().await;
+    let message = sized(BLOCKING_PARSE_THRESHOLD_BYTES + 1);
     let expected_size = message.raw.len() as i64;
 
-    let (delivery, verdict) = Delivery::new(message);
-    let summary = store_delivery(&repo, delivery).await.unwrap();
+    let (batch, verdicts) = deliveries(vec![message]);
+    let stored = store_batch(&repo, batch).await;
 
-    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Stored);
-    assert_eq!(summary.size, expected_size);
-    assert_eq!(summary.subject.as_deref(), Some("Hello"));
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+    assert_eq!(stored[0].size, expected_size);
+    assert_eq!(stored[0].subject.as_deref(), Some("Hello"));
   }
 
   /// A write the store will not take must reach the sender as a refusal.
@@ -1004,14 +1133,110 @@ mod delivery_tests {
     let repo = MessageRepository::new(pool.clone());
     pool.close().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, verdicts) = deliveries(vec![sample(), sample()]);
+    let stored = store_batch(&repo, batch).await;
 
     assert!(
-      summary.is_none(),
+      stored.is_empty(),
       "a refused write must not yield a summary"
     );
-    assert_eq!(verdict.await.unwrap(), DeliveryOutcome::Rejected);
+    assert_eq!(
+      outcomes(verdicts).await,
+      [DeliveryOutcome::Rejected, DeliveryOutcome::Rejected]
+    );
+  }
+
+  /// A `250` has to mean stored, so no session in a batch may hear back
+  /// before the transaction holding its message has committed.
+  ///
+  /// The count runs on a second connection of a file database, which only
+  /// sees committed rows: an answer sent mid-transaction would find fewer
+  /// than the whole batch there.
+  #[tokio::test]
+  async fn a_batch_is_acknowledged_only_once_it_is_committed() {
+    const BATCH: usize = 4;
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("acks.db").display());
+    let pool = connect_pool(&url, false).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+
+    let (batch, mut verdicts) = deliveries((0..BATCH).map(|_| sample()).collect());
+    let writer = tokio::spawn({
+      let repo = repo.clone();
+      async move { store_batch(&repo, batch).await }
+    });
+
+    let first = verdicts.remove(0).await.unwrap();
+    let visible = repo.count().await.unwrap();
+
+    assert_eq!(first, DeliveryOutcome::Stored);
+    assert_eq!(
+      visible, BATCH as i64,
+      "the first answer went out before its batch committed"
+    );
+    assert_eq!(writer.await.unwrap().len(), BATCH);
+    pool.close().await;
+  }
+
+  /// One message the store refuses must not cost the rest of its batch.
+  ///
+  /// The trigger stands in for whatever makes a single row unwritable; it
+  /// aborts the shared transaction exactly as such a failure would.
+  #[tokio::test]
+  async fn a_poisoned_message_does_not_fail_its_neighbours() {
+    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
+    initialize_database(&pool).await.unwrap();
+    sqlx::query(
+      "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = 'poison' BEGIN SELECT RAISE(ABORT, 'poisoned'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let repo = MessageRepository::new(pool);
+
+    let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
+    let stored = store_batch(&repo, batch).await;
+
+    assert_eq!(
+      outcomes(verdicts).await,
+      [
+        DeliveryOutcome::Stored,
+        DeliveryOutcome::Rejected,
+        DeliveryOutcome::Stored
+      ]
+    );
+    let subjects: Vec<_> = stored.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("before"), Some("after")]);
+    assert_eq!(repo.count().await.unwrap(), 2);
+  }
+
+  /// The UI prepends each `message:new` as it arrives, so the events have to
+  /// follow the order the mailbox lists messages in.
+  #[tokio::test]
+  async fn message_new_events_follow_insert_order() {
+    let repo = memory_repo().await;
+    let (ws_tx, mut ws_rx) = broadcast::channel::<WsFrame>(64);
+    let state = AppState::new(repo.clone(), ws_tx, None, None);
+    let subjects = ["one", "two", "three", "four", "five"];
+
+    let (batch, _verdicts) = deliveries(subjects.iter().map(|s| titled(s)).collect());
+    process_batch(&repo, &state, batch).await;
+
+    let mut announced = Vec::new();
+    while let Ok(frame) = ws_rx.try_recv() {
+      announced.push(frame);
+    }
+    let oldest_first: Vec<WsFrame> = repo
+      .list(50, 0)
+      .await
+      .unwrap()
+      .into_iter()
+      .rev()
+      .map(|summary| WsFrame::encode(&WsEvent::MessageNew(summary)).unwrap())
+      .collect();
+    assert_eq!(announced.len(), subjects.len());
+    assert_eq!(announced, oldest_first);
   }
 
   /// A session that stopped waiting has already told the sender to retry.
@@ -1020,19 +1245,58 @@ mod delivery_tests {
   /// retry lands.
   #[tokio::test]
   async fn a_delivery_its_session_gave_up_on_is_not_stored() {
-    let pool = connect_pool(IN_MEMORY_DB_URL, true).await.unwrap();
-    initialize_database(&pool).await.unwrap();
-    let repo = MessageRepository::new(pool);
+    let repo = memory_repo().await;
 
-    let (delivery, verdict) = Delivery::new(sample());
-    drop(verdict);
-    let summary = store_delivery(&repo, delivery).await;
+    let (batch, mut verdicts) = deliveries(vec![titled("abandoned"), titled("waiting")]);
+    drop(verdicts.remove(0));
+    let stored = store_batch(&repo, batch).await;
 
-    assert!(
-      summary.is_none(),
-      "an abandoned delivery must not be stored"
-    );
-    assert_eq!(repo.count().await.unwrap(), 0);
+    let subjects: Vec<_> = stored.iter().map(|s| s.subject.as_deref()).collect();
+    assert_eq!(subjects, [Some("waiting")]);
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+  }
+
+  #[test]
+  fn large_mail_commits_one_message_per_transaction() {
+    let (batch, _verdicts) = deliveries(vec![
+      sized(MAX_BATCH_BYTES),
+      sized(MAX_BATCH_BYTES / 2),
+      sized(MAX_BATCH_BYTES / 2),
+      sized(MAX_BATCH_BYTES / 2),
+    ]);
+
+    let sizes: Vec<usize> = transactions(batch)
+      .into_iter()
+      .map(|group| group.len())
+      .collect();
+
+    assert_eq!(sizes, [1, 2, 1]);
+  }
+
+  #[test]
+  fn small_mail_shares_one_transaction() {
+    let (batch, _verdicts) = deliveries((0..MAX_BATCH_MESSAGES).map(|_| sample()).collect());
+
+    let groups = transactions(batch);
+
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].len(), MAX_BATCH_MESSAGES);
+  }
+
+  #[tokio::test]
+  async fn a_batch_takes_at_most_its_cap_of_queued_deliveries() {
+    let (tx, mut rx) = mpsc::channel::<Delivery>(MAX_BATCH_MESSAGES * 2);
+    for _ in 0..=MAX_BATCH_MESSAGES {
+      tx.send(Delivery::new(sample()).0).await.unwrap();
+    }
+    let mut batch = Vec::new();
+
+    assert!(next_batch(&mut rx, &mut None, &mut batch).await);
+    assert_eq!(batch.len(), MAX_BATCH_MESSAGES);
+    batch.clear();
+    assert!(next_batch(&mut rx, &mut None, &mut batch).await);
+    assert_eq!(batch.len(), 1);
   }
 
   #[tokio::test]
@@ -1046,9 +1310,11 @@ mod delivery_tests {
 
     stop_tx.send(()).unwrap();
 
+    let mut batch = Vec::new();
     let mut drained = 0;
-    while next_delivery(&mut rx, &mut stop).await.is_some() {
-      drained += 1;
+    while next_batch(&mut rx, &mut stop, &mut batch).await {
+      drained += batch.len();
+      batch.clear();
     }
     assert_eq!(
       drained, 2,
