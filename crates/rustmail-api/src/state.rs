@@ -1,9 +1,11 @@
+use axum::extract::ws::Utf8Bytes;
 use rustmail_storage::MessageRepository;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, broadcast};
 
 use crate::host::Hostname;
 use crate::origin::Origin;
+use crate::ws::WsTimings;
 
 const MAX_WS_CONNECTIONS: usize = 50;
 
@@ -33,13 +35,48 @@ pub enum WsEvent {
   MessagesClear,
 }
 
+/// A [`WsEvent`] serialized once, as every subscriber receives it.
+///
+/// The broadcast channel carries frames rather than events so that each event
+/// is encoded a single time however many clients are connected; cloning a
+/// frame only bumps a reference count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsFrame(Utf8Bytes);
+
+/// Why a [`WsFrame`] could not be encoded or decoded.
+#[derive(Debug, thiserror::Error)]
+pub enum WsFrameError {
+  #[error("WebSocket event could not be encoded: {0}")]
+  Encode(#[source] serde_json::Error),
+  #[error("WebSocket frame could not be decoded: {0}")]
+  Decode(#[source] serde_json::Error),
+}
+
+impl WsFrame {
+  /// Encodes `event` in its wire format.
+  pub fn encode(event: &WsEvent) -> Result<Self, WsFrameError> {
+    serde_json::to_string(event)
+      .map(|json| Self(json.into()))
+      .map_err(WsFrameError::Encode)
+  }
+
+  /// Decodes the event this frame carries.
+  pub fn decode(&self) -> Result<WsEvent, WsFrameError> {
+    serde_json::from_str(self.0.as_str()).map_err(WsFrameError::Decode)
+  }
+
+  pub(crate) fn text(&self) -> Utf8Bytes {
+    self.0.clone()
+  }
+}
+
 /// Shared application state passed to all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
   /// Message storage repository.
   pub repo: MessageRepository,
-  /// Broadcast sender for WebSocket events.
-  pub ws_tx: Arc<broadcast::Sender<WsEvent>>,
+  /// Broadcast sender for serialized WebSocket events.
+  pub ws_tx: Arc<broadcast::Sender<WsFrame>>,
   /// Allowed SMTP host for email release (if configured).
   pub release_host: Option<String>,
   /// Allowed SMTP port for email release.
@@ -50,13 +87,14 @@ pub struct AppState {
   pub allowed_origins: Arc<[Origin]>,
   /// Host names RustMail answers a browser on, besides addresses and `localhost`.
   pub allowed_hosts: Arc<[Hostname]>,
+  pub(crate) ws_timings: WsTimings,
 }
 
 impl AppState {
   /// Creates a new application state.
   pub fn new(
     repo: MessageRepository,
-    ws_tx: broadcast::Sender<WsEvent>,
+    ws_tx: broadcast::Sender<WsFrame>,
     release_host: Option<String>,
     release_port: Option<u16>,
   ) -> Self {
@@ -68,6 +106,7 @@ impl AppState {
       ws_semaphore: Arc::new(Semaphore::new(MAX_WS_CONNECTIONS)),
       allowed_origins: Arc::from([]),
       allowed_hosts: Arc::from([]),
+      ws_timings: WsTimings::default(),
     }
   }
 
@@ -93,8 +132,80 @@ impl AppState {
 
   /// Sends an event to all connected WebSocket clients.
   pub fn broadcast(&self, event: WsEvent) {
-    if let Err(e) = self.ws_tx.send(event) {
-      tracing::debug!(event = ?e.0, "No active WebSocket subscribers");
+    let frame = match WsFrame::encode(&event) {
+      Ok(frame) => frame,
+      Err(error) => {
+        tracing::warn!(%error, event = ?event, "WebSocket event could not be serialized, not sent");
+        return;
+      }
+    };
+    if self.ws_tx.send(frame).is_err() {
+      tracing::debug!(event = ?event, "No active WebSocket subscribers");
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{WsEvent, WsFrame, WsFrameError};
+
+  fn wire(event: &WsEvent) -> String {
+    WsFrame::encode(event).unwrap().text().as_str().to_owned()
+  }
+
+  #[test]
+  fn frames_keep_the_tagged_wire_format() {
+    let cases = [
+      (
+        WsEvent::MessageDelete { id: "a".into() },
+        r#"{"type":"message:delete","data":{"id":"a"}}"#,
+      ),
+      (
+        WsEvent::MessageRead {
+          id: "a".into(),
+          is_read: true,
+        },
+        r#"{"type":"message:read","data":{"id":"a","is_read":true}}"#,
+      ),
+      (
+        WsEvent::MessageStarred {
+          id: "a".into(),
+          is_starred: false,
+        },
+        r#"{"type":"message:starred","data":{"id":"a","is_starred":false}}"#,
+      ),
+      (
+        WsEvent::MessageTags {
+          id: "a".into(),
+          tags: vec!["x".into(), "y".into()],
+        },
+        r#"{"type":"message:tags","data":{"id":"a","tags":["x","y"]}}"#,
+      ),
+      (WsEvent::MessagesClear, r#"{"type":"messages:clear"}"#),
+    ];
+
+    for (event, expected) in cases {
+      assert_eq!(wire(&event), expected, "wire format changed for {event:?}");
+    }
+  }
+
+  #[test]
+  fn a_frame_decodes_back_to_its_event() {
+    let event = WsEvent::MessageTags {
+      id: "a".into(),
+      tags: vec!["x".into()],
+    };
+    let decoded = WsFrame::encode(&event).unwrap().decode().unwrap();
+
+    assert_eq!(wire(&decoded), wire(&event));
+  }
+
+  #[test]
+  fn a_malformed_frame_decodes_to_a_ws_frame_error() {
+    let frame = WsFrame(r#"{"type":"not-an-event"}"#.into());
+
+    let error = frame.decode().unwrap_err();
+
+    assert!(matches!(error, WsFrameError::Decode(_)));
   }
 }

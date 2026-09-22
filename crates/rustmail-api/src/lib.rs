@@ -20,12 +20,12 @@
 //! # Example
 //!
 //! ```no_run
-//! use rustmail_api::{AppState, WsEvent, router};
+//! use rustmail_api::{AppState, WsFrame, router};
 //! use rustmail_storage::MessageRepository;
 //! use tokio::sync::broadcast;
 //!
 //! # async fn example(repo: MessageRepository) -> Result<(), Box<dyn std::error::Error>> {
-//! let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+//! let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 //! let state = AppState::new(repo, ws_tx, None, None);
 //!
 //! let app = router(state);
@@ -44,7 +44,7 @@ mod ws;
 
 pub use host::{Hostname, HostnameError};
 pub use origin::{Origin, OriginError};
-pub use state::{AppState, WsEvent};
+pub use state::{AppState, WsEvent, WsFrame, WsFrameError};
 
 use axum::Router;
 use axum::http::HeaderValue;

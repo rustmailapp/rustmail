@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 use tracing::info;
 
-use rustmail_api::{AppState, Hostname, Origin, WsEvent};
+use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
 use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, MessageSummary, format_iso8601, initialize_database};
 
@@ -655,7 +655,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let repo = MessageRepository::new(pool);
   let (smtp_tx, mut smtp_rx) = mpsc::channel::<Delivery>(256);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
 
   let state = AppState::new(repo.clone(), ws_tx, release_host, release_port)
     .with_allowed_origins(allowed_origins.clone())
@@ -1029,7 +1029,7 @@ mod retention_tests {
   use sqlx::sqlite::SqlitePoolOptions;
   use tokio::sync::broadcast;
 
-  async fn build_state() -> (MessageRepository, AppState, broadcast::Receiver<WsEvent>) {
+  async fn build_state() -> (MessageRepository, AppState, broadcast::Receiver<WsFrame>) {
     let pool = SqlitePoolOptions::new()
       .max_connections(1)
       .connect("sqlite::memory:")
@@ -1037,7 +1037,7 @@ mod retention_tests {
       .unwrap();
     initialize_database(&pool).await.unwrap();
     let repo = MessageRepository::new(pool);
-    let (ws_tx, ws_rx) = broadcast::channel::<WsEvent>(64);
+    let (ws_tx, ws_rx) = broadcast::channel::<WsFrame>(64);
     let state = AppState::new(repo.clone(), ws_tx, None, None);
     (repo, state, ws_rx)
   }
@@ -1057,10 +1057,10 @@ mod retention_tests {
       .id
   }
 
-  fn drain_delete_events(rx: &mut broadcast::Receiver<WsEvent>) -> Vec<String> {
+  fn drain_delete_events(rx: &mut broadcast::Receiver<WsFrame>) -> Vec<String> {
     let mut ids = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-      match event {
+    while let Ok(frame) = rx.try_recv() {
+      match frame.decode().unwrap() {
         WsEvent::MessageDelete { id } => ids.push(id),
         other => panic!("unexpected WebSocket event from retention tick: {other:?}"),
       }

@@ -1,31 +1,31 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rustmail_api::{AppState, Hostname, Origin, WsEvent, router};
+use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame, router};
 use rustmail_storage::{MessageRepository, initialize_database};
 use serde_json::Value;
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
-async fn setup() -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+async fn setup() -> (axum::Router, MessageRepository, broadcast::Sender<WsFrame>) {
   setup_with(Vec::new(), Vec::new()).await
 }
 
 async fn setup_with_allowed_hosts(
   hosts: Vec<Hostname>,
-) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsFrame>) {
   setup_with(Vec::new(), hosts).await
 }
 
 async fn setup_with_allowed_origins(
   origins: Vec<Origin>,
-) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsFrame>) {
   setup_with(origins, Vec::new()).await
 }
 
 async fn setup_with(
   origins: Vec<Origin>,
   hosts: Vec<Hostname>,
-) -> (axum::Router, MessageRepository, broadcast::Sender<WsEvent>) {
+) -> (axum::Router, MessageRepository, broadcast::Sender<WsFrame>) {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .connect("sqlite::memory:")
     .await
@@ -33,7 +33,7 @@ async fn setup_with(
   initialize_database(&pool).await.unwrap();
 
   let repo = MessageRepository::new(pool);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
   let state = AppState::new(repo.clone(), ws_tx.clone(), None, None)
     .with_allowed_origins(origins)
     .with_allowed_hosts(hosts);
@@ -572,7 +572,7 @@ async fn release_rejects_wrong_host() {
     .unwrap();
   initialize_database(&pool).await.unwrap();
   let repo = MessageRepository::new(pool);
-  let (ws_tx, _) = broadcast::channel::<WsEvent>(256);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
   let state = AppState::new(
     repo.clone(),
     ws_tx,
@@ -651,7 +651,7 @@ async fn ws_broadcast_on_delete() {
     .await
     .unwrap();
 
-  let event = rx.try_recv().unwrap();
+  let event = rx.try_recv().unwrap().decode().unwrap();
   match event {
     WsEvent::MessageDelete { id } => assert_eq!(id, summary.id),
     _ => panic!("Expected MessageDelete event"),
@@ -683,7 +683,7 @@ async fn ws_broadcast_on_clear() {
     .await
     .unwrap();
 
-  let event = rx.try_recv().unwrap();
+  let event = rx.try_recv().unwrap().decode().unwrap();
   assert!(matches!(event, WsEvent::MessagesClear));
 }
 
@@ -948,7 +948,7 @@ async fn starred_message_ws_event() {
     .await
     .unwrap();
 
-  let event = rx.try_recv().unwrap();
+  let event = rx.try_recv().unwrap().decode().unwrap();
   match event {
     WsEvent::MessageStarred { id, is_starred } => {
       assert_eq!(id, summary.id);
@@ -984,7 +984,7 @@ async fn tags_update_ws_event() {
     .await
     .unwrap();
 
-  let event = rx.try_recv().unwrap();
+  let event = rx.try_recv().unwrap().decode().unwrap();
   match event {
     WsEvent::MessageTags { id, tags } => {
       assert_eq!(id, summary.id);
