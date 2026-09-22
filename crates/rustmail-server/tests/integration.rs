@@ -1768,3 +1768,88 @@ async fn smtp_stores_a_long_body_line_split_across_writes() {
 async fn smtp_stores_a_body_line_longer_than_the_read_buffer() {
   assert_long_line_is_stored(BUFFER_SPANNING_BODY_LINE_LEN, None).await;
 }
+
+/// A refused message must be discarded whole, however long its lines are.
+///
+/// The drain used to stop at the first line past the command cap, so the rest
+/// of the body was read back as commands, each drawing a `500`.
+#[tokio::test]
+async fn smtp_discards_an_oversized_message_with_long_lines_and_stays_in_sync() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
+  let small_limit: usize = 256;
+  tokio::spawn(async move {
+    let (stream, peer) = listener.accept().await.unwrap();
+    let mut session = Session::new(stream, peer, tx, small_limit, None);
+    let _ = session.handle().await;
+  });
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  assert_eq!(
+    send_line(&mut stream, "MAIL FROM:<alice@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert_eq!(
+    send_line(&mut stream, "RCPT TO:<bob@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert!(send_line(&mut stream, "DATA").await.starts_with("354 "));
+
+  let payload = format!(
+    "Subject: Big\r\n\r\n{}\r\n{}\r\nafter\r\n.\r\n",
+    "A".repeat(small_limit),
+    "B".repeat(LONG_BODY_LINE_LEN)
+  );
+  stream.write_all(payload.as_bytes()).await.unwrap();
+  assert!(
+    read_smtp_response_line(&mut stream)
+      .await
+      .starts_with("552 ")
+  );
+  assert_eq!(send_line(&mut stream, "NOOP").await, "250 OK\r\n");
+}
+
+/// Capacity of the session's read buffer, tokio's `BufReader` default.
+const SESSION_READ_BUFFER_LEN: usize = 8 * 1024;
+
+/// A line the size check cuts mid-way must be skipped to its end, even when
+/// what is left of it is a lone dot.
+#[tokio::test]
+async fn smtp_drain_does_not_mistake_the_tail_of_a_cut_line_for_the_end() {
+  let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
+  let (tx, _rx) = mpsc::channel::<Delivery>(16);
+  let small_limit: usize = 256;
+  tokio::spawn(async move {
+    let (stream, peer) = listener.accept().await.unwrap();
+    let mut session = Session::new(stream, peer, tx, small_limit, None);
+    let _ = session.handle().await;
+  });
+
+  let mut stream = connect_smtp_and_greet(addr).await;
+  let _ehlo = read_ehlo_response(&mut stream).await;
+  assert_eq!(
+    send_line(&mut stream, "MAIL FROM:<alice@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert_eq!(
+    send_line(&mut stream, "RCPT TO:<bob@test.com>").await,
+    "250 OK\r\n"
+  );
+  assert!(send_line(&mut stream, "DATA").await.starts_with("354 "));
+
+  let headers = "Subject: Big\r\n\r\n";
+  let payload = format!(
+    "{headers}{}.\r\nafter\r\n.\r\n",
+    "A".repeat(SESSION_READ_BUFFER_LEN - headers.len())
+  );
+  stream.write_all(payload.as_bytes()).await.unwrap();
+  assert!(
+    read_smtp_response_line(&mut stream)
+      .await
+      .starts_with("552 ")
+  );
+  assert_eq!(send_line(&mut stream, "NOOP").await, "250 OK\r\n");
+}
