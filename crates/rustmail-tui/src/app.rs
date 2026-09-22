@@ -17,6 +17,10 @@ use crate::ui;
 use crate::ui::util::format_size;
 
 const STALE_VIEW_REFETCH_INTERVAL: Duration = Duration::from_secs(2);
+/// Upper bound on WebSocket deltas remembered while a list fetch is in flight.
+/// Past it the buffer is dropped and the landed snapshot is marked stale, so a
+/// burst costs one extra resync instead of unbounded memory.
+const PENDING_DELTA_CAPACITY: usize = 256;
 const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +45,28 @@ pub enum PreviewTab {
   Raw,
 }
 
+/// WebSocket deltas that arrived while a list fetch was in flight, replayed
+/// onto its snapshot when it lands so they are not lost or undone.
+#[derive(Default)]
+struct PendingDeltas {
+  events: Vec<WsEvent>,
+  overflowed: bool,
+}
+
+impl PendingDeltas {
+  fn record(&mut self, delta: WsEvent) {
+    if self.overflowed {
+      return;
+    }
+    if self.events.len() >= PENDING_DELTA_CAPACITY {
+      self.events.clear();
+      self.overflowed = true;
+      return;
+    }
+    self.events.push(delta);
+  }
+}
+
 pub struct App {
   pub running: bool,
   pub mode: Mode,
@@ -50,6 +76,7 @@ pub struct App {
   ws_url: String,
   event_tx: mpsc::Sender<Event>,
   fetch_generation: u64,
+  pending_deltas: PendingDeltas,
 
   pub messages: Vec<MessageSummary>,
   pub total: i64,
@@ -108,6 +135,7 @@ impl App {
       ws_url,
       event_tx,
       fetch_generation: 0,
+      pending_deltas: PendingDeltas::default(),
 
       messages: Vec::new(),
       total: 0,
@@ -195,7 +223,7 @@ impl App {
       }
       Event::WsMessage(msg) => self.handle_ws_message(&msg).await,
       Event::WsStatus(connected) => self.handle_ws_status(connected).await,
-      Event::WsOverflow => self.view_stale = true,
+      Event::WsOverflow => self.handle_ws_overflow(),
       Event::MessagesFetched { generation, result } => {
         self.handle_messages_fetched(generation, result).await
       }
@@ -246,6 +274,13 @@ impl App {
         delay = (delay * 2).min(Duration::from_secs(30));
       }
     });
+  }
+
+  fn handle_ws_overflow(&mut self) {
+    self.view_stale = true;
+    if self.loading {
+      self.pending_deltas.overflowed = true;
+    }
   }
 
   async fn handle_ws_status(&mut self, connected: bool) {
@@ -614,11 +649,15 @@ impl App {
       return;
     }
     self.loading = false;
+    let pending = std::mem::take(&mut self.pending_deltas);
     match result {
       Ok(resp) => {
         self.messages = resp.messages;
         self.total = resp.total;
-        self.view_stale = false;
+        self.view_stale = pending.overflowed;
+        for delta in pending.events {
+          self.replay_delta(delta);
+        }
         self.error = None;
         self.error_ticks = 0;
         if self.selected >= self.messages.len() && !self.messages.is_empty() {
@@ -899,6 +938,10 @@ impl App {
       return;
     };
 
+    if self.loading {
+      self.pending_deltas.record(event.clone());
+    }
+
     match event {
       WsEvent::MessageNew(_) if !self.search_query.is_empty() => {
         self.view_stale = true;
@@ -937,21 +980,9 @@ impl App {
           }
         }
       }
-      WsEvent::MessageRead { id, is_read } => {
-        if let Some(msg) = self.messages.iter_mut().find(|m| m.id == id) {
-          msg.is_read = is_read;
-        }
-      }
-      WsEvent::MessageStarred { id, is_starred } => {
-        if let Some(msg) = self.messages.iter_mut().find(|m| m.id == id) {
-          msg.is_starred = is_starred;
-        }
-      }
-      WsEvent::MessageTags { id, tags } => {
-        if let Some(msg) = self.messages.iter_mut().find(|m| m.id == id) {
-          msg.tags = tags;
-        }
-      }
+      update @ (WsEvent::MessageRead { .. }
+      | WsEvent::MessageStarred { .. }
+      | WsEvent::MessageTags { .. }) => self.apply_update(update),
       WsEvent::MessagesClear => {
         self.messages.clear();
         self.total = 0;
@@ -964,6 +995,65 @@ impl App {
         self.pending_raw = None;
         self.sync_list_state();
       }
+    }
+  }
+
+  fn apply_update(&mut self, update: WsEvent) {
+    match update {
+      WsEvent::MessageRead { id, is_read } => {
+        if let Some(msg) = self.message_mut(&id) {
+          msg.is_read = is_read;
+        }
+      }
+      WsEvent::MessageStarred { id, is_starred } => {
+        if let Some(msg) = self.message_mut(&id) {
+          msg.is_starred = is_starred;
+        }
+      }
+      WsEvent::MessageTags { id, tags } => {
+        if let Some(msg) = self.message_mut(&id) {
+          msg.tags = tags;
+        }
+      }
+      WsEvent::MessageNew(_) | WsEvent::MessageDelete { .. } | WsEvent::MessagesClear => {}
+    }
+  }
+
+  fn message_mut(&mut self, id: &str) -> Option<&mut MessageSummary> {
+    self.messages.iter_mut().find(|m| m.id == id)
+  }
+
+  /// Re-applies a delta recorded during an in-flight fetch onto the snapshot
+  /// that fetch returned. Selection is left alone: the live handler already
+  /// shifted it when the delta first arrived. A delta whose effect on this
+  /// page cannot be decided locally marks the view stale instead of guessing.
+  fn replay_delta(&mut self, delta: WsEvent) {
+    match delta {
+      WsEvent::MessageNew(summary) => {
+        if self.messages.iter().any(|m| m.id == summary.id) {
+          return;
+        }
+        if !self.search_query.is_empty() || self.offset != 0 {
+          self.view_stale = true;
+          return;
+        }
+        self.total += 1;
+        self.messages.insert(0, summary);
+        self.messages.truncate(self.page_size as usize);
+      }
+      WsEvent::MessageDelete { id } => match self.messages.iter().position(|m| m.id == id) {
+        Some(pos) => {
+          self.messages.remove(pos);
+          self.total = (self.total - 1).max(0);
+        }
+        None => self.view_stale = true,
+      },
+      WsEvent::MessagesClear => {
+        self.messages.clear();
+        self.total = 0;
+        self.selected = 0;
+      }
+      update => self.apply_update(update),
     }
   }
 
@@ -1488,6 +1578,105 @@ mod tests {
     assert_eq!(app.total, 1);
     assert_eq!(app.messages[0].id, "id-9");
     assert!(!app.loading);
+  }
+
+  fn in_flight_fetch(count: usize) -> App {
+    let mut app = app_with_messages(count);
+    app.fetch_generation = 1;
+    app.loading = true;
+    app
+  }
+
+  async fn land_snapshot(app: &mut App, ids: &[&str], total: i64) {
+    let resp = ListResponse {
+      messages: ids.iter().map(|id| sample_summary(id, true)).collect(),
+      total,
+    };
+    app
+      .dispatch(Event::MessagesFetched {
+        generation: app.fetch_generation,
+        result: Ok(resp),
+      })
+      .await;
+  }
+
+  fn delete_event(id: &str) -> String {
+    ws_event("message:delete", serde_json::json!({ "id": id }))
+  }
+
+  #[tokio::test]
+  async fn new_message_during_in_flight_fetch_survives_the_snapshot() {
+    let mut app = in_flight_fetch(3);
+
+    app.handle_ws_message(&new_message_event("live")).await;
+    land_snapshot(&mut app, &["id-0", "id-1", "id-2"], 3).await;
+
+    let ids: Vec<&str> = app.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["live", "id-0", "id-1", "id-2"]);
+    assert_eq!(app.total, 4);
+  }
+
+  #[tokio::test]
+  async fn delete_during_in_flight_fetch_survives_the_snapshot() {
+    let mut app = in_flight_fetch(3);
+
+    app.handle_ws_message(&delete_event("id-1")).await;
+    land_snapshot(&mut app, &["id-0", "id-1", "id-2"], 3).await;
+
+    let ids: Vec<&str> = app.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["id-0", "id-2"]);
+    assert_eq!(app.total, 2);
+  }
+
+  #[tokio::test]
+  async fn delta_already_in_the_snapshot_is_not_duplicated() {
+    let mut app = in_flight_fetch(3);
+
+    app.handle_ws_message(&new_message_event("live")).await;
+    land_snapshot(&mut app, &["live", "id-0", "id-1", "id-2"], 4).await;
+
+    assert_eq!(app.messages.iter().filter(|m| m.id == "live").count(), 1);
+    assert_eq!(app.messages.len(), 4);
+    assert_eq!(app.total, 4);
+  }
+
+  #[tokio::test]
+  async fn update_during_in_flight_fetch_is_replayed_onto_the_snapshot() {
+    let mut app = in_flight_fetch(1);
+
+    app
+      .handle_ws_message(&ws_event(
+        "message:starred",
+        serde_json::json!({ "id": "id-0", "is_starred": true }),
+      ))
+      .await;
+    land_snapshot(&mut app, &["id-0"], 1).await;
+
+    assert!(app.messages[0].is_starred);
+  }
+
+  #[tokio::test]
+  async fn delta_buffer_overflow_leaves_the_view_stale_after_the_snapshot() {
+    let mut app = in_flight_fetch(0);
+
+    for i in 0..=PENDING_DELTA_CAPACITY {
+      app
+        .handle_ws_message(&new_message_event(&format!("live-{i}")))
+        .await;
+    }
+    land_snapshot(&mut app, &[], 0).await;
+
+    assert!(app.view_stale);
+  }
+
+  #[tokio::test]
+  async fn ws_overflow_during_in_flight_fetch_leaves_the_view_stale() {
+    let mut app = in_flight_fetch(1);
+
+    app.dispatch(Event::WsOverflow).await;
+    land_snapshot(&mut app, &["id-0"], 1).await;
+
+    assert!(app.view_stale);
   }
 
   #[tokio::test]
