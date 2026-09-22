@@ -1,4 +1,4 @@
-.PHONY: dev dev-ui dev-server build build-ui build-server run check test test-e2e lint fmt clean
+.PHONY: dev dev-ui dev-server build build-ui build-server run check test test-e2e lint fmt clean bench
 
 # Development — run UI dev server + Rust backend concurrently
 dev:
@@ -51,3 +51,7 @@ fmt:
 clean:
 	cargo clean
 	rm -rf ui/dist ui/node_modules
+
+# Rustmail-only ingest benchmark against a release build (small payloads, 8 connections)
+bench: build
+	python3 scripts/bench/bench.py --tool rustmail --scenario make-bench --kind small --conns 8
