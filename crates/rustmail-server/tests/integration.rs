@@ -1,11 +1,15 @@
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+use tokio::io::{
+  AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines,
+};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::process::ChildStdout;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_rustls::TlsConnector;
 
@@ -14,6 +18,14 @@ use rustmail_smtp::{Delivery, ReceivedMessage, Session, SmtpServer, SmtpServerCo
 use rustmail_storage::{MessageRepository, initialize_database};
 
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
+/// Port 0 asks the OS for a free port, one no concurrent test can also be handed.
+const ANY_FREE_PORT: &str = "0";
+/// Child log filter: warnings, plus the line that reports the SMTP address.
+const CHILD_LOG_FILTER: &str = "warn,rustmail_smtp::server=info";
+const SMTP_LISTENING_LOG: &str = "SMTP server listening";
+const LISTEN_ADDR_FIELD: &str = "addr=";
+const LISTEN_REPORT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_SMTP_PORT: u16 = 1025;
 const STARTTLS_CERT_PATH: &str = concat!(
   env!("CARGO_MANIFEST_DIR"),
   "/tests/fixtures/starttls-cert.pem"
@@ -77,25 +89,85 @@ fn test_tls_connector() -> TlsConnector {
   TlsConnector::from(Arc::new(client_config))
 }
 
-struct ChildGuard(Option<tokio::process::Child>);
+/// Builds a `rustmail` invocation whose log output the tests can parse.
+///
+/// Colour codes and an inherited `RUST_LOG` would both hide the line that
+/// reports the SMTP address, so neither reaches the child.
+fn rustmail_command() -> tokio::process::Command {
+  let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"));
+  command
+    .env("NO_COLOR", "1")
+    .env_remove("RUST_LOG")
+    .stdout(std::process::Stdio::piped())
+    .stderr(std::process::Stdio::piped());
+  command
+}
+
+/// Finds the address in the SMTP server's start-up log line, if this is it.
+fn parse_smtp_listen_addr(line: &str) -> Option<SocketAddr> {
+  let (_, fields) = line.split_once(SMTP_LISTENING_LOG)?;
+  let (_, value) = fields.split_once(LISTEN_ADDR_FIELD)?;
+  value.split_whitespace().next()?.parse().ok()
+}
+
+struct ChildGuard {
+  child: Option<tokio::process::Child>,
+  _open_stdout: Option<Lines<BufReader<ChildStdout>>>,
+}
 
 impl ChildGuard {
   fn new(child: tokio::process::Child) -> Self {
-    Self(Some(child))
+    Self {
+      child: Some(child),
+      _open_stdout: None,
+    }
   }
 
   async fn wait_with_timeout(&mut self, secs: u64) -> std::process::ExitStatus {
-    let child = self.0.as_mut().expect("child already consumed");
+    let child = self.child.as_mut().expect("child already consumed");
     tokio::time::timeout(Duration::from_secs(secs), child.wait())
       .await
       .expect("child did not exit in time")
       .expect("failed to wait on child")
   }
+
+  /// Waits for the child to log the SMTP address it bound.
+  ///
+  /// Children are started on port 0, so the OS picks a port no other test
+  /// holds, and the log line is the only way to learn which one it was. The
+  /// line is written after the bind, so the port already accepts connections.
+  /// The stdout pipe stays open afterwards so later log writes cannot fail.
+  async fn smtp_addr(&mut self) -> SocketAddr {
+    let child = self.child.as_mut().expect("child already consumed");
+    let mut stdout = BufReader::new(child.stdout.take().expect("child stdout not piped")).lines();
+    let mut stderr = child.stderr.take().expect("child stderr not piped");
+    let addr = tokio::time::timeout(LISTEN_REPORT_TIMEOUT, async {
+      while let Some(line) = stdout
+        .next_line()
+        .await
+        .expect("failed to read child stdout")
+      {
+        if let Some(addr) = parse_smtp_listen_addr(&line) {
+          return addr;
+        }
+      }
+      let mut diagnostics = String::new();
+      stderr
+        .read_to_string(&mut diagnostics)
+        .await
+        .expect("failed to read child stderr");
+      panic!("rustmail exited before reporting its SMTP address: {diagnostics}");
+    })
+    .await
+    .expect("rustmail did not report its SMTP address in time");
+    self._open_stdout = Some(stdout);
+    addr
+  }
 }
 
 impl Drop for ChildGuard {
   fn drop(&mut self) {
-    if let Some(ref mut child) = self.0 {
+    if let Some(ref mut child) = self.child {
       let _ = child.start_kill();
     }
   }
@@ -234,23 +306,6 @@ async fn wait_for_count(repo: &MessageRepository, expected: i64) {
       panic!("Timed out waiting for {expected} message(s), got {count}");
     }
     tokio::time::sleep(Duration::from_millis(10)).await;
-  }
-}
-
-async fn wait_for_tcp(addr: std::net::SocketAddr) {
-  let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-  loop {
-    match TcpStream::connect(addr).await {
-      Ok(probe) => {
-        drop(probe);
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        return;
-      }
-      Err(_) if tokio::time::Instant::now() < deadline => {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-      }
-      Err(e) => panic!("TCP server at {addr} did not start within 5s: {e}"),
-    }
   }
 }
 
@@ -847,14 +902,12 @@ async fn webhook_fires_on_new_message() {
 
 #[tokio::test]
 async fn cli_assert_passes_when_email_arrives() {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-
   let mut guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+    rustmail_command()
       .args([
         "assert",
         "--smtp-port",
-        &smtp_port.to_string(),
+        ANY_FREE_PORT,
         "--min-count",
         "1",
         "--subject",
@@ -862,16 +915,13 @@ async fn cli_assert_passes_when_email_arrives() {
         "--timeout",
         "10s",
         "--log-level",
-        "warn",
+        CHILD_LOG_FILTER,
       ])
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
       .spawn()
       .expect("failed to spawn rustmail assert"),
   );
 
-  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
-  wait_for_tcp(addr).await;
+  let addr = guard.smtp_addr().await;
 
   smtp_send(addr, "cli@test.com", "dest@test.com", "CLI Test", "body").await;
 
@@ -881,14 +931,12 @@ async fn cli_assert_passes_when_email_arrives() {
 
 #[tokio::test]
 async fn cli_assert_fails_on_timeout() {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-
   let mut guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+    rustmail_command()
       .args([
         "assert",
         "--smtp-port",
-        &smtp_port.to_string(),
+        ANY_FREE_PORT,
         "--min-count",
         "1",
         "--subject",
@@ -898,8 +946,6 @@ async fn cli_assert_fails_on_timeout() {
         "--log-level",
         "warn",
       ])
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
       .spawn()
       .expect("failed to spawn rustmail assert"),
   );
@@ -957,14 +1003,12 @@ async fn smtp_rejects_oversized_message() {
 
 #[tokio::test]
 async fn cli_assert_filters_by_subject() {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-
   let mut guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+    rustmail_command()
       .args([
         "assert",
         "--smtp-port",
-        &smtp_port.to_string(),
+        ANY_FREE_PORT,
         "--min-count",
         "1",
         "--subject",
@@ -972,16 +1016,13 @@ async fn cli_assert_filters_by_subject() {
         "--timeout",
         "10s",
         "--log-level",
-        "warn",
+        CHILD_LOG_FILTER,
       ])
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
       .spawn()
       .expect("failed to spawn"),
   );
 
-  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
-  wait_for_tcp(addr).await;
+  let addr = guard.smtp_addr().await;
 
   smtp_send(addr, "a@t.com", "b@t.com", "Decoy", "ignored").await;
   smtp_send(addr, "a@t.com", "b@t.com", "Target Email", "match").await;
@@ -992,22 +1033,8 @@ async fn cli_assert_filters_by_subject() {
 
 #[tokio::test]
 async fn smtp_session_limit_rejects_excess() {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
   let (tx, _) = mpsc::channel::<Delivery>(256);
-
-  let config = SmtpServerConfig {
-    host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-    port: smtp_port,
-    max_message_size: MAX_MESSAGE_SIZE,
-    tls: None,
-  };
-  let server = SmtpServer::new(config, tx);
-  tokio::spawn(async move {
-    server.run().await.unwrap();
-  });
-
-  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
-  wait_for_tcp(addr).await;
+  let addr = spawn_smtp_only(tx).await;
 
   let mut held_connections = Vec::new();
   for _ in 0..100 {
@@ -1037,21 +1064,21 @@ async fn smtp_session_limit_rejects_excess() {
   drop(held_connections);
 }
 
-async fn spawn_smtp_only(tx: mpsc::Sender<Delivery>) -> std::net::SocketAddr {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
+/// Starts a real [`SmtpServer`] on an OS-assigned loopback port.
+///
+/// The listener is bound before the server task starts, so the returned
+/// address accepts connections immediately and cannot be taken by another test.
+async fn spawn_smtp_only(tx: mpsc::Sender<Delivery>) -> SocketAddr {
+  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let addr = listener.local_addr().unwrap();
   let config = SmtpServerConfig {
-    host: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-    port: smtp_port,
     max_message_size: MAX_MESSAGE_SIZE,
-    tls: None,
+    ..SmtpServerConfig::default()
   };
   let server = SmtpServer::new(config, tx);
   tokio::spawn(async move {
-    server.run().await.unwrap();
+    server.serve(listener).await.unwrap();
   });
-
-  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
-  wait_for_tcp(addr).await;
   addr
 }
 
@@ -1399,74 +1426,68 @@ async fn ws_connection_limit_returns_503() {
 async fn config_env_overrides_toml() {
   use std::io::Write;
 
-  let smtp_port_toml = portpicker::pick_unused_port().expect("no free port");
-  let smtp_port_env = portpicker::pick_unused_port().expect("no free port");
-  let http_port = portpicker::pick_unused_port().expect("no free port");
+  let toml_port_holder = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  let smtp_port_toml = toml_port_holder.local_addr().unwrap().port();
 
   let mut toml_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
   write!(
     toml_file,
-    "smtp_port = {smtp_port_toml}\nhttp_port = {http_port}\nephemeral = true\n"
+    "smtp_port = {smtp_port_toml}\nhttp_port = {ANY_FREE_PORT}\nephemeral = true\n"
   )
   .unwrap();
 
-  let _guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+  let mut guard = ChildGuard::new(
+    rustmail_command()
       .args(["serve", "--config", toml_file.path().to_str().unwrap()])
-      .env("RUSTMAIL_SMTP_PORT", smtp_port_env.to_string())
-      .env("RUSTMAIL_LOG_LEVEL", "warn")
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
+      .env("RUSTMAIL_SMTP_PORT", ANY_FREE_PORT)
+      .env("RUSTMAIL_LOG_LEVEL", CHILD_LOG_FILTER)
       .spawn()
       .expect("failed to spawn"),
   );
 
-  let env_addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port_env).parse().unwrap();
-  let toml_addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port_toml).parse().unwrap();
-
-  wait_for_tcp(env_addr).await;
-
-  let toml_reachable = TcpStream::connect(toml_addr).await.is_ok();
-  assert!(
-    !toml_reachable,
-    "TOML port {smtp_port_toml} should NOT be listening (env override)"
+  let smtp_addr = guard.smtp_addr().await;
+  assert_ne!(
+    smtp_addr.port(),
+    smtp_port_toml,
+    "SMTP must bind the env port, not the TOML port {smtp_port_toml}"
   );
+
+  let mut stream = BufReader::new(TcpStream::connect(smtp_addr).await.unwrap());
+  let banner = read_banner(&mut stream).await;
+  assert!(banner.starts_with("220"), "got: {banner}");
 }
 
 #[tokio::test]
 async fn config_toml_used_when_no_env() {
   use std::io::Write;
 
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-  let http_port = portpicker::pick_unused_port().expect("no free port");
-
   let mut toml_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
   write!(
     toml_file,
-    "smtp_port = {smtp_port}\nhttp_port = {http_port}\nephemeral = true\n"
+    "smtp_port = {ANY_FREE_PORT}\nhttp_port = {ANY_FREE_PORT}\nephemeral = true\n"
   )
   .unwrap();
 
-  let _guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+  let mut guard = ChildGuard::new(
+    rustmail_command()
       .args(["serve", "--config", toml_file.path().to_str().unwrap()])
       .env_remove("RUSTMAIL_SMTP_PORT")
       .env_remove("RUSTMAIL_HTTP_PORT")
-      .env("RUSTMAIL_LOG_LEVEL", "warn")
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped())
+      .env("RUSTMAIL_LOG_LEVEL", CHILD_LOG_FILTER)
       .spawn()
       .expect("failed to spawn"),
   );
 
-  let addr: std::net::SocketAddr = format!("127.0.0.1:{}", smtp_port).parse().unwrap();
-  wait_for_tcp(addr).await;
+  let smtp_addr = guard.smtp_addr().await;
+  assert_ne!(
+    smtp_addr.port(),
+    DEFAULT_SMTP_PORT,
+    "SMTP must bind the TOML port, not the built-in default"
+  );
 }
 
 #[tokio::test]
 async fn smtp_tls_requires_both_cert_and_key() {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-  let http_port = portpicker::pick_unused_port().expect("no free port");
   let cert_path = starttls_cert_path();
   let key_path = starttls_key_path();
 
@@ -1474,20 +1495,17 @@ async fn smtp_tls_requires_both_cert_and_key() {
     (Some(cert_path.as_path()), None),
     (None, Some(key_path.as_path())),
   ] {
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"));
-    command
-      .args([
-        "serve",
-        "--smtp-port",
-        &smtp_port.to_string(),
-        "--http-port",
-        &http_port.to_string(),
-        "--ephemeral",
-        "--log-level",
-        "warn",
-      ])
-      .stdout(std::process::Stdio::piped())
-      .stderr(std::process::Stdio::piped());
+    let mut command = rustmail_command();
+    command.args([
+      "serve",
+      "--smtp-port",
+      ANY_FREE_PORT,
+      "--http-port",
+      ANY_FREE_PORT,
+      "--ephemeral",
+      "--log-level",
+      "warn",
+    ]);
 
     if let Some(cert) = cert {
       command.arg("--smtp-tls-cert").arg(cert);
@@ -1918,33 +1936,28 @@ const PROMPT_EXIT_SECS: u64 = 4;
 
 #[cfg(unix)]
 async fn stop_after_one_delivery(signal: &str) {
-  let smtp_port = portpicker::pick_unused_port().expect("no free port");
-  let http_port = portpicker::pick_unused_port().expect("no free port");
   let data_dir = tempfile::tempdir().unwrap();
   let db_path = data_dir.path().join("rustmail.db");
 
   let mut guard = ChildGuard::new(
-    tokio::process::Command::new(env!("CARGO_BIN_EXE_rustmail"))
+    rustmail_command()
       .args([
         "serve",
         "--smtp-port",
-        &smtp_port.to_string(),
+        ANY_FREE_PORT,
         "--http-port",
-        &http_port.to_string(),
+        ANY_FREE_PORT,
         "--log-level",
-        "warn",
+        CHILD_LOG_FILTER,
       ])
       .arg("--db-path")
       .arg(&db_path)
-      .stdout(std::process::Stdio::null())
-      .stderr(std::process::Stdio::null())
       .spawn()
       .expect("failed to spawn rustmail serve"),
   );
-  let pid = guard.0.as_ref().and_then(|child| child.id()).unwrap();
+  let pid = guard.child.as_ref().and_then(|child| child.id()).unwrap();
 
-  let smtp_addr: std::net::SocketAddr = format!("127.0.0.1:{smtp_port}").parse().unwrap();
-  wait_for_tcp(smtp_addr).await;
+  let smtp_addr = guard.smtp_addr().await;
   smtp_send(smtp_addr, "a@test.com", "b@test.com", "Before stop", "body").await;
 
   let kill = tokio::process::Command::new("kill")
