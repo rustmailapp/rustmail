@@ -21,6 +21,14 @@ info:
     so a `503` never stands for a change that still lands. The WebSocket is
     exempt.
 
+
+    A path under `/api/` that matches no endpoint is answered `404` with
+    `{"error": "Unknown API endpoint"}`, never with the UI's HTML. Request
+    bodies are read as `application/json`; a body without that content type,
+    or one the JSON extractor cannot map onto the request schema, is
+    rejected before the handler runs with a `text/plain` body (`415`,
+    `400` or `422`) rather than the `Error` object.
+
 servers:
   - url: http://localhost:8025
     description: Default local server
@@ -66,17 +74,29 @@ paths:
           in: query
           schema:
             type: boolean
-          description: When `true`, only starred messages. `false` does not filter.
+          description: >
+            When `true`, only starred messages. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: unread
           in: query
           schema:
             type: boolean
-          description: When `true`, only messages not marked as read. `false` does not filter.
+          description: >
+            When `true`, only messages not marked as read. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: has_attachments
           in: query
           schema:
             type: boolean
-          description: When `true`, only messages with at least one attachment. `false` does not filter.
+          description: >
+            When `true`, only messages with at least one attachment. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: tag
           in: query
           style: form
@@ -92,7 +112,9 @@ paths:
             it carries any of the given tags. More than 20 is a `400`.
       responses:
         '200':
-          description: Paginated list of message summaries
+          description: >
+            Paginated list of message summaries. Sent with
+            `Cache-Control: no-store`.
           content:
             application/json:
               schema:
@@ -117,7 +139,9 @@ paths:
             `before` names no stored message (it may have been deleted; restart
             from the first page), `before` and `offset` were both given, more
             than 20 `tag` values were given, or `limit`, `offset` or a boolean
-            filter has a malformed value. Only the unknown-cursor case carries
+            filter has a malformed value (`limit must be an integer`,
+            `starred must be true or false`, `Too many tag filters (max 20)`,
+            and so on). Only the unknown-cursor case carries
             `code: unknown_cursor`; tell the cases apart by `code`, not by the
             status or the `error` text.
           content:
@@ -161,7 +185,9 @@ paths:
       tags: [Messages]
       responses:
         '200':
-          description: Full message including parsed body fields
+          description: >
+            Full message including parsed body fields. Sent with
+            `Cache-Control: no-store`.
           content:
             application/json:
               schema:
@@ -187,6 +213,13 @@ paths:
     patch:
       operationId: updateMessage
       summary: Update message fields
+      description: >
+        Sets whichever of `is_read`, `is_starred` and `tags` the body names and
+        leaves the others alone. The body must be sent as
+        `Content-Type: application/json`. Unknown fields are ignored, and `{}`
+        is accepted as a no-op. Each field that was set is announced on the
+        WebSocket (`message:read`, `message:starred`, `message:tags`); a
+        rejected update announces nothing.
       tags: [Messages]
       requestBody:
         required: true
@@ -197,14 +230,28 @@ paths:
             example:
               is_read: true
       responses:
-        '200':
-          description: Updated message summary
+        '204':
+          description: Update applied. No body; re-read the message to see its new state.
+        '400':
+          description: >
+            `tags` breaks a limit: more than 20 tags (`Too many tags (max 20)`),
+            a tag longer than 50 bytes (`Tag too long (max 50 chars)`), or an
+            empty tag or one containing a control character (`Tags must be
+            non-empty and contain no control characters`). Answered with the
+            `Error` body, and nothing is changed. A body that is not JSON at all
+            is also a `400`, but as `text/plain` from the JSON extractor.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageSummary'
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Too many tags (max 20)
         '404':
           $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/NotJson'
+        '422':
+          $ref: '#/components/responses/BodyMistyped'
 
     delete:
       operationId: deleteMessage
@@ -240,15 +287,20 @@ paths:
       responses:
         '200':
           description: >
-            Raw RFC 822 message bytes, truncated to `limit` when given.
-            Content-Disposition is `attachment; filename="<id>.eml"`.
+            Raw RFC 822 message bytes, truncated to `limit` when given (a
+            `limit` past the end returns the whole source). Sent with
+            `Content-Type: message/rfc822` and
+            `Cache-Control: private, max-age=31536000, immutable`, and no
+            `Content-Disposition`: use `/export` for a download.
           content:
             message/rfc822:
               schema:
                 type: string
                 format: binary
         '400':
-          description: '`limit` was given but is not a positive number of bytes'
+          description: >
+            `limit` was given but is not a positive whole number of bytes (`0`,
+            negatives, decimals and an empty value included)
           content:
             application/json:
               schema:
@@ -335,10 +387,16 @@ paths:
       responses:
         '200':
           description: >
-            Attachment file. Content-Type matches the attachment's stored
-            content_type. Content-Disposition is attachment; filename="<name>".
+            Attachment bytes, decoded. Always sent as
+            `Content-Type: application/octet-stream`, whatever the stored
+            `content_type` (read that from the attachment list), with
+            `Content-Disposition: attachment; filename="<name>"`, where every
+            character outside `A-Z a-z 0-9 . _ -` is replaced by `_` and a
+            part with no filename is named `attachment`. Also sent with
+            `Cache-Control: private, max-age=31536000, immutable` and
+            `X-Content-Type-Options: nosniff`, and never compressed.
           content:
-            '*/*':
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -361,15 +419,26 @@ paths:
       operationId: getInlineAttachment
       summary: Get an inline image by Content-ID
       description: >
-        Returns the inline image matching the given Content-ID. Used by the
-        HTML preview to resolve `cid:` references. Only serves image/* types;
-        falls back to application/octet-stream otherwise.
+        Returns the part whose Content-ID matches `cid` exactly
+        (case-sensitive, without angle brackets). Used by the HTML preview to
+        resolve `cid:` references. The stored content type is sent only when
+        it is one of `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+        `image/avif` or `image/bmp`; any other part is served as
+        `application/octet-stream`.
       tags: [Attachments]
       responses:
         '200':
-          description: Inline image content with appropriate Content-Type and immutable cache headers.
+          description: >
+            Part bytes, decoded. Sent with
+            `Cache-Control: private, max-age=31536000, immutable`,
+            `X-Content-Type-Options: nosniff` and
+            `Content-Security-Policy: default-src 'none'`.
           content:
             'image/*':
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -389,18 +458,23 @@ paths:
       parameters:
         - name: format
           in: query
-          required: true
+          required: false
           schema:
             type: string
             enum: [eml, json]
+            default: eml
           description: >
-            `eml` returns the raw RFC 822 bytes as a downloadable file.
-            `json` returns a JSON representation of the full message.
+            `eml` (the default) returns the raw RFC 822 bytes as a downloadable
+            file. `json` returns the same `Message` object as
+            `GET /messages/{id}`, as a download.
       responses:
         '200':
           description: >
-            Exported message. Content-Type is `message/rfc822` for `eml`
-            and `application/json` for `json`.
+            Exported message with
+            `Content-Disposition: attachment; filename="<id>.eml"` or
+            `"<id>.json"`. `eml` is `message/rfc822` with
+            `Cache-Control: private, max-age=31536000, immutable`; `json` is
+            `application/json` with `Cache-Control: no-store`.
           content:
             message/rfc822:
               schema:
@@ -410,7 +484,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '400':
-          description: Invalid or missing format parameter
+          description: >
+            `format` is neither `eml` nor `json` (an empty value included).
+            Checked before the message is looked up, so it wins over a `404`.
           content:
             application/json:
               schema:
@@ -427,6 +503,13 @@ paths:
     post:
       operationId: releaseMessage
       summary: Forward a captured message to a real SMTP server
+      description: >
+        Disabled unless the server was started with `--release-host`. The
+        message's raw source is sent unchanged, with the captured envelope
+        (MAIL FROM and RCPT TO), to `host` over implicit TLS: the connection
+        is TLS from its first byte, on whichever port is used, so the relay
+        must accept SMTPS there. Checks run in this order: release enabled,
+        host, configured port, allowed port, message lookup, envelope.
       tags: [Release]
       requestBody:
         required: true
@@ -438,22 +521,81 @@ paths:
               host: smtp.mailgun.org
               port: 587
       responses:
-        '204':
-          description: Message forwarded successfully
+        '200':
+          description: The relay accepted the message
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [released]
+                properties:
+                  released:
+                    type: boolean
+                    const: true
+              example:
+                released: true
         '400':
-          description: Invalid request body
+          description: >
+            `port` is not one of 25, 465, 587 or 2525, or the captured envelope
+            cannot be sent (for example no recipient address parses).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              examples:
+                portNotAllowed:
+                  summary: port outside the allowed SMTP ports
+                  value:
+                    error: Port 1025 is not an allowed SMTP port (25, 465, 587, 2525)
+                invalidEnvelope:
+                  summary: captured envelope cannot be sent
+                  value:
+                    error: 'Invalid envelope: missing destination address, invalid envelope'
+        '403':
+          description: >
+            Release is disabled (no `--release-host`), `host` is not the
+            configured host, or a port was configured and `port` differs from
+            it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                disabled:
+                  summary: release is disabled
+                  value:
+                    error: Email release is disabled. Configure --release-host to enable.
+                wrongHost:
+                  summary: host is not the configured one
+                  value:
+                    error: 'Release only allowed to configured host: smtp.example.com'
+                wrongPort:
+                  summary: port is not the configured one
+                  value:
+                    error: 'Release only allowed on configured port: 2525'
         '404':
           $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/NotJson'
+        '422':
+          $ref: '#/components/responses/BodyMistyped'
         '502':
-          description: Downstream SMTP server unreachable or returned an error
+          description: >
+            The TLS client could not be set up for `host`, or the relay could
+            not be reached, refused the message or dropped the connection.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              examples:
+                deliveryFailed:
+                  summary: relay unreachable, refused, or dropped the connection
+                  value:
+                    error: SMTP delivery failed
+                tlsSetup:
+                  summary: TLS client could not be set up
+                  value:
+                    error: Failed to establish TLS connection to relay host
 
   /api/v1/messages/{id}/auth:
     parameters:
@@ -504,37 +646,44 @@ paths:
         Returns `200 OK` when the number of messages matching the given filters
         satisfies the `min`/`max` bounds. Returns `417 Expectation Failed`
         otherwise. Designed for use in CI pipelines with `curl -f`.
-        If neither `min` nor `max` is provided, the assertion always passes
-        and the response contains the raw count.
+        `min` defaults to `1` and `max` to no upper bound, so a bare call
+        asserts that at least one message matches; pass `min=0` to only read
+        the count. The filters combine with `AND`.
       tags: [Assert]
       parameters:
         - name: min
           in: query
           schema:
             type: integer
-            minimum: 0
+            default: 1
           description: Minimum number of matching messages (inclusive)
         - name: max
           in: query
           schema:
             type: integer
-            minimum: 0
-          description: Maximum number of matching messages (inclusive)
+            format: int64
+          description: Maximum number of matching messages (inclusive). Unbounded when omitted.
         - name: subject
           in: query
           schema:
             type: string
-          description: Filter by subject substring (case-insensitive)
+          description: >
+            Filter by subject substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
         - name: sender
           in: query
           schema:
             type: string
-          description: Filter by sender address substring (case-insensitive)
+          description: >
+            Filter by sender address substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
         - name: recipient
           in: query
           schema:
             type: string
-          description: Filter by recipient address substring (case-insensitive)
+          description: >
+            Filter by recipient address substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
       responses:
         '200':
           description: Assertion passed
@@ -554,6 +703,17 @@ paths:
               example:
                 count: 0
                 ok: false
+                expected_min: 1
+                expected_max: 9223372036854775807
+        '400':
+          description: >
+            `min` or `max` is not an integer. Rejected by the query extractor,
+            so the body is `text/plain`, not the `Error` object.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to deserialize query string: min: invalid digit found in string'
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -621,23 +781,22 @@ components:
       in: query
       schema:
         type: integer
-        minimum: 1
-        maximum: 200
         default: 50
       description: >
-        Maximum number of results to return. Values outside 1–200 are clamped
-        into that range; the response's `limit` reports the value applied.
+        Maximum number of results to return. Values outside 1 to 200 (`0`
+        and negatives included) are clamped into that range rather than
+        rejected; the response's `limit` reports the value applied. A value
+        that is not an integer is a `400`.
 
     OffsetParam:
       name: offset
       in: query
       schema:
         type: integer
-        minimum: 0
         default: 0
       description: >
-        Number of results to skip. Kept for compatibility; prefer `before`,
-        which it cannot be combined with.
+        Number of results to skip. A negative value is treated as `0`. Kept
+        for compatibility; prefer `before`, which it cannot be combined with.
 
     BeforeParam:
       name: before
@@ -752,7 +911,7 @@ components:
 
     MessageUpdate:
       type: object
-      minProperties: 1
+      description: Every field is optional; an empty object changes nothing.
       properties:
         is_read:
           type: boolean
@@ -765,7 +924,11 @@ components:
           items:
             type: string
           maxItems: 20
-          description: Replace the message's tags (max 20, each max 50 chars)
+          description: >
+            Replaces the message's tags with this list, in this order. At most
+            20; each must be non-empty, at most 50 bytes of UTF-8, and free of
+            control characters. Duplicates are stored as given. `[]` clears
+            the tags.
 
     Attachment:
       type: object
@@ -805,18 +968,19 @@ components:
         host:
           type: string
           description: >
-            Hostname of the target SMTP server. Must exactly match the host
-            configured via `--release-host`. Requests to any other host are
-            rejected with 403.
+            Hostname of the target SMTP server. Required. Must exactly match
+            the host configured via `--release-host`; any other host is a
+            `403`.
           example: smtp.mailgun.org
         port:
           type: integer
           enum: [25, 465, 587, 2525]
-          default: 25
+          default: 587
           description: >
-            TCP port of the target SMTP server. Only standard SMTP ports are
-            accepted (25, 465, 587, 2525). If `--release-host` includes a port,
-            this must match exactly or the request is rejected with 403.
+            TCP port of the target SMTP server. Defaults to the configured
+            release port when one is set, otherwise to `587`. When a release
+            port is configured, any other value is a `403`; otherwise a value
+            outside 25, 465, 587 and 2525 is a `400`.
           example: 587
 
     AssertResult:
@@ -922,6 +1086,27 @@ components:
 
   responses:
 
+    NotJson:
+      description: >
+        The request lacks `Content-Type: application/json`. Rejected before
+        the handler runs, so the body is `text/plain`, not the `Error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: 'Expected request with `Content-Type: application/json`'
+
+    BodyMistyped:
+      description: >
+        The body is JSON but does not fit the request schema (a missing
+        required field, or a field of the wrong type). Rejected before the
+        handler runs, so the body is `text/plain`, not the `Error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: 'Failed to deserialize the JSON body into the target type: is_read: invalid type: string "yes", expected a boolean at line 1 column 16'
+
     TimedOut:
       description: The read ran past the 30-second request timeout and was abandoned
       content:
@@ -932,7 +1117,7 @@ components:
             error: the request ran past the server's time limit; retry it, or narrow it with limit or filters
 
     NotFound:
-      description: Resource not found
+      description: No stored message (or attachment) has this id
       content:
         application/json:
           schema:
