@@ -761,9 +761,10 @@ impl App {
     }
     self.loading = false;
     let pending = std::mem::take(&mut self.pending_deltas);
+    let view_changed = std::mem::take(&mut self.view_changed);
     match result {
       Ok(resp) => {
-        let anchor = if std::mem::take(&mut self.view_changed) {
+        let anchor = if view_changed {
           self.capture_selected_only()
         } else {
           self.capture_selection()
@@ -2248,6 +2249,25 @@ mod tests {
     land_snapshot(&mut app, &["id-50", "id-51"], 120).await;
 
     assert_eq!(selected_id(&app), Some("id-50"));
+  }
+
+  #[tokio::test]
+  async fn failed_view_change_fetch_does_not_leak_into_the_next_resync() {
+    let mut app = app_with_messages(4);
+    app.select_message(1);
+    app.search_input = "invoice".into();
+
+    app.handle_search_key(KeyEvent::from(KeyCode::Enter)).await;
+    app
+      .dispatch(Event::MessagesFetched {
+        generation: app.fetch_generation,
+        result: Err("boom".into()),
+      })
+      .await;
+    app.fetch_messages().await;
+    land_snapshot(&mut app, &["id-0", "id-2", "id-3"], 3).await;
+
+    assert_eq!(selected_id(&app), Some("id-2"));
   }
 
   #[tokio::test]
