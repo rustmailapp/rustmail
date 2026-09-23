@@ -630,11 +630,14 @@ impl App {
     }
   }
 
+  /// Refetches a stale view once the throttle allows, but never over a fetch
+  /// still in flight: a newer request would supersede it, and a server slower
+  /// than the throttle would then never land one.
   async fn refetch_if_stale(&mut self) {
     let throttle_elapsed = self
       .last_fetch_at
       .is_none_or(|at| at.elapsed() >= STALE_VIEW_REFETCH_INTERVAL);
-    if self.view_stale && throttle_elapsed {
+    if self.view_stale && !self.loading && throttle_elapsed {
       self.fetch_messages().await;
     }
   }
@@ -1742,6 +1745,19 @@ mod tests {
       .await
       .unwrap()
       .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_stale_view_is_not_refetched_over_a_fetch_in_flight() {
+    let mut app = app_with_messages(1);
+    app.view_stale = true;
+    app.loading = true;
+    app.last_fetch_at = None;
+    let generation = app.fetch_generation;
+
+    app.refetch_if_stale().await;
+
+    assert_eq!(app.fetch_generation, generation);
   }
 
   #[tokio::test]
