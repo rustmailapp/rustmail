@@ -635,7 +635,31 @@ async function refreshTotal(): Promise<void> {
   }
 }
 
-/** Applies either confirmation once, removing the row regardless of the snapshot. */
+/**
+ * Whether the total counts `id`, or `undefined` when only the server knows.
+ *
+ * A row the list holds counts while it matches the filters: one a flag change
+ * took out of them was already subtracted, though it stays on screen. A row
+ * the list never loaded counts in an unnarrowed view, which counts everything,
+ * but a search or a filter cannot tell whether it was among its matches.
+ */
+function countedInTotal(id: string): boolean | undefined {
+  const row = findMessage(id) ?? heldRows.get(id);
+  if (row !== undefined) return matchesFilters(row, filters());
+  return viewNarrowed() ? undefined : true;
+}
+
+/** Whether a search or a filter narrows the list the total counts. */
+function viewNarrowed(): boolean {
+  return search() !== "" || hasActiveFilters();
+}
+
+/**
+ * Applies either confirmation once, removing the row regardless of the snapshot.
+ *
+ * The total drops only by a message it counts, per {@link countedInTotal}, and
+ * is read from the server when that cannot be told locally.
+ */
 function reconcileDeletion(id: string): void {
   const issued = issuedDeletes.get(id);
   if (issued?.confirmed === true) {
@@ -645,7 +669,9 @@ function reconcileDeletion(id: string): void {
 
   const cleared =
     issued !== undefined && issued.clearRevision !== clearRevision;
+  const counted = countedInTotal(id);
   const countIsCurrent =
+    counted !== undefined &&
     !countNeedsRefresh &&
     (issued === undefined || issued.snapshot === snapshot);
   if (issued) issued.confirmed = true;
@@ -655,7 +681,7 @@ function reconcileDeletion(id: string): void {
   }
   batch(() => {
     forgetMessage(id);
-    if (!cleared && countIsCurrent) {
+    if (!cleared && countIsCurrent && counted) {
       setStoredTotal((current) => Math.max(0, current - 1));
     }
   });
@@ -965,32 +991,32 @@ async function readFirstPage(): Promise<boolean> {
       currentListRead = null;
       eventsDuringRead = null;
       setLoading(false);
-      if (searchStale) scheduleSearchRefresh();
+      if (searchStale) scheduleViewRefresh();
     }
   }
 }
 
 /**
- * Marks the search results stale and refetches them once the window closes.
+ * Marks the narrowed list stale and refetches it once the window closes.
  *
  * A search cannot place a live message itself, since only the server knows
- * whether it matches, so arrivals are folded into one trailing read per
- * {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight when the window
- * closes is left alone; the stale flag outlives it and schedules the next.
+ * whether it matches, and a filtered list cannot place a message it never
+ * loaded that a flag change brought into its filters. Both are folded into one
+ * trailing read per {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight
+ * when the window closes is left alone; the stale flag outlives it and
+ * schedules the next.
  */
-function scheduleSearchRefresh(): void {
+function scheduleViewRefresh(): void {
   searchStale = true;
   if (searchRefreshTimer !== null) return;
   searchRefreshTimer = setTimeout(() => {
     searchRefreshTimer = null;
-    if (!searchStale || !search() || loading()) return;
+    if (!searchStale || !viewNarrowed() || loading()) return;
     if (liveHeld()) {
       setHeldRefresh(true);
       return;
     }
-    fetchMessages().catch(() =>
-      notify("Could not refresh the search results."),
-    );
+    fetchMessages().catch(() => notify("Could not refresh the list."));
   }, SEARCH_REFRESH_WINDOW_MS);
 }
 
@@ -1116,7 +1142,7 @@ function readEvent(frame: unknown): WsEvent | undefined {
 function admitArrivals(arrivals: readonly MessageSummary[]): void {
   if (arrivals.length === 0) return;
   if (search()) {
-    scheduleSearchRefresh();
+    scheduleViewRefresh();
     return;
   }
   const f = filters();
@@ -1171,7 +1197,10 @@ function patchMessage(id: string, patch: Partial<MessageSummary>): void {
     return;
   }
   const current = findMessage(id);
-  if (current === undefined) return;
+  if (current === undefined) {
+    if (hasActiveFilters()) scheduleViewRefresh();
+    return;
+  }
   const patched = { ...current, ...patch };
   const f = filters();
   const was = matchesFilters(current, f);
