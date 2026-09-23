@@ -1582,8 +1582,59 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
   );
   assert!(
     stderr.contains(
-      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 0. Upgrade rustmail."
+      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail."
     ),
+    "unexpected stderr: {stderr}"
+  );
+  assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+}
+
+#[tokio::test]
+async fn serve_refuses_a_legacy_database_untouched() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(1)
+    .connect(&format!("sqlite:{}?mode=rwc", db_path.display()))
+    .await
+    .unwrap();
+  sqlx::query(
+    "CREATE TABLE messages (id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipients TEXT NOT NULL, raw BLOB NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL)",
+  )
+  .execute(&pool)
+  .await
+  .unwrap();
+  pool.close().await;
+  let bytes_before = std::fs::read(&db_path).unwrap();
+
+  let output = tokio::time::timeout(
+    STARTUP_FAILURE_TIMEOUT,
+    rustmail_command()
+      .args([
+        "serve",
+        "--smtp-port",
+        ANY_FREE_PORT,
+        "--http-port",
+        ANY_FREE_PORT,
+        "--log-level",
+        "warn",
+      ])
+      .arg("--db-path")
+      .arg(&db_path)
+      .output(),
+  )
+  .await
+  .expect("rustmail serve did not exit on a legacy database")
+  .expect("failed to run rustmail serve");
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    !output.status.success(),
+    "expected startup failure: {stderr}"
+  );
+  assert!(!stderr.contains("panicked"), "startup panicked: {stderr}");
+  assert!(
+    stderr.contains("rustmail.db is schema 0, written by rustmail 0.7 or earlier"),
     "unexpected stderr: {stderr}"
   );
   assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);

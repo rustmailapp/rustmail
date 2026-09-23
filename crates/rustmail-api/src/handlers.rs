@@ -390,9 +390,11 @@ fn ends_header_section(raw: &[u8]) -> bool {
 /// Reads enough of a message's source to cover its header section.
 ///
 /// Real headers fit in [`HEADER_SECTION_PREFIX_BYTES`] many times over, so the
-/// common case is one short read instead of pulling a whole multi-megabyte
-/// blob out of SQLite. A message whose header section is genuinely longer
-/// falls back to the full source rather than silently losing fields.
+/// common case copies and parses a short prefix instead of the whole
+/// multi-megabyte source. SQLite still loads the whole blob to cut that
+/// prefix, so the saving is the copy and the parse, not the database read.
+/// A message whose header section is genuinely longer falls back to the full
+/// source rather than silently losing fields.
 async fn read_header_section(state: &AppState, id: &str) -> Result<Vec<u8>, StorageError> {
   let prefix = state
     .repo
@@ -904,7 +906,11 @@ impl IntoResponse for AppError {
           "Internal server error".to_string(),
         )
       }
-      AppError::Storage(e @ StorageError::NewerSchema { .. }) => {
+      AppError::Storage(
+        e @ (StorageError::NewerSchema { .. }
+        | StorageError::LegacySchema { .. }
+        | StorageError::UnrecognizedSchema { .. }),
+      ) => {
         tracing::error!(error = %e, "Unsupported database schema");
         (
           StatusCode::INTERNAL_SERVER_ERROR,

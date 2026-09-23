@@ -229,11 +229,7 @@ impl MessageRepository {
     start: PageStart,
     limit: i64,
   ) -> Result<Vec<MessageSummary>, StorageError> {
-    let mut builder = QueryBuilder::<Sqlite>::new(
-      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages m WHERE 1=1",
-    );
-    push_filter(&mut builder, "m", filter);
-    push_page(&mut builder, "m.rowid", start, limit);
+    let mut builder = list_statement(filter, start, limit);
     let messages = builder
       .build_query_as::<MessageSummary>()
       .fetch_all(&self.readers)
@@ -278,12 +274,7 @@ impl MessageRepository {
       Some(q) => q,
       None => return Ok(Vec::new()),
     };
-    let mut builder = QueryBuilder::<Sqlite>::new(
-      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages_fts fts INNER JOIN messages m ON m.rowid = fts.rowid WHERE messages_fts MATCH ",
-    );
-    builder.push_bind(quoted);
-    push_filter(&mut builder, "m", filter);
-    push_page(&mut builder, "fts.rowid", start, limit);
+    let mut builder = search_statement(quoted, filter, start, limit);
     let messages = builder
       .build_query_as::<MessageSummary>()
       .fetch_all(&self.readers)
@@ -298,7 +289,7 @@ impl MessageRepository {
   ///
   /// Returns [`StorageError::NotFound`] if no stored message has `id`.
   pub async fn cursor(&self, id: &str) -> Result<Cursor, StorageError> {
-    let row: Option<(i64,)> = sqlx::query_as("SELECT rowid FROM messages WHERE id = ?1")
+    let row: Option<(i64,)> = sqlx::query_as("SELECT seq FROM messages WHERE id = ?1")
       .bind(id)
       .fetch_optional(&self.readers)
       .await?;
@@ -310,9 +301,9 @@ impl MessageRepository {
   /// Counts the total number of FTS5 search matches.
   ///
   /// Counted on the index alone. `messages_fts` is an external-content table
-  /// over `messages`, so every indexed rowid has exactly one source row and
-  /// joining back cannot change the count: it only spends a primary-key lookup
-  /// per match to fetch a row the count then discards.
+  /// over `messages` and `message_content`, so every indexed rowid has exactly
+  /// one source row and joining back cannot change the count: it only spends
+  /// a primary-key lookup per match to fetch a row the count then discards.
   pub async fn search_count(&self, query: &str) -> Result<i64, StorageError> {
     let quoted = match Self::sanitize_fts_query(query) {
       Some(q) => q,
@@ -347,11 +338,7 @@ impl MessageRepository {
       Some(q) => q,
       None => return Ok(0),
     };
-    let mut builder = QueryBuilder::<Sqlite>::new(
-      "SELECT COUNT(*) FROM messages_fts fts INNER JOIN messages m ON m.rowid = fts.rowid WHERE messages_fts MATCH ",
-    );
-    builder.push_bind(quoted);
-    push_filter(&mut builder, "m", filter);
+    let mut builder = search_count_statement(quoted, filter);
     let row: (i64,) = builder.build_query_as().fetch_one(&self.readers).await?;
     Ok(row.0)
   }
@@ -370,9 +357,11 @@ impl MessageRepository {
   /// Fetches a single message by ID, including its parsed bodies.
   ///
   /// The raw RFC 5322 bytes are not read; use [`Self::get_raw`] for those.
+  /// They follow the bodies in `message_content`, so SQLite stops reading the
+  /// row before it reaches them.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
     let message = sqlx::query_as::<_, Message>(
-      "SELECT id, sender, recipients, subject, text_body, html_body, size, has_attachments, is_read, is_starred, tags, created_at FROM messages WHERE id = ?1",
+      "SELECT m.id, m.sender, m.recipients, m.subject, c.text_body, c.html_body, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
     )
     .bind(id)
     .fetch_optional(&self.readers)
@@ -414,16 +403,19 @@ impl MessageRepository {
     Ok(())
   }
 
-  /// Deletes a single message and its FTS5 index entry atomically.
+  /// Deletes a single message, its FTS5 index entry, its content and its
+  /// attachments atomically.
+  ///
+  /// The index entry goes first: FTS5 reads the row back through
+  /// `messages_fts_source` to find the tokens to remove. Content and
+  /// attachments follow the `messages` row by cascade.
   pub async fn delete(&self, id: &str) -> Result<(), StorageError> {
     let mut txn = self.writer.begin().await?;
 
-    sqlx::query(
-      "DELETE FROM messages_fts WHERE rowid = (SELECT rowid FROM messages WHERE id = ?1)",
-    )
-    .bind(id)
-    .execute(&mut *txn)
-    .await?;
+    sqlx::query("DELETE FROM messages_fts WHERE rowid = (SELECT seq FROM messages WHERE id = ?1)")
+      .bind(id)
+      .execute(&mut *txn)
+      .await?;
 
     let result = sqlx::query("DELETE FROM messages WHERE id = ?1")
       .bind(id)
@@ -443,7 +435,8 @@ impl MessageRepository {
   /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
   /// An external-content index reads the content row to work out which tokens
   /// to remove, so a plain `DELETE` issued after the source rows are gone is a
-  /// silent no-op that leaves the whole index behind.
+  /// silent no-op that leaves the whole index behind. Content and attachments
+  /// follow the `messages` rows by cascade.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
     retry_on_lock(|| self.delete_all_once()).await
   }
@@ -476,8 +469,7 @@ impl MessageRepository {
     if filter.is_empty() {
       return self.count().await;
     }
-    let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM messages m WHERE 1=1");
-    push_filter(&mut builder, "m", filter);
+    let mut builder = count_statement(filter);
     let row: (i64,) = builder.build_query_as().fetch_one(&self.readers).await?;
     Ok(row.0)
   }
@@ -489,22 +481,7 @@ impl MessageRepository {
     sender: Option<&str>,
     recipient: Option<&str>,
   ) -> Result<i64, StorageError> {
-    let mut sql = String::from("SELECT COUNT(*) FROM messages WHERE 1=1");
-    let mut binds: Vec<String> = Vec::new();
-
-    if let Some(s) = subject {
-      sql.push_str(" AND LOWER(subject) LIKE ? ESCAPE '\\'");
-      binds.push(format!("%{}%", escape_like(&s.to_lowercase())));
-    }
-    if let Some(s) = sender {
-      sql.push_str(" AND LOWER(sender) LIKE ? ESCAPE '\\'");
-      binds.push(format!("%{}%", escape_like(&s.to_lowercase())));
-    }
-    if let Some(r) = recipient {
-      sql.push_str(" AND LOWER(recipients) LIKE ? ESCAPE '\\'");
-      binds.push(format!("%{}%", escape_like(&r.to_lowercase())));
-    }
-
+    let (sql, binds) = count_matching_statement(subject, sender, recipient);
     let mut query = sqlx::query_as::<_, (i64,)>(&sql);
     for b in &binds {
       query = query.bind(b);
@@ -514,13 +491,14 @@ impl MessageRepository {
     Ok(row.0)
   }
 
-  /// Lists all attachments for a given message (metadata only, no binary content).
+  /// Lists all attachments for a given message (metadata only, no binary content),
+  /// in the order the message carries them.
   pub async fn get_attachments(
     &self,
     message_id: &str,
   ) -> Result<Vec<AttachmentSummary>, StorageError> {
     let attachments = sqlx::query_as::<_, AttachmentSummary>(
-      "SELECT id, message_id, filename, content_type, content_id, size FROM attachments WHERE message_id = ?1",
+      "SELECT a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size FROM messages m JOIN attachments a ON a.message_seq = m.seq WHERE m.id = ?1 ORDER BY a.rowid",
     )
     .bind(message_id)
     .fetch_all(&self.readers)
@@ -536,7 +514,7 @@ impl MessageRepository {
     attachment_id: &str,
   ) -> Result<Attachment, StorageError> {
     let attachment = sqlx::query_as::<_, Attachment>(
-      "SELECT * FROM attachments WHERE id = ?1 AND message_id = ?2",
+      "SELECT a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content FROM attachments a JOIN messages m ON m.seq = a.message_seq WHERE a.id = ?1 AND m.id = ?2",
     )
     .bind(attachment_id)
     .bind(message_id)
@@ -548,13 +526,16 @@ impl MessageRepository {
   }
 
   /// Fetches a single attachment by Content-ID, scoped to its parent message.
+  ///
+  /// When several parts share the Content-ID, the first one the message
+  /// carries is returned.
   pub async fn get_attachment_by_content_id(
     &self,
     message_id: &str,
     content_id: &str,
   ) -> Result<Attachment, StorageError> {
     let attachment = sqlx::query_as::<_, Attachment>(
-      "SELECT * FROM attachments WHERE content_id = ?1 AND message_id = ?2",
+      "SELECT a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content FROM messages m JOIN attachments a ON a.message_seq = m.seq WHERE a.content_id = ?1 AND m.id = ?2 ORDER BY a.rowid LIMIT 1",
     )
     .bind(content_id)
     .bind(message_id)
@@ -567,30 +548,37 @@ impl MessageRepository {
 
   /// Returns the raw RFC 5322 bytes for a message.
   pub async fn get_raw(&self, id: &str) -> Result<Vec<u8>, StorageError> {
-    let row: (Vec<u8>,) = sqlx::query_as("SELECT raw FROM messages WHERE id = ?1")
-      .bind(id)
-      .fetch_optional(&self.readers)
-      .await?
-      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    let row: (Vec<u8>,) = sqlx::query_as(
+      "SELECT c.raw FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&self.readers)
+    .await?
+    .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
   }
 
   /// Returns at most `max_bytes` from the start of a message's raw bytes.
   ///
   /// Callers that only need the header section, or only enough source to fill
-  /// a preview, should use this rather than [`Self::get_raw`]: `substr` keeps
-  /// SQLite from materialising a multi-megabyte blob that is then discarded.
+  /// a preview, should use this rather than [`Self::get_raw`]: `substr` saves
+  /// copying the rest of the blob out of SQLite and sending it to the caller.
+  /// It does not save the read itself: SQLite still loads the whole blob to
+  /// take a prefix of it, so this costs about as much disk and cache as
+  /// [`Self::get_raw`].
   ///
   /// # Errors
   ///
   /// Returns [`StorageError::NotFound`] if no message has that id.
   pub async fn get_raw_prefix(&self, id: &str, max_bytes: i64) -> Result<Vec<u8>, StorageError> {
-    let row: (Vec<u8>,) = sqlx::query_as("SELECT substr(raw, 1, ?2) FROM messages WHERE id = ?1")
-      .bind(id)
-      .bind(max_bytes)
-      .fetch_optional(&self.readers)
-      .await?
-      .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    let row: (Vec<u8>,) = sqlx::query_as(
+      "SELECT substr(c.raw, 1, ?2) FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    )
+    .bind(id)
+    .bind(max_bytes)
+    .fetch_optional(&self.readers)
+    .await?
+    .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
     Ok(row.0)
   }
 
@@ -618,7 +606,7 @@ impl MessageRepository {
     let mut txn = self.writer.begin().await?;
 
     sqlx::query(
-      "DELETE FROM messages_fts WHERE rowid IN (SELECT rowid FROM messages WHERE created_at < ?1)",
+      "DELETE FROM messages_fts WHERE rowid IN (SELECT seq FROM messages WHERE created_at < ?1)",
     )
     .bind(iso_cutoff)
     .execute(&mut *txn)
@@ -638,8 +626,8 @@ impl MessageRepository {
   ///
   /// A read-only count outside the write transaction skips the write lock
   /// entirely when the store is already at or under `max`. Ordered by
-  /// `rowid` to match [`Self::list`], so the rows dropped here are exactly
-  /// the ones the UI shows as oldest. The newest doomed rowid is found once
+  /// `seq` to match [`Self::list`], so the rows dropped here are exactly
+  /// the ones the UI shows as oldest. The newest doomed `seq` is found once
   /// and both deletes run by range below it, instead of repeating the same
   /// offset scan per statement. The transaction starts `IMMEDIATE` because
   /// that lookup is a read: taking the write lock up front keeps an insert
@@ -659,7 +647,7 @@ impl MessageRepository {
     let mut txn = self.writer.begin_with("BEGIN IMMEDIATE").await?;
 
     let threshold: Option<(i64,)> =
-      sqlx::query_as("SELECT rowid FROM messages ORDER BY rowid DESC LIMIT 1 OFFSET ?1")
+      sqlx::query_as("SELECT seq FROM messages ORDER BY seq DESC LIMIT 1 OFFSET ?1")
         .bind(max)
         .fetch_optional(&mut *txn)
         .await?;
@@ -672,7 +660,7 @@ impl MessageRepository {
       .execute(&mut *txn)
       .await?;
 
-    let ids: Vec<(String,)> = sqlx::query_as("DELETE FROM messages WHERE rowid <= ?1 RETURNING id")
+    let ids: Vec<(String,)> = sqlx::query_as("DELETE FROM messages WHERE seq <= ?1 RETURNING id")
       .bind(threshold)
       .fetch_all(&mut *txn)
       .await?;
@@ -682,7 +670,7 @@ impl MessageRepository {
   }
 }
 
-/// Writes `message` and its index and attachment rows on `conn`.
+/// Writes `message` and its content, index and attachment rows on `conn`.
 ///
 /// Mints a fresh id on every call, so a retried or re-batched write can never
 /// collide with a row an earlier attempt committed.
@@ -696,29 +684,37 @@ async fn insert_in(
     .format(ISO8601_FMT)
     .unwrap_or_default();
 
-  sqlx::query(
+  let seq = sqlx::query(
     r#"
-    INSERT INTO messages (id, sender, recipients, subject, text_body, html_body, raw, size, has_attachments, is_read, is_starred, tags, created_at)
-    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0, 0, '[]', ?10)
+    INSERT INTO messages (id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at)
+    VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 0, '[]', ?7)
     "#,
   )
   .bind(&id)
   .bind(&message.sender)
   .bind(&message.recipients_json)
   .bind(&message.subject)
-  .bind(&message.text_body)
-  .bind(&message.html_body)
-  .bind(&message.raw)
   .bind(size)
   .bind(message.has_attachments)
   .bind(&now)
   .execute(&mut *conn)
+  .await?
+  .last_insert_rowid();
+
+  sqlx::query(
+    "INSERT INTO message_content (seq, text_body, html_body, raw) VALUES (?1, ?2, ?3, ?4)",
+  )
+  .bind(seq)
+  .bind(&message.text_body)
+  .bind(&message.html_body)
+  .bind(&message.raw)
+  .execute(&mut *conn)
   .await?;
 
   sqlx::query(
-    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) SELECT rowid, ?2, ?3, ?4, ?5 FROM messages WHERE id = ?1",
+    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) VALUES (?1, ?2, ?3, ?4, ?5)",
   )
-  .bind(&id)
+  .bind(seq)
   .bind(&message.subject)
   .bind(&message.text_body)
   .bind(&message.sender)
@@ -729,12 +725,12 @@ async fn insert_in(
   for attachment in &message.attachments {
     sqlx::query(
       r#"
-      INSERT INTO attachments (id, message_id, filename, content_type, content_id, size, content)
+      INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, content)
       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
       "#,
     )
     .bind(Ulid::new().to_string())
-    .bind(&id)
+    .bind(seq)
     .bind(&attachment.filename)
     .bind(&attachment.content_type)
     .bind(&attachment.content_id)
@@ -756,6 +752,82 @@ async fn insert_in(
     tags: "[]".to_string(),
     created_at: now,
   })
+}
+
+/// Columns of a [`MessageSummary`], read from `messages` aliased `m`.
+const SUMMARY_COLUMNS: &str = "m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at";
+
+/// The listing behind [`MessageRepository::list_page`]: `messages` alone,
+/// newest first.
+fn list_statement(
+  filter: &MessageFilter,
+  start: PageStart,
+  limit: i64,
+) -> QueryBuilder<'static, Sqlite> {
+  let mut builder = QueryBuilder::<Sqlite>::new(format!(
+    "SELECT {SUMMARY_COLUMNS} FROM messages m WHERE 1=1"
+  ));
+  push_filter(&mut builder, "m", filter);
+  push_page(&mut builder, "m.seq", start, limit);
+  builder
+}
+
+/// The search behind [`MessageRepository::search_page`]: the FTS index
+/// joined to `messages` by `seq`, ordered on the index's rowid.
+fn search_statement(
+  quoted: String,
+  filter: &MessageFilter,
+  start: PageStart,
+  limit: i64,
+) -> QueryBuilder<'static, Sqlite> {
+  let mut builder = QueryBuilder::<Sqlite>::new(format!(
+    "SELECT {SUMMARY_COLUMNS} FROM messages_fts fts INNER JOIN messages m ON m.seq = fts.rowid WHERE messages_fts MATCH "
+  ));
+  builder.push_bind(quoted);
+  push_filter(&mut builder, "m", filter);
+  push_page(&mut builder, "fts.rowid", start, limit);
+  builder
+}
+
+/// The count behind [`MessageRepository::search_count_filtered`] when a
+/// filter is set.
+fn search_count_statement(quoted: String, filter: &MessageFilter) -> QueryBuilder<'static, Sqlite> {
+  let mut builder = QueryBuilder::<Sqlite>::new(
+    "SELECT COUNT(*) FROM messages_fts fts INNER JOIN messages m ON m.seq = fts.rowid WHERE messages_fts MATCH ",
+  );
+  builder.push_bind(quoted);
+  push_filter(&mut builder, "m", filter);
+  builder
+}
+
+/// The count behind [`MessageRepository::count_filtered`] when a filter is
+/// set.
+fn count_statement(filter: &MessageFilter) -> QueryBuilder<'static, Sqlite> {
+  let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM messages m WHERE 1=1");
+  push_filter(&mut builder, "m", filter);
+  builder
+}
+
+/// The SQL and its binds behind [`MessageRepository::count_matching`].
+fn count_matching_statement(
+  subject: Option<&str>,
+  sender: Option<&str>,
+  recipient: Option<&str>,
+) -> (String, Vec<String>) {
+  let mut sql = String::from("SELECT COUNT(*) FROM messages WHERE 1=1");
+  let mut binds: Vec<String> = Vec::new();
+  let conditions = [
+    ("subject", subject),
+    ("sender", sender),
+    ("recipients", recipient),
+  ];
+  for (column, needle) in conditions {
+    if let Some(needle) = needle {
+      sql.push_str(&format!(" AND LOWER({column}) LIKE ? ESCAPE '\\'"));
+      binds.push(format!("%{}%", escape_like(&needle.to_lowercase())));
+    }
+  }
+  (sql, binds)
 }
 
 fn escape_like(s: &str) -> String {
@@ -2291,5 +2363,295 @@ mod tests {
       total_hits >= remaining,
       "every stored row must be FTS-searchable ({total_hits} hits, {remaining} rows)"
     );
+  }
+
+  const SEEDED_MESSAGES: usize = 6;
+  const PLAN_TABLES_ALLOWED: &[&str] = &["m", "fts", "messages", "messages_fts", "json_each"];
+
+  fn every_filter() -> MessageFilter {
+    MessageFilter {
+      starred: true,
+      unread: true,
+      has_attachments: true,
+      tags: vec!["a".to_string(), "b".to_string()],
+    }
+  }
+
+  fn listing_statements() -> Vec<(&'static str, String)> {
+    let quoted = || "\"term\"".to_string();
+    let mut statements = Vec::new();
+    for filter in [MessageFilter::default(), every_filter()] {
+      for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
+        statements.push(("list", list_statement(&filter, start, 50).into_sql()));
+        statements.push((
+          "search",
+          search_statement(quoted(), &filter, start, 50).into_sql(),
+        ));
+      }
+      statements.push(("count", count_statement(&filter).into_sql()));
+      statements.push((
+        "search count",
+        search_count_statement(quoted(), &filter).into_sql(),
+      ));
+    }
+    let (count_matching, _) = count_matching_statement(Some("s"), Some("f"), Some("r"));
+    statements.push(("count matching", count_matching));
+    statements.push(("count", "SELECT COUNT(*) FROM messages".to_string()));
+    statements.push((
+      "search count",
+      "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?1".to_string(),
+    ));
+    statements
+  }
+
+  /// Tables and aliases each `SCAN` or `SEARCH` step of `sql`'s plan reads.
+  async fn tables_read(repo: &MessageRepository, sql: &str) -> Vec<String> {
+    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+      .fetch_all(&repo.readers)
+      .await
+      .unwrap();
+    rows
+      .into_iter()
+      .filter_map(|(_, _, _, detail)| {
+        let mut words = detail.split_whitespace();
+        match words.next() {
+          Some("SCAN" | "SEARCH") => words.next().map(str::to_string),
+          _ => None,
+        }
+      })
+      .collect()
+  }
+
+  async fn seed_mailbox(repo: &MessageRepository) -> Vec<String> {
+    let mut ids = Vec::new();
+    for i in 0..SEEDED_MESSAGES {
+      let raw = if i % 2 == 0 {
+        multipart_email(&format!("seeded item{i} attached"))
+      } else {
+        raw_email(&format!("seeded item{i} plain"), "a@t.com", "b@t.com")
+      };
+      let summary = repo
+        .insert("sender@test.com", &["rcpt@test.com".into()], &raw)
+        .await
+        .unwrap();
+      ids.push(summary.id);
+    }
+    ids
+  }
+
+  async fn column_set(repo: &MessageRepository, sql: &str) -> Vec<i64> {
+    sqlx::query_scalar(sql)
+      .fetch_all(&repo.writer)
+      .await
+      .unwrap()
+  }
+
+  /// Asserts the index, content and attachments hold rows for exactly the
+  /// stored messages, and that the index agrees with its content.
+  async fn assert_rows_follow_messages(repo: &MessageRepository) {
+    let seqs = column_set(repo, "SELECT seq FROM messages ORDER BY seq").await;
+    assert_eq!(
+      column_set(repo, "SELECT id FROM messages_fts_docsize ORDER BY id").await,
+      seqs,
+      "the FTS index must hold one document per stored message"
+    );
+    assert_eq!(
+      column_set(repo, "SELECT seq FROM message_content ORDER BY seq").await,
+      seqs,
+      "every stored message, and only those, must keep its content"
+    );
+    let orphaned_attachments: i64 = sqlx::query_scalar(
+      "SELECT COUNT(*) FROM attachments WHERE message_seq NOT IN (SELECT seq FROM messages)",
+    )
+    .fetch_one(&repo.writer)
+    .await
+    .unwrap();
+    assert_eq!(
+      orphaned_attachments, 0,
+      "attachments outlived their message"
+    );
+    sqlx::query("INSERT INTO messages_fts(messages_fts, rank) VALUES('integrity-check', 1)")
+      .execute(&repo.writer)
+      .await
+      .expect("the FTS index must match its content");
+  }
+
+  async fn attachment_rows(repo: &MessageRepository) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM attachments")
+      .fetch_one(&repo.writer)
+      .await
+      .unwrap()
+  }
+
+  async fn backdate(repo: &MessageRepository, ids: &[String]) {
+    for id in ids {
+      sqlx::query("UPDATE messages SET created_at = '2000-01-01T00:00:00Z' WHERE id = ?1")
+        .bind(id)
+        .execute(&repo.writer)
+        .await
+        .unwrap();
+    }
+  }
+
+  #[tokio::test]
+  async fn listing_searching_and_counting_plan_no_read_of_message_content() {
+    let repo = test_repo().await;
+
+    for (path, sql) in listing_statements() {
+      let tables = tables_read(&repo, &sql).await;
+      assert!(!tables.is_empty(), "{path}: no plan for {sql}");
+      assert!(
+        tables
+          .iter()
+          .all(|table| PLAN_TABLES_ALLOWED.contains(&table.as_str())),
+        "{path} reads beyond the metadata: {tables:?} in {sql}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn listing_searching_and_counting_work_without_message_content() {
+    let repo = test_repo().await;
+    let ids = seed_mailbox(&repo).await;
+    sqlx::query("DROP VIEW messages_fts_source")
+      .execute(&repo.writer)
+      .await
+      .unwrap();
+    sqlx::query("DROP TABLE message_content")
+      .execute(&repo.writer)
+      .await
+      .unwrap();
+    let attached = MessageFilter {
+      has_attachments: true,
+      ..MessageFilter::default()
+    };
+    let cursor = repo.cursor(&ids[SEEDED_MESSAGES - 1]).await.unwrap();
+
+    assert_eq!(repo.list(50, 0).await.unwrap().len(), SEEDED_MESSAGES);
+    assert_eq!(
+      repo
+        .list_page(&attached, PageStart::Before(cursor), 50)
+        .await
+        .unwrap()
+        .len(),
+      SEEDED_MESSAGES / 2
+    );
+    assert_eq!(
+      repo.search("seeded", 50, 0).await.unwrap().len(),
+      SEEDED_MESSAGES
+    );
+    assert_eq!(
+      repo
+        .search_page("seeded", &attached, PageStart::Before(cursor), 50)
+        .await
+        .unwrap()
+        .len(),
+      SEEDED_MESSAGES / 2
+    );
+    assert_eq!(
+      repo.search_count("seeded").await.unwrap(),
+      SEEDED_MESSAGES as i64
+    );
+    assert_eq!(
+      repo
+        .search_count_filtered("seeded", &attached)
+        .await
+        .unwrap(),
+      (SEEDED_MESSAGES / 2) as i64
+    );
+    assert_eq!(repo.count().await.unwrap(), SEEDED_MESSAGES as i64);
+    assert_eq!(
+      repo.count_filtered(&attached).await.unwrap(),
+      (SEEDED_MESSAGES / 2) as i64
+    );
+    assert_eq!(
+      repo
+        .count_matching(Some("attached"), Some("sender@"), Some("rcpt@"))
+        .await
+        .unwrap(),
+      (SEEDED_MESSAGES / 2) as i64
+    );
+  }
+
+  #[tokio::test]
+  async fn deleting_a_message_takes_its_index_entry_content_and_attachments() {
+    let repo = test_repo().await;
+    let ids = seed_mailbox(&repo).await;
+    let attachments_before = attachment_rows(&repo).await;
+
+    repo.delete(&ids[0]).await.unwrap();
+
+    assert_rows_follow_messages(&repo).await;
+    assert_eq!(attachment_rows(&repo).await, attachments_before - 1);
+    assert_eq!(repo.count().await.unwrap(), (SEEDED_MESSAGES - 1) as i64);
+  }
+
+  #[tokio::test]
+  async fn deleting_every_message_takes_every_index_entry_content_and_attachment() {
+    let repo = test_repo().await;
+    seed_mailbox(&repo).await;
+
+    assert_eq!(repo.delete_all().await.unwrap(), SEEDED_MESSAGES as u64);
+
+    assert_rows_follow_messages(&repo).await;
+    assert_eq!(attachment_rows(&repo).await, 0);
+  }
+
+  #[tokio::test]
+  async fn expiring_messages_takes_their_index_entries_content_and_attachments() {
+    let repo = test_repo().await;
+    let ids = seed_mailbox(&repo).await;
+    let expired = &ids[..2];
+    backdate(&repo, expired).await;
+
+    let mut deleted = repo
+      .delete_older_than("2001-01-01T00:00:00Z")
+      .await
+      .unwrap();
+
+    deleted.sort();
+    let mut expected = expired.to_vec();
+    expected.sort();
+    assert_eq!(deleted, expected);
+    assert_rows_follow_messages(&repo).await;
+    assert_eq!(
+      attachment_rows(&repo).await,
+      (SEEDED_MESSAGES / 2 - 1) as i64
+    );
+  }
+
+  #[tokio::test]
+  async fn trimming_messages_takes_their_index_entries_content_and_attachments() {
+    let repo = test_repo().await;
+    seed_mailbox(&repo).await;
+
+    let deleted = repo.trim_to_max(3).await.unwrap();
+
+    assert_eq!(deleted.len(), SEEDED_MESSAGES - 3);
+    assert_rows_follow_messages(&repo).await;
+    assert_eq!(attachment_rows(&repo).await, 1);
+  }
+
+  #[tokio::test]
+  async fn a_message_with_attachments_reads_back_its_bodies_raw_and_parts_in_order() {
+    let repo = test_repo().await;
+    let raw = multipart_email("layout");
+    let summary = repo
+      .insert("sender@test.com", &["rcpt@test.com".into()], &raw)
+      .await
+      .unwrap();
+
+    let message = repo.get(&summary.id).await.unwrap();
+    assert_eq!(message.text_body.as_deref(), Some("Body text"));
+    assert_eq!(repo.get_raw(&summary.id).await.unwrap(), raw);
+    let attachments = repo.get_attachments(&summary.id).await.unwrap();
+    assert_eq!(attachments.len(), 1);
+    assert_eq!(attachments[0].message_id, summary.id);
+    let attachment = repo
+      .get_attachment(&summary.id, &attachments[0].id)
+      .await
+      .unwrap();
+    assert_eq!(attachment.message_id, summary.id);
+    assert_eq!(attachment.content, b"fake-pdf-content");
   }
 }

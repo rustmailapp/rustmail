@@ -21,6 +21,35 @@ pub enum StorageError {
     /// The newest schema version this binary supports.
     supported: i64,
   },
+  /// The database predates schema versioning: rustmail 0.7 and earlier kept
+  /// every message in one `messages` row. It is refused before anything is
+  /// written to it.
+  #[error(
+    "{database} is schema 0, written by rustmail 0.7 or earlier; \
+     this binary supports schema {supported} and cannot upgrade it yet. \
+     Open it with the rustmail that wrote it, or start this one on a new database file."
+  )]
+  LegacySchema {
+    /// The database file, as SQLite reports it.
+    database: String,
+    /// The schema version this binary supports.
+    supported: i64,
+  },
+  /// The database holds tables rustmail did not create. It is refused before
+  /// anything is written to it.
+  #[error(
+    "{database} is not a rustmail database: schema {found} with unexpected tables ({}). \
+     Point rustmail at a new database file, or at one it created.",
+    .tables.join(", ")
+  )]
+  UnrecognizedSchema {
+    /// The database file, as SQLite reports it.
+    database: String,
+    /// The schema version recorded in the file's `user_version`.
+    found: i64,
+    /// The tables and views found in the file, by name.
+    tables: Vec<String>,
+  },
 }
 
 /// SQLite primary result code for `SQLITE_BUSY`.
