@@ -50,6 +50,8 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// `message_id` and none of the legacy index names, so a rustmail from before
 /// schema versioning fails on its first `CREATE INDEX` against this file,
 /// before it writes anything.
+///
+/// `idx_messages_unread` holds only unread messages, like the starred index.
 const SCHEMA_1_DDL: &[&str] = &[
   r#"
   CREATE TABLE messages (
@@ -68,6 +70,7 @@ const SCHEMA_1_DDL: &[&str] = &[
   "#,
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
+  "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
   r#"
   CREATE TABLE message_content (
     seq       INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,

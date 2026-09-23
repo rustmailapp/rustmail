@@ -2654,4 +2654,69 @@ mod tests {
     assert_eq!(attachment.message_id, summary.id);
     assert_eq!(attachment.content, b"fake-pdf-content");
   }
+
+  async fn plan_of(repo: &MessageRepository, sql: &str) -> Vec<String> {
+    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
+      .fetch_all(&repo.readers)
+      .await
+      .unwrap();
+    rows.into_iter().map(|(_, _, _, detail)| detail).collect()
+  }
+
+  fn scans_table(plan: &[String], tables: &[&str]) -> bool {
+    plan.iter().any(|step| {
+      let mut words = step.split_whitespace();
+      words.next() == Some("SCAN") && words.next().is_some_and(|table| tables.contains(&table))
+    })
+  }
+
+  fn sorts_for_order_by(plan: &[String]) -> bool {
+    plan
+      .iter()
+      .any(|step| step.starts_with("USE TEMP B-TREE FOR ORDER BY"))
+  }
+
+  fn only_unread() -> MessageFilter {
+    MessageFilter {
+      unread: true,
+      ..MessageFilter::default()
+    }
+  }
+
+  #[tokio::test]
+  async fn the_unread_filter_lists_from_its_partial_index_without_sorting() {
+    let repo = test_repo().await;
+    let filter = only_unread();
+
+    for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
+      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_sql()).await;
+      assert!(
+        plan
+          .iter()
+          .any(|step| step.starts_with("SEARCH m USING INDEX idx_messages_unread")),
+        "{start:?}: the unread page does not use idx_messages_unread: {plan:?}"
+      );
+      assert!(
+        !scans_table(&plan, &["m", "messages"]),
+        "{start:?}: the unread page scans every message: {plan:?}"
+      );
+      assert!(
+        !sorts_for_order_by(&plan),
+        "{start:?}: the unread page sorts its matches: {plan:?}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn the_unread_count_reads_only_its_partial_index() {
+    let repo = test_repo().await;
+
+    let plan = plan_of(&repo, &count_statement(&only_unread()).into_sql()).await;
+
+    assert_eq!(
+      plan,
+      ["SEARCH m USING COVERING INDEX idx_messages_unread (is_read=?)"],
+      "the unread count touches more than the unread index entries"
+    );
+  }
 }
