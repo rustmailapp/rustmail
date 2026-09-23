@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// An email message with its parsed bodies.
 ///
@@ -14,7 +14,10 @@ pub struct Message {
   /// MAIL FROM address.
   pub sender: String,
   /// JSON-encoded array of RCPT TO addresses.
-  #[serde(serialize_with = "serialize_json_string_as_array")]
+  #[serde(
+    serialize_with = "serialize_json_string_as_array",
+    deserialize_with = "deserialize_array_as_json_string"
+  )]
   pub recipients: String,
   /// Parsed Subject header, if present.
   pub subject: Option<String>,
@@ -31,7 +34,10 @@ pub struct Message {
   /// Whether the message has been starred.
   pub is_starred: bool,
   /// JSON-encoded array of user-assigned tags.
-  #[serde(serialize_with = "serialize_json_string_as_array")]
+  #[serde(
+    serialize_with = "serialize_json_string_as_array",
+    deserialize_with = "deserialize_array_as_json_string"
+  )]
   pub tags: String,
   /// ISO 8601 timestamp of when the message was received.
   pub created_at: String,
@@ -44,14 +50,20 @@ pub struct Message {
 pub struct MessageSummary {
   pub id: String,
   pub sender: String,
-  #[serde(serialize_with = "serialize_json_string_as_array")]
+  #[serde(
+    serialize_with = "serialize_json_string_as_array",
+    deserialize_with = "deserialize_array_as_json_string"
+  )]
   pub recipients: String,
   pub subject: Option<String>,
   pub size: i64,
   pub has_attachments: bool,
   pub is_read: bool,
   pub is_starred: bool,
-  #[serde(serialize_with = "serialize_json_string_as_array")]
+  #[serde(
+    serialize_with = "serialize_json_string_as_array",
+    deserialize_with = "deserialize_array_as_json_string"
+  )]
   pub tags: String,
   pub created_at: String,
 }
@@ -96,4 +108,40 @@ fn serialize_json_string_as_array<S: Serializer>(
     Vec::new()
   });
   tags.serialize(serializer)
+}
+
+/// Reads back what [`serialize_json_string_as_array`] writes: an array of
+/// strings, kept as the JSON text the database stores.
+fn deserialize_array_as_json_string<'de, D: Deserializer<'de>>(
+  deserializer: D,
+) -> Result<String, D::Error> {
+  let items = Vec::<String>::deserialize(deserializer)?;
+  serde_json::to_string(&items).map_err(serde::de::Error::custom)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn a_summary_reads_back_the_arrays_it_serializes() {
+    let summary = MessageSummary {
+      id: "01J0000000000000000000000".into(),
+      sender: "a@example.test".into(),
+      recipients: r#"["b@example.test","c@example.test"]"#.into(),
+      subject: Some("s".into()),
+      size: 10,
+      has_attachments: false,
+      is_read: false,
+      is_starred: false,
+      tags: r#"["ci"]"#.into(),
+      created_at: "2026-09-23T00:00:00Z".into(),
+    };
+
+    let json = serde_json::to_string(&summary).unwrap();
+    let back: MessageSummary = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(back.recipients, summary.recipients);
+    assert_eq!(back.tags, summary.tags);
+  }
 }
