@@ -906,6 +906,34 @@ impl IntoResponse for AppError {
           "Internal server error".to_string(),
         )
       }
+      AppError::Storage(StorageError::AttachmentCorrupt {
+        message_id,
+        attachment_id,
+        transfer_encoding,
+        expected_size,
+        actual_size,
+      }) => {
+        tracing::error!(
+          event = "attachment_corrupt",
+          message_id = %message_id,
+          attachment_id = %attachment_id,
+          transfer_encoding = ?transfer_encoding,
+          expected_size = ?expected_size,
+          actual_size = ?actual_size,
+          "Stored attachment failed its integrity check; re-send the message to store it again"
+        );
+        (
+          StatusCode::INTERNAL_SERVER_ERROR,
+          "Internal server error".to_string(),
+        )
+      }
+      AppError::Storage(e @ StorageError::DecodeAborted(_)) => {
+        tracing::error!(error = %e, "Attachment decode aborted");
+        (
+          StatusCode::INTERNAL_SERVER_ERROR,
+          "Internal server error".to_string(),
+        )
+      }
       AppError::Storage(
         e @ (StorageError::NewerSchema { .. }
         | StorageError::LegacySchema { .. }

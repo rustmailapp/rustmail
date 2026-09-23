@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use mail_parser::{ContentType, MessageParser, MimeHeaders, PartType};
+use mail_parser::{ContentType, MessageParser, MessagePart, MimeHeaders, PartType};
+
+use crate::locator::{Locator, locate};
 
 /// A captured message parsed into the rows it will be stored as.
 ///
@@ -27,7 +29,19 @@ pub(crate) struct PreparedAttachment {
   pub(crate) filename: Option<String>,
   pub(crate) content_type: Option<String>,
   pub(crate) content_id: Option<String>,
-  pub(crate) content: Vec<u8>,
+  /// Length of the decoded contents, whichever way they are stored.
+  pub(crate) size: usize,
+  pub(crate) storage: AttachmentStorage,
+}
+
+/// How a part's contents are kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AttachmentStorage {
+  /// Decoded on request from the raw message, which already holds them.
+  Located(Locator),
+  /// Stored decoded, because serving them from the raw message could not be
+  /// proven to reproduce the parser's output.
+  Inline(Vec<u8>),
 }
 
 impl PreparedMessage {
@@ -44,7 +58,7 @@ impl PreparedMessage {
           parsed.body_text(0).map(|body| body.into_owned()),
           parsed.body_html(0).map(|body| body.into_owned()),
           parsed.attachment_count() > 0,
-          stored_parts(&parsed),
+          stored_parts(&parsed, &raw),
         ),
         None => (None, None, None, false, Vec::new()),
       };
@@ -61,24 +75,48 @@ impl PreparedMessage {
   }
 }
 
-fn stored_parts(parsed: &mail_parser::Message<'_>) -> Vec<PreparedAttachment> {
+fn stored_parts(parsed: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<PreparedAttachment> {
+  stored_part_refs(parsed)
+    .map(|part| PreparedAttachment {
+      filename: part.attachment_name().map(String::from),
+      content_type: part.content_type().map(mime_type),
+      content_id: part.content_id().map(String::from),
+      size: part_contents(part).len(),
+      storage: locate(raw, part).map_or_else(
+        || AttachmentStorage::Inline(part_contents(part).to_vec()),
+        AttachmentStorage::Located,
+      ),
+    })
+    .collect()
+}
+
+/// The parts of `parsed` stored as attachment rows, in message order: each
+/// declared attachment and inline binary part with non-empty contents.
+pub(crate) fn stored_part_refs<'p, 'x>(
+  parsed: &'p mail_parser::Message<'x>,
+) -> impl Iterator<Item = &'p MessagePart<'x>> {
   let attachment_ids: HashSet<u32> = parsed.attachments.iter().copied().collect();
   parsed
     .parts
     .iter()
     .enumerate()
-    .filter(|(idx, part)| {
+    .filter(move |(idx, part)| {
       let is_attachment = u32::try_from(*idx).is_ok_and(|idx| attachment_ids.contains(&idx));
       is_attachment || matches!(part.body, PartType::InlineBinary(_))
     })
-    .filter(|(_, part)| !part.contents().is_empty())
-    .map(|(_, part)| PreparedAttachment {
-      filename: part.attachment_name().map(String::from),
-      content_type: part.content_type().map(mime_type),
-      content_id: part.content_id().map(String::from),
-      content: part.contents().to_vec(),
-    })
-    .collect()
+    .map(|(_, part)| part)
+    .filter(|part| !part_contents(part).is_empty())
+}
+
+/// The part's decoded contents, as [`MessagePart::contents`] returns them.
+///
+/// A nested message the parser recovered with no parts at all counts as
+/// empty: `contents` would index its missing root part and panic.
+pub(crate) fn part_contents<'p>(part: &'p MessagePart<'_>) -> &'p [u8] {
+  match &part.body {
+    PartType::Message(nested) if nested.parts.is_empty() => b"",
+    _ => part.contents(),
+  }
 }
 
 fn mime_type(content_type: &ContentType<'_>) -> String {
@@ -127,8 +165,38 @@ mod tests {
     let attachment = &prepared.attachments[0];
     assert_eq!(attachment.filename.as_deref(), Some("report.pdf"));
     assert_eq!(attachment.content_type.as_deref(), Some("application/pdf"));
-    assert_eq!(attachment.content, b"fake-pdf-content");
+    assert_eq!(attachment.size, b"fake-pdf-content".len());
+    let AttachmentStorage::Located(locator) = attachment.storage else {
+      panic!("an unencoded binary part should be located");
+    };
+    assert_eq!(
+      &MULTIPART.as_bytes()[locator.offset..locator.offset + locator.len],
+      b"fake-pdf-content"
+    );
     assert_eq!(prepared.raw, MULTIPART.as_bytes());
+  }
+
+  #[test]
+  fn a_digest_item_that_is_not_a_message_is_skipped() {
+    let raw = concat!(
+      "From: sender@test.com\r\n",
+      "Subject: Digest\r\n",
+      "MIME-Version: 1.0\r\n",
+      "Content-Type: multipart/digest; boundary=\"D\"\r\n",
+      "\r\n",
+      "--D\r\n",
+      "Content-Disposition: attachment; filename=\"item.bin\"\r\n",
+      "\r\n",
+      "caf\u{e9}\r\n",
+      "line  =\t--caf\u{e9} beta\r\n",
+      "=line= beta\r\n",
+      "--D--\r\n",
+    );
+    let prepared =
+      PreparedMessage::parse("sender@test.com".to_string(), &[], raw.as_bytes().to_vec());
+
+    assert!(prepared.attachments.is_empty());
+    assert_eq!(prepared.raw, raw.as_bytes());
   }
 
   #[test]
