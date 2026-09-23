@@ -1437,9 +1437,56 @@ describe("arrivals while the reader is scrolled away", () => {
 
     await resync();
 
-    expect(ids()).toEqual(["id-0", "id-1"]);
+    expect(ids()).toEqual(["id-0", "id-1", "id-2"]);
     expect(listMessages).toHaveBeenCalledTimes(2);
     expect(hasMore()).toBe(true);
+  });
+
+  it("forgets a deleted tail a held resync kept once an older page is read", async () => {
+    listMessages.mockResolvedValue(page(range(3), 3 + 2 * PAGE_SIZE, "id-2"));
+    await fetchMessages();
+    setLiveHeld(true);
+    const older = Array.from({ length: 2 * PAGE_SIZE }, (_, i) =>
+      message(1000 + i),
+    );
+    serve([message(0), message(1), ...older]);
+    await resync();
+    listMessages.mockRejectedValueOnce(
+      new ApiError(new Response(null, { status: 400 }), "unknown_cursor"),
+    );
+
+    await loadMore();
+
+    expect(ids().slice(0, 3)).toEqual(["id-0", "id-1", "id-1000"]);
+  });
+
+  it("keeps loaded rows a held resync stops short of past a run of new ones", async () => {
+    const rows = range(PAGE_SIZE + 50);
+    serve(rows);
+    await fetchMessages();
+    await loadMore();
+    setLiveHeld(true);
+    const between = Array.from({ length: 2 * PAGE_SIZE }, (_, i) =>
+      message(1000 + i),
+    );
+    serve([...rows.slice(0, 10), ...between, ...rows.slice(10)]);
+
+    await resync();
+
+    expect(ids()).toEqual(rows.map((m) => m.id));
+    expect(hasMore()).toBe(true);
+  });
+
+  it("keeps the loaded rows when a held resync finds more arrivals than it holds", async () => {
+    setLiveHeld(true);
+    const arrivals = Array.from({ length: MAX_LIVE_ROWS + 1 }, (_, i) =>
+      message(1000 + i),
+    );
+    serve([...arrivals, ...range(2)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1"]);
   });
 
   it("puts the held arrivals on top once the reader is back there", () => {
