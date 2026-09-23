@@ -1047,6 +1047,7 @@ impl App {
     }
 
     match event {
+      WsEvent::MessageNew(summary) if self.is_listed(&summary.id) => {}
       WsEvent::MessageNew(_) if !self.search_query.is_empty() => {
         self.view_stale = true;
       }
@@ -1105,6 +1106,10 @@ impl App {
     }
   }
 
+  fn is_listed(&self, id: &str) -> bool {
+    self.messages.iter().any(|m| m.id == id)
+  }
+
   fn message_mut(&mut self, id: &str) -> Option<&mut MessageSummary> {
     self.messages.iter_mut().find(|m| m.id == id)
   }
@@ -1117,7 +1122,7 @@ impl App {
   fn replay_delta(&mut self, delta: WsEvent) {
     match delta {
       WsEvent::MessageNew(summary) => {
-        if self.messages.iter().any(|m| m.id == summary.id) {
+        if self.is_listed(&summary.id) {
           return;
         }
         if !self.search_query.is_empty() || self.offset != 0 {
@@ -1472,6 +1477,22 @@ mod tests {
     assert_eq!(app.total, 4);
     assert_eq!(app.messages[0].id, "live");
     assert!(!app.view_stale);
+  }
+
+  #[tokio::test]
+  async fn duplicate_live_message_is_ignored() {
+    let mut app = app_with_messages(3);
+    app.handle_ws_message(&new_message_event("live")).await;
+    app.selected = 2;
+    app.sync_list_state();
+
+    app.handle_ws_message(&new_message_event("live")).await;
+
+    assert_eq!(app.total, 4);
+    assert_eq!(app.messages.len(), 4);
+    assert_eq!(app.messages.iter().filter(|m| m.id == "live").count(), 1);
+    assert_eq!(app.selected, 2);
+    assert_eq!(app.messages[app.selected].id, "id-1");
   }
 
   #[tokio::test]
