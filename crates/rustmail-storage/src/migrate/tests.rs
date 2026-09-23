@@ -9,6 +9,7 @@ use crate::{MessageRepository, connect_options, initialize_database};
 
 #[path = "../../tests/common/legacy_v0_7_0.rs"]
 mod legacy;
+mod restore;
 
 const MESSAGES: usize = 12;
 const SMALL_BATCH: i64 = 2;

@@ -24,9 +24,15 @@
 //!
 //! "Made from" compares the fingerprint the copy stores with one computed
 //! from the legacy file under its write lock.
+//!
+//! [`restore_backup`] undoes a migration under the same lock: it moves the
+//! schema-1 `db` to `<db>.schema1-<UTC timestamp>` and the backup back to
+//! `db`, which the next start then migrates again. The kept file is none of
+//! the three above, so it never changes which state a start sees.
 
 mod build;
 mod fingerprint;
+mod restore;
 #[cfg(test)]
 mod tests;
 
@@ -44,6 +50,7 @@ use crate::error::{MigrationRefusal, SQLITE_FULL, StorageError};
 use crate::schema::{BUSY_TIMEOUT, FileSchema, probe};
 use build::{CopyOutcome, Origin, Target, read_origin};
 use fingerprint::{LegacyColumns, SourcePrint, fingerprint};
+pub use restore::{RestoreReport, restore_backup};
 
 /// Legacy messages one batch copies at most.
 const BATCH_MAX_MESSAGES: i64 = 1_000;
