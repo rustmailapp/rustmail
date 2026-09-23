@@ -36,6 +36,12 @@ const MMAP_SIZE_BYTES: &str = "268435456";
 /// database, on the same connection that is trying to store the next message.
 /// Raising the threshold batches that work into rarer, larger checkpoints.
 const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
+/// Bytes a WAL file may keep on disk once a checkpoint has reset it.
+///
+/// A burst of large mail, or the page moves of a reclaim, can grow the WAL
+/// far past what steady ingest needs; without a limit SQLite reuses that
+/// file at its high-water size forever.
+const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 
 /// Statements that create schema 1 in an empty file, in order.
 ///
@@ -138,7 +144,8 @@ pub fn connect_options(db_url: &str) -> Result<SqliteConnectOptions, StorageErro
       .pragma("cache_size", CACHE_SIZE_KIB)
       .pragma("mmap_size", MMAP_SIZE_BYTES)
       .pragma("temp_store", "MEMORY")
-      .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES),
+      .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)
+      .pragma("journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES),
   )
 }
 
@@ -350,6 +357,16 @@ mod tests {
         WAL_AUTOCHECKPOINT_PAGES,
         "connection {index} fell back to SQLite's default checkpoint threshold, \
          which makes almost every large-message commit checkpoint the WAL"
+      );
+
+      let journal_size_limit: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
+        .fetch_one(&mut **conn)
+        .await
+        .unwrap();
+      assert_eq!(
+        journal_size_limit.to_string(),
+        JOURNAL_SIZE_LIMIT_BYTES,
+        "connection {index} keeps its WAL at its high-water size after a checkpoint"
       );
 
       let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
