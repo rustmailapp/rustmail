@@ -672,16 +672,7 @@ pub async fn release_message(
   let raw = state.repo.get_raw(&id).await?;
   let msg = state.repo.get(&id).await?;
 
-  let envelope = lettre::address::Envelope::new(
-    msg.sender.parse().ok(),
-    serde_json::from_str::<Vec<String>>(&msg.recipients)
-      .unwrap_or_default()
-      .iter()
-      .filter_map(|r| r.parse().ok())
-      .collect(),
-  );
-
-  match envelope {
+  match release_envelope(&msg.sender, &msg.recipients) {
     Ok(envelope) => {
       use lettre::AsyncTransport;
 
@@ -721,14 +712,39 @@ pub async fn release_message(
         }
       }
     }
-    Err(e) => Ok(
+    Err(reason) => Ok(
       (
         StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": format!("Invalid envelope: {}", e) })),
+        Json(serde_json::json!({ "error": format!("Invalid envelope: {reason}") })),
       )
         .into_response(),
     ),
   }
+}
+
+/// The captured envelope a release sends again, exactly as captured.
+///
+/// Every address has to carry over: dropping one the relay cannot take would
+/// deliver to fewer recipients, or from another sender, than the message was
+/// sent with, and still report success. Only an empty sender, the null
+/// reverse-path `MAIL FROM:<>`, becomes no sender.
+fn release_envelope(sender: &str, recipients: &str) -> Result<lettre::address::Envelope, String> {
+  let from = if sender.is_empty() {
+    None
+  } else {
+    Some(
+      sender
+        .parse()
+        .map_err(|_| "the captured sender is not an address a relay accepts".to_string())?,
+    )
+  };
+  let to = serde_json::from_str::<Vec<String>>(recipients)
+    .map_err(|_| "the captured recipients could not be read".to_string())?
+    .iter()
+    .map(|recipient| recipient.parse())
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|_| "a captured recipient is not an address a relay accepts".to_string())?;
+  lettre::address::Envelope::new(from, to).map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize)]
@@ -998,6 +1014,56 @@ impl IntoResponse for AppError {
     };
 
     (status, Json(serde_json::json!({ "error": message }))).into_response()
+  }
+}
+
+#[cfg(test)]
+mod release_envelope_tests {
+  use super::release_envelope;
+
+  #[test]
+  fn a_captured_envelope_carries_over_whole() {
+    let envelope = release_envelope(
+      "from@example.test",
+      r#"["a@example.test","b@example.test"]"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+      envelope.from().map(ToString::to_string).as_deref(),
+      Some("from@example.test")
+    );
+    assert_eq!(envelope.to().len(), 2);
+  }
+
+  #[test]
+  fn the_null_sender_releases_without_one() {
+    let envelope = release_envelope("", r#"["a@example.test"]"#).unwrap();
+
+    assert!(envelope.from().is_none());
+  }
+
+  #[test]
+  fn a_recipient_a_relay_cannot_take_refuses_the_release() {
+    let refused = release_envelope(
+      "from@example.test",
+      r#"["a@example.test","not an address"]"#,
+    );
+
+    assert_eq!(
+      refused.unwrap_err(),
+      "a captured recipient is not an address a relay accepts"
+    );
+  }
+
+  #[test]
+  fn a_sender_a_relay_cannot_take_refuses_the_release() {
+    let refused = release_envelope("not an address", r#"["a@example.test"]"#);
+
+    assert_eq!(
+      refused.unwrap_err(),
+      "the captured sender is not an address a relay accepts"
+    );
   }
 }
 

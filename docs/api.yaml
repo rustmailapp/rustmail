@@ -539,7 +539,9 @@ paths:
         '400':
           description: >
             `port` is not one of 25, 465, 587 or 2525, or the captured envelope
-            cannot be sent (for example no recipient address parses).
+            cannot be sent as captured: it has no recipient, or its sender
+            (other than the empty `MAIL FROM:<>`) or any one recipient is not
+            an address a relay accepts. Nothing is sent to the relay then.
           content:
             application/json:
               schema:
@@ -553,6 +555,10 @@ paths:
                   summary: captured envelope cannot be sent
                   value:
                     error: 'Invalid envelope: missing destination address, invalid envelope'
+                invalidRecipient:
+                  summary: a captured recipient is not a relayable address
+                  value:
+                    error: 'Invalid envelope: a captured recipient is not an address a relay accepts'
         '403':
           description: >
             Release is disabled (no `--release-host`), `host` is not the
