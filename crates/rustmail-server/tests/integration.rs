@@ -1528,6 +1528,67 @@ async fn smtp_tls_requires_both_cert_and_key() {
   }
 }
 
+const STARTUP_FAILURE_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[tokio::test]
+async fn serve_refuses_a_database_from_a_newer_schema() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(1)
+    .connect(&format!("sqlite:{}?mode=rwc", db_path.display()))
+    .await
+    .unwrap();
+  sqlx::query("CREATE TABLE message_content (seq INTEGER PRIMARY KEY)")
+    .execute(&pool)
+    .await
+    .unwrap();
+  sqlx::query("PRAGMA user_version = 2")
+    .execute(&pool)
+    .await
+    .unwrap();
+  pool.close().await;
+  let bytes_before = std::fs::read(&db_path).unwrap();
+
+  let output = tokio::time::timeout(
+    STARTUP_FAILURE_TIMEOUT,
+    rustmail_command()
+      .args([
+        "serve",
+        "--smtp-port",
+        ANY_FREE_PORT,
+        "--http-port",
+        ANY_FREE_PORT,
+        "--log-level",
+        "warn",
+      ])
+      .arg("--db-path")
+      .arg(&db_path)
+      .output(),
+  )
+  .await
+  .expect("rustmail serve did not exit on a newer database")
+  .expect("failed to run rustmail serve");
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    !output.status.success(),
+    "expected startup failure: {stderr}"
+  );
+  assert!(!stderr.contains("panicked"), "startup panicked: {stderr}");
+  assert!(
+    stderr.contains(&db_path.display().to_string()),
+    "stderr does not name the database: {stderr}"
+  );
+  assert!(
+    stderr.contains(
+      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 0. Upgrade rustmail."
+    ),
+    "unexpected stderr: {stderr}"
+  );
+  assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+}
+
 async fn connect_smtp_and_greet(addr: std::net::SocketAddr) -> BufReader<TcpStream> {
   let stream = TcpStream::connect(addr).await.unwrap();
   let mut stream = BufReader::new(stream);

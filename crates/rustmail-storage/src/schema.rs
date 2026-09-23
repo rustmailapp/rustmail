@@ -7,6 +7,14 @@ use sqlx::sqlite::SqliteConnectOptions;
 use crate::StorageError;
 
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// Schema version this binary reads and writes, kept in `PRAGMA user_version`.
+///
+/// The current layout predates versioning, so it is schema 0: SQLite's
+/// default, which every file created so far already carries. A file with a
+/// higher version was written by a newer rustmail and is refused.
+pub const SCHEMA_VERSION: i64 = 0;
+/// Name the database is reported under when SQLite has no file path for it.
+const IN_MEMORY_DATABASE_NAME: &str = "in-memory database";
 /// Page cache of every connection.
 ///
 /// Reads are served from the memory map, so a connection's own cache holds
@@ -62,10 +70,17 @@ pub fn connect_options(db_url: &str) -> Result<SqliteConnectOptions, StorageErro
 /// every row, each one past its raw blob to reach `is_starred`; with it, only
 /// a user's star adds an entry, so capturing mail pays nothing for it.
 ///
+/// Before any of that, the file's `user_version` is checked against
+/// [`SCHEMA_VERSION`], so a database from a newer rustmail is refused without
+/// a single write.
+///
 /// # Errors
 ///
-/// Returns [`StorageError::Database`] if any SQL statement fails.
+/// Returns [`StorageError::NewerSchema`] if the database was written by a
+/// newer schema, and [`StorageError::Database`] if any SQL statement fails.
 pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> {
+  ensure_supported_schema(pool).await?;
+
   sqlx::query(
     r#"
         CREATE TABLE IF NOT EXISTS messages (
@@ -169,6 +184,29 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
   sqlx::query("PRAGMA journal_mode=WAL").execute(pool).await?;
 
   Ok(())
+}
+
+async fn ensure_supported_schema(pool: &SqlitePool) -> Result<(), StorageError> {
+  let found: i64 = sqlx::query_scalar("PRAGMA user_version")
+    .fetch_one(pool)
+    .await?;
+  if found <= SCHEMA_VERSION {
+    return Ok(());
+  }
+  let file: String =
+    sqlx::query_scalar("SELECT file FROM pragma_database_list WHERE name = 'main'")
+      .fetch_one(pool)
+      .await?;
+  let database = if file.is_empty() {
+    IN_MEMORY_DATABASE_NAME.to_string()
+  } else {
+    file
+  };
+  Err(StorageError::NewerSchema {
+    database,
+    found,
+    supported: SCHEMA_VERSION,
+  })
 }
 
 async fn add_column_if_missing(
@@ -300,6 +338,168 @@ mod tests {
         "connection {index} did not get the configured busy_timeout"
       );
     }
+  }
+
+  const NEWER_SCHEMA: i64 = 1;
+
+  fn scratch_database(prefix: &str) -> (TempDir, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("rustmail-{prefix}-{}", Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("rustmail.db");
+    (TempDir(dir), path)
+  }
+
+  fn file_url(path: &std::path::Path) -> String {
+    format!("sqlite://{}?mode=rwc", path.display())
+  }
+
+  async fn open_tuned(path: &std::path::Path) -> SqlitePool {
+    SqlitePoolOptions::new()
+      .connect_with(connect_options(&file_url(path)).unwrap())
+      .await
+      .unwrap()
+  }
+
+  async fn run_on_plain_file(path: &std::path::Path, statements: &[&str]) {
+    let pool = SqlitePoolOptions::new()
+      .max_connections(1)
+      .connect(&file_url(path))
+      .await
+      .unwrap();
+    for statement in statements {
+      sqlx::query(statement).execute(&pool).await.unwrap();
+    }
+    pool.close().await;
+  }
+
+  async fn user_version(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("PRAGMA user_version")
+      .fetch_one(pool)
+      .await
+      .unwrap()
+  }
+
+  fn sidecar(path: &std::path::Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+  }
+
+  #[tokio::test]
+  async fn a_database_from_a_newer_schema_is_refused_untouched() {
+    let (_guard, path) = scratch_database("newer-schema");
+    run_on_plain_file(
+      &path,
+      &[
+        "CREATE TABLE message_content (seq INTEGER PRIMARY KEY, raw BLOB NOT NULL)",
+        &format!("PRAGMA user_version = {NEWER_SCHEMA}"),
+      ],
+    )
+    .await;
+    let bytes_before = std::fs::read(&path).unwrap();
+    let modified_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+    let pool = open_tuned(&path).await;
+    let error = initialize_database(&pool).await.unwrap_err();
+    pool.close().await;
+
+    let StorageError::NewerSchema {
+      ref database,
+      found,
+      supported,
+    } = error
+    else {
+      panic!("expected NewerSchema, got {error:?}");
+    };
+    assert_eq!(found, NEWER_SCHEMA);
+    assert_eq!(supported, SCHEMA_VERSION);
+    assert!(
+      database.ends_with("rustmail.db"),
+      "the error should name the file, got {database}"
+    );
+    assert_eq!(
+      error.to_string(),
+      format!(
+        "{database} is schema 1, written by a newer rustmail; \
+         this binary supports schema 0. Upgrade rustmail."
+      )
+    );
+
+    assert_eq!(
+      std::fs::read(&path).unwrap(),
+      bytes_before,
+      "a refused database must be left byte-identical"
+    );
+    assert_eq!(
+      std::fs::metadata(&path).unwrap().modified().unwrap(),
+      modified_before
+    );
+    for suffix in ["-wal", "-shm", "-journal"] {
+      assert!(
+        !sidecar(&path, suffix).exists(),
+        "refusing the database left a {suffix} file behind"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn a_fresh_database_stays_at_the_current_schema() {
+    let (_guard, path) = scratch_database("fresh-schema");
+
+    let pool = open_tuned(&path).await;
+    initialize_database(&pool).await.unwrap();
+
+    assert_eq!(user_version(&pool).await, SCHEMA_VERSION);
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages")
+      .fetch_one(&pool)
+      .await
+      .unwrap();
+    assert_eq!(stored, 0);
+  }
+
+  #[tokio::test]
+  async fn a_legacy_database_opens_as_before() {
+    let (_guard, path) = scratch_database("legacy-schema");
+    run_on_plain_file(
+      &path,
+      &[
+        "CREATE TABLE messages (
+            id              TEXT PRIMARY KEY,
+            sender          TEXT NOT NULL,
+            recipients      TEXT NOT NULL,
+            subject         TEXT,
+            text_body       TEXT,
+            html_body       TEXT,
+            raw             BLOB NOT NULL,
+            size            INTEGER NOT NULL,
+            has_attachments INTEGER NOT NULL DEFAULT 0,
+            is_read         INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL
+        )",
+        "INSERT INTO messages (id, sender, recipients, raw, size, created_at)
+         VALUES ('legacy', 'a@test.com', '[]', x'00', 1, '2026-01-01T00:00:00Z')",
+      ],
+    )
+    .await;
+
+    let pool = open_tuned(&path).await;
+    initialize_database(&pool).await.unwrap();
+
+    assert_eq!(user_version(&pool).await, SCHEMA_VERSION);
+    let (id, is_starred, tags): (String, i64, String) =
+      sqlx::query_as("SELECT id, is_starred, tags FROM messages")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+      (id.as_str(), is_starred, tags.as_str()),
+      ("legacy", 0, "[]")
+    );
+    let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+      .fetch_one(&pool)
+      .await
+      .unwrap();
+    assert_eq!(journal_mode, "wal");
   }
 
   #[tokio::test]

@@ -671,11 +671,15 @@ async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
 async fn open_repository(db_url: &str, in_memory: bool) -> Result<MessageRepository> {
   if in_memory {
     let pool = connect_pool(db_url, true).await?;
-    initialize_database(&pool).await?;
+    initialize_database(&pool)
+      .await
+      .with_context(|| format!("failed to initialize database: {db_url}"))?;
     return Ok(MessageRepository::new(pool));
   }
   let writer = connect_writer(db_url).await?;
-  initialize_database(&writer).await?;
+  initialize_database(&writer)
+    .await
+    .with_context(|| format!("failed to initialize database: {db_url}"))?;
   let readers = connect_pool(db_url, false).await?;
   Ok(MessageRepository::with_writer(readers, writer))
 }

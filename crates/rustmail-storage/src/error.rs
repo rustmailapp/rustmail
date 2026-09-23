@@ -7,6 +7,20 @@ pub enum StorageError {
   /// The requested message or attachment was not found.
   #[error("Message not found: {0}")]
   NotFound(String),
+  /// The database was written by a newer rustmail, in a schema this binary
+  /// cannot read. It is refused before anything is written to it.
+  #[error(
+    "{database} is schema {found}, written by a newer rustmail; \
+     this binary supports schema {supported}. Upgrade rustmail."
+  )]
+  NewerSchema {
+    /// The database file, as SQLite reports it.
+    database: String,
+    /// The schema version recorded in the file's `user_version`.
+    found: i64,
+    /// The newest schema version this binary supports.
+    supported: i64,
+  },
 }
 
 /// SQLite primary result code for `SQLITE_BUSY`.
