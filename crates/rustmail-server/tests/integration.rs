@@ -1467,6 +1467,36 @@ async fn config_env_overrides_toml() {
 }
 
 #[tokio::test]
+async fn config_ws_buffer_reaches_the_command_line_check() {
+  use std::io::Write;
+
+  let mut toml_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+  write!(
+    toml_file,
+    "smtp_port = {ANY_FREE_PORT}\nhttp_port = {ANY_FREE_PORT}\nephemeral = true\nws_buffer = 0\n"
+  )
+  .unwrap();
+
+  let output = tokio::time::timeout(
+    std::time::Duration::from_secs(PROMPT_EXIT_SECS),
+    rustmail_command()
+      .args(["serve", "--config", toml_file.path().to_str().unwrap()])
+      .env_remove("RUSTMAIL_WS_BUFFER")
+      .output(),
+  )
+  .await
+  .expect("a refused config must exit promptly")
+  .unwrap();
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    !output.status.success(),
+    "ws_buffer = 0 from the config file must be refused"
+  );
+  assert!(stderr.contains("--ws-buffer"), "got: {stderr}");
+}
+
+#[tokio::test]
 async fn config_toml_used_when_no_env() {
   use std::io::Write;
 

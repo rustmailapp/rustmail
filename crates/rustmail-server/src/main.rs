@@ -185,6 +185,7 @@ struct TomlConfig {
   release_host: Option<String>,
   allowed_origins: Option<Vec<String>>,
   allowed_hosts: Option<Vec<String>>,
+  ws_buffer: Option<u32>,
 }
 
 fn apply_toml_to_env(config: &TomlConfig) {
@@ -238,6 +239,9 @@ fn apply_toml_to_env(config: &TomlConfig) {
   }
   if let Some(v) = &config.allowed_hosts {
     set_if_absent("RUSTMAIL_ALLOWED_HOSTS", &v.join(","));
+  }
+  if let Some(v) = config.ws_buffer {
+    set_if_absent("RUSTMAIL_WS_BUFFER", &v.to_string());
   }
 }
 
