@@ -713,6 +713,10 @@ impl App {
     }
   }
 
+  fn is_selected(&self, id: &str) -> bool {
+    self.selected_message().is_some_and(|m| m.id == id)
+  }
+
   fn preview_matches_selection(&self) -> bool {
     self.last_preview_id.as_ref() == self.selected_message().map(|m| &m.id)
   }
@@ -809,6 +813,8 @@ impl App {
     };
 
     if self.last_preview_id.as_deref() == Some(&msg.id) {
+      self.pending_preview = None;
+      self.preview_loading = false;
       return;
     }
 
@@ -842,7 +848,7 @@ impl App {
     was_unread: bool,
     result: Result<Message, String>,
   ) {
-    if self.pending_preview != Some(request) {
+    if self.pending_preview != Some(request) || !self.is_selected(&id) {
       return;
     }
     self.pending_preview = None;
@@ -989,7 +995,8 @@ impl App {
     size: i64,
     result: Result<String, String>,
   ) {
-    if self.pending_raw != Some((target, request)) {
+    let for_another_message = target == RawTarget::Preview && !self.is_selected(&id);
+    if self.pending_raw != Some((target, request)) || for_another_message {
       return;
     }
     self.pending_raw = None;
@@ -2340,5 +2347,55 @@ mod tests {
       }
       other => panic!("unexpected event: {other:?}"),
     }
+  }
+
+  #[tokio::test]
+  async fn returning_to_a_loaded_preview_drops_the_request_for_the_message_left() {
+    let mut app = app_with_messages(2);
+    show_preview_of(&mut app, "id-0");
+    app.select_message(1);
+    app.load_preview().await;
+    let left_behind = app.pending_preview.expect("request for id-1");
+    app.select_message(0);
+    app.load_preview().await;
+
+    app
+      .dispatch(Event::PreviewLoaded {
+        request: left_behind,
+        id: "id-1".into(),
+        was_unread: false,
+        result: Ok(sample_message("id-1")),
+      })
+      .await;
+
+    assert_eq!(selected_id(&app), Some("id-0"));
+    assert_eq!(app.preview.as_ref().map(|m| m.id.as_str()), Some("id-0"));
+    assert_eq!(app.last_preview_id.as_deref(), Some("id-0"));
+    assert_eq!(app.pending_preview, None);
+    assert!(!app.preview_loading);
+  }
+
+  #[tokio::test]
+  async fn raw_of_a_message_left_is_not_shown_in_the_loaded_preview() {
+    let mut app = app_with_messages(2);
+    show_preview_of(&mut app, "id-0");
+    app.select_message(1);
+    app.load_preview().await;
+    app.ensure_raw_loaded().await;
+    let (_, left_behind) = app.pending_raw.expect("raw request for id-1");
+    app.select_message(0);
+    app.load_preview().await;
+
+    app
+      .dispatch(Event::RawLoaded {
+        target: RawTarget::Preview,
+        request: left_behind,
+        id: "id-1".into(),
+        size: 10,
+        result: Ok("raw of id-1".into()),
+      })
+      .await;
+
+    assert_eq!(app.preview_raw, None);
   }
 }
