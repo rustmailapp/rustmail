@@ -9,7 +9,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--bind` | `RUSTMAIL_BIND` | `127.0.0.1` | IP address to bind SMTP and HTTP listeners to. Docker images default to `0.0.0.0`. Use `0.0.0.0` for remote access outside Docker. |
 | `--smtp-port` | `RUSTMAIL_SMTP_PORT` | `1025` | SMTP listener port |
 | `--http-port` | `RUSTMAIL_HTTP_PORT` | `8025` | HTTP and WebSocket port |
-| `--db-path` | `RUSTMAIL_DB_PATH` | `./rustmail.db` | Path to the SQLite database file |
+| `--db-path` | `RUSTMAIL_DB_PATH` | `<data dir>/rustmail/rustmail.db` (macOS: `~/Library/Application Support`, Linux: `~/.local/share`) | Path to the SQLite database file |
 | `--retention` | `RUSTMAIL_RETENTION` | `0` | Auto-delete messages after N hours. `0` = keep forever. |
 | `--max-messages` | `RUSTMAIL_MAX_MESSAGES` | `0` | Maximum messages to retain. Oldest are purged when exceeded. `0` = unlimited. |
 | `--max-message-size` | `RUSTMAIL_MAX_MESSAGE_SIZE` | `10485760` | Maximum accepted message size in bytes (default: 10 MB). |
