@@ -512,24 +512,38 @@ const FALLBACK_BUDGET: std::time::Duration =
 /// answered on the hand-off would lose it instead. Returns the stored
 /// messages in arrival order.
 async fn store_batch(repo: &MessageRepository, deliveries: Vec<Delivery>) -> Vec<MessageSummary> {
-  let fallback_deadline = Instant::now() + FALLBACK_BUDGET;
-  let mut stored = Vec::with_capacity(deliveries.len());
-  for group in transactions(deliveries) {
-    stored.extend(store_group(repo, group, fallback_deadline).await);
-  }
-  stored
+  store_and_announce(repo, deliveries, &|_| {}).await
 }
 
-/// Stores a batch, then announces each stored message to WebSocket clients in
-/// the order it was stored.
+/// Stores a batch, announcing each stored message to WebSocket clients in the
+/// order it was stored.
 async fn process_batch(
   repo: &MessageRepository,
   state: &AppState,
   deliveries: Vec<Delivery>,
 ) -> Vec<MessageSummary> {
-  let stored = store_batch(repo, deliveries).await;
-  for summary in &stored {
+  store_and_announce(repo, deliveries, &|summary| {
     state.broadcast(WsEvent::MessageNew(summary.clone()));
+  })
+  .await
+}
+
+/// [`store_batch`], calling `announce` on each message as soon as the
+/// transaction holding it commits.
+///
+/// A batch can span several transactions. Holding the announcements of an
+/// early one until the last commits would let a delete of one of its messages
+/// be announced first, and the late `message:new` would then bring the
+/// deleted message back in every client.
+async fn store_and_announce(
+  repo: &MessageRepository,
+  deliveries: Vec<Delivery>,
+  announce: &(dyn Fn(&MessageSummary) + Sync),
+) -> Vec<MessageSummary> {
+  let fallback_deadline = Instant::now() + FALLBACK_BUDGET;
+  let mut stored = Vec::with_capacity(deliveries.len());
+  for group in transactions(deliveries) {
+    stored.extend(store_group(repo, group, fallback_deadline, announce).await);
   }
   stored
 }
@@ -538,6 +552,7 @@ async fn store_group(
   repo: &MessageRepository,
   group: Vec<(ReceivedMessage, DeliveryAck)>,
   fallback_deadline: Instant,
+  announce: &(dyn Fn(&MessageSummary) + Sync),
 ) -> Vec<MessageSummary> {
   let mut messages = Vec::with_capacity(group.len());
   let mut acks = Vec::with_capacity(group.len());
@@ -564,6 +579,7 @@ async fn store_group(
   match repo.insert_batch(&messages).await {
     Ok(summaries) => {
       acks.into_iter().for_each(DeliveryAck::stored);
+      summaries.iter().for_each(announce);
       summaries
     }
     Err(e) if messages.len() == 1 || e.is_store_wide() => {
@@ -573,7 +589,7 @@ async fn store_group(
     }
     Err(e) => {
       warn!(error = %e, count = messages.len(), "A batch failed to commit; storing its messages one at a time");
-      store_one_by_one(repo, messages, acks, fallback_deadline).await
+      store_one_by_one(repo, messages, acks, fallback_deadline, announce).await
     }
   }
 }
@@ -590,6 +606,7 @@ async fn store_one_by_one(
   messages: Vec<PreparedMessage>,
   acks: Vec<DeliveryAck>,
   deadline: Instant,
+  announce: &(dyn Fn(&MessageSummary) + Sync),
 ) -> Vec<MessageSummary> {
   let mut stored = Vec::with_capacity(messages.len());
   let mut pending = messages.iter().zip(acks);
@@ -610,6 +627,7 @@ async fn store_one_by_one(
     match repo.insert_prepared(message).await {
       Ok(summary) => {
         ack.stored();
+        announce(&summary);
         stored.push(summary);
       }
       Err(e) if e.is_store_wide() => {
@@ -1470,7 +1488,7 @@ mod delivery_tests {
 
     let (batch, verdicts) = deliveries(vec![titled("before"), titled("poison"), titled("after")]);
     let group = transactions(batch).into_iter().next().unwrap();
-    let stored = store_group(&repo, group, Instant::now()).await;
+    let stored = store_group(&repo, group, Instant::now(), &|_| {}).await;
 
     assert!(stored.is_empty());
     assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Rejected; 3]);
@@ -1503,6 +1521,30 @@ mod delivery_tests {
       .collect();
     assert_eq!(announced.len(), subjects.len());
     assert_eq!(announced, oldest_first);
+  }
+
+  /// A delete can land between two transactions of one batch, so the first
+  /// one's messages have to be announced before the next one is stored.
+  #[tokio::test]
+  async fn a_transaction_is_announced_before_the_next_one_in_its_batch_is_stored() {
+    let repo = memory_repo().await;
+    let (batch, mut verdicts) = deliveries(vec![sized(MAX_BATCH_BYTES), sized(MAX_BATCH_BYTES)]);
+    let second_verdict = std::sync::Mutex::new(verdicts.remove(1));
+    let second_decided_at_first_announce = std::sync::Mutex::new(None);
+
+    store_and_announce(&repo, batch, &|_| {
+      let mut decided = second_decided_at_first_announce.lock().unwrap();
+      if decided.is_none() {
+        *decided = Some(second_verdict.lock().unwrap().try_recv().is_ok());
+      }
+    })
+    .await;
+
+    assert_eq!(
+      *second_decided_at_first_announce.lock().unwrap(),
+      Some(false)
+    );
+    assert_eq!(repo.count().await.unwrap(), 2);
   }
 
   /// A session that stopped waiting has already told the sender to retry.
