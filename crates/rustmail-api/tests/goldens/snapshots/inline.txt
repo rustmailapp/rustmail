@@ -1,0 +1,109 @@
+>>> GET /api/v1/messages/{msg:nested_related}/inline/logo@corpus.test
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 908
+content-security-policy: default-src 'none'
+content-type: image/png
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/logo.png (908 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/chart@corpus.test
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 708
+content-security-policy: default-src 'none'
+content-type: image/png
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/chart.png (708 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/spec@corpus.test
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 409
+content-security-policy: default-src 'none'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/spec.pdf (409 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/photo@corpus.test
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 500
+content-security-policy: default-src 'none'
+content-type: image/jpeg
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/photo.jpg (500 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/%3Clogo@corpus.test%3E
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/LOGO@corpus.test
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/missing@corpus.test
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/inline/logo@corpus.test
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/inline/logo@corpus.test
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+

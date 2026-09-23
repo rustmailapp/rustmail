@@ -1,0 +1,304 @@
+>>> GET /api/v1/assert/count
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?min=0
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?min=25
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?min=26
+<<< 417 Expectation Failed
+content-length: 76
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "expected_max": 9223372036854775807,
+  "expected_min": 26,
+  "ok": false
+}
+
+>>> GET /api/v1/assert/count?max=3
+<<< 417 Expectation Failed
+content-length: 57
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "expected_max": 3,
+  "expected_min": 1,
+  "ok": false
+}
+
+>>> GET /api/v1/assert/count?min=2&max=2
+<<< 417 Expectation Failed
+content-length: 57
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 25,
+  "expected_max": 2,
+  "expected_min": 2,
+  "ok": false
+}
+
+>>> GET /api/v1/assert/count?subject=welcome
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=WELCOME
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=100%25
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=off_now
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=off%5Fnow
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=%25
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=_
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 1,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?sender=example.com
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 20,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?sender=files@example.com&min=14
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 15,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?recipient=carol@example.test
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 2,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?recipient=CAROL
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 2,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=Base64&sender=files&recipient=bob
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 7,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?subject=nothing-matches
+<<< 417 Expectation Failed
+content-length: 74
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 0,
+  "expected_max": 9223372036854775807,
+  "expected_min": 1,
+  "ok": false
+}
+
+>>> GET /api/v1/assert/count?subject=nothing-matches&min=0&max=0
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 0,
+  "ok": true
+}
+
+>>> GET /api/v1/assert/count?min=abc
+<<< 400 Bad Request
+content-length: 70
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Failed to deserialize query string: min: invalid digit found in string
+

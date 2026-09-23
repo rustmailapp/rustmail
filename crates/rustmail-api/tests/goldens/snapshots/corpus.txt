@@ -1,0 +1,52 @@
+welcome sender=alice@example.com recipients=["bob@example.test"] raw=273 bytes fnv1a64=ce627e6e575db0c9
+newsletter_html sender=news@example.org recipients=["bob@example.test"] raw=331 bytes fnv1a64=b089e363511f0372
+receipt_alternative sender=shop@example.net recipients=["carol@example.test", "dave@example.test"] raw=460 bytes fnv1a64=422685547443aefd
+latin1_subject sender=chef@example.fr recipients=["bob@example.test"] raw=327 bytes fnv1a64=0c9783c1388f7131
+invoice_reminder sender=billing@example.com recipients=["bob@example.test"] raw=283 bytes fnv1a64=1e16b3805b7c891a
+auth_headers sender=sender@example.com recipients=["bob@example.test"] raw=719 bytes fnv1a64=ea599cd220350d09
+folded_headers sender=relay@example.net recipients=["bob@example.test"] raw=461 bytes fnv1a64=6589814704e1eadc
+no_subject_no_content_type sender=quiet@example.com recipients=["bob@example.test"] raw=205 bytes fnv1a64=b860fe224b6b9811
+like_wildcards_subject sender=promo@example.org recipients=["Carol@Example.Test"] raw=245 bytes fnv1a64=825272b956e4f55c
+headers_only sender=empty@example.com recipients=["bob@example.test"] raw=160 bytes fnv1a64=bb10a30e9b62a963
+base64_crlf76 sender=files@example.com recipients=["bob@example.test"] raw=3252 bytes fnv1a64=50d91ba3f08bcb0e
+  payload report.pdf 2009 bytes fnv1a64=cdf7429524ae5555 served=Exact
+base64_unwrapped sender=files@example.com recipients=["bob@example.test"] raw=2498 bytes fnv1a64=e2870b5057c8d036
+  payload oneline.bin 1500 bytes fnv1a64=d9e8941ba16cf586 served=Exact
+base64_lf_only sender=files@example.com recipients=["bob@example.test"] raw=2092 bytes fnv1a64=9204848615760681
+  payload unix.bin 1200 bytes fnv1a64=c44168291ea70bf6 served=Exact
+base64_trailing_whitespace sender=files@example.com recipients=["bob@example.test"] raw=2067 bytes fnv1a64=1aebecb6c9dcf29b
+  payload padded.bin 1100 bytes fnv1a64=fbfdd53ae82d394c served=Exact
+base64_stray_bytes sender=files@example.com recipients=["bob@example.test"] raw=1759 bytes fnv1a64=fe0e961d74cdc08c
+  payload stray.bin 900 bytes fnv1a64=d56e077af2039d28 served=Pinned
+quoted_printable_octet_stream sender=files@example.com recipients=["bob@example.test"] raw=2175 bytes fnv1a64=57757d4ee650aab4
+  payload quoted.bin 700 bytes fnv1a64=4af243939601e4c6 served=Exact
+binary_and_8bit sender=files@example.com recipients=["bob@example.test"] raw=1605 bytes fnv1a64=930f8c79f7c6ee09
+  payload blob.bin 880 bytes fnv1a64=bf55d036634245bd served=Exact
+  payload eight.bin 57 bytes fnv1a64=46b144a01a34c333 served=Exact
+text_attachments sender=files@example.com recipients=["bob@example.test"] raw=1490 bytes fnv1a64=bf2aee56c984559e
+  payload data.csv 33 bytes fnv1a64=906f520ca3be04e9 served=Pinned
+  payload invite.ics 180 bytes fnv1a64=2bc47f0849f979bf served=Pinned
+  payload page.html 59 bytes fnv1a64=7a00a048398937e3 served=Pinned
+  payload latin1.csv 22 bytes fnv1a64=b29675e1bd552329 served=Pinned
+  payload broken.txt 20 bytes fnv1a64=ab4f37415e681f6c served=Pinned
+nested_related sender=files@example.com recipients=["bob@example.test"] raw=7350 bytes fnv1a64=f2350081f88dad28
+  payload logo.png 908 bytes fnv1a64=b01262390d125223 served=Exact
+  payload chart.png 708 bytes fnv1a64=d0457600f46687b6 served=Exact
+  payload logo-dup.gif 306 bytes fnv1a64=21648b2c93750c10 served=Exact
+  payload spec.pdf 409 bytes fnv1a64=cc42162730b4399b served=Exact
+  payload photo.jpg 500 bytes fnv1a64=0a705f3a0fb57ddc served=Exact
+  payload report.pdf 1309 bytes fnv1a64=a64252ff344ecdb8 served=Exact
+rfc822_plain sender=files@example.com recipients=["bob@example.test"] raw=645 bytes fnv1a64=12762513738d3589
+  payload forwarded.eml 184 bytes fnv1a64=01aebc2be1191453 served=Exact
+rfc822_base64 sender=files@example.com recipients=["bob@example.test"] raw=748 bytes fnv1a64=3403689c8c04ac47
+  payload encoded.eml 181 bytes fnv1a64=7f079fd5ebb935f0 served=Exact
+digest_without_content_types sender=files@example.com recipients=["bob@example.test"] raw=456 bytes fnv1a64=a066b339cb9b6e04
+  payload digest item one 71 bytes fnv1a64=9ecf914a1e3853a4 served=Pinned
+  payload digest item two 72 bytes fnv1a64=c897bd0cdededdfc served=Pinned
+part_without_content_type sender=files@example.com recipients=["bob@example.test"] raw=467 bytes fnv1a64=6bf4905d0ddd51d9
+  payload notes.txt 42 bytes fnv1a64=d421d55c08114e20 served=Pinned
+base64_malformed sender=files@example.com recipients=["bob@example.test"] raw=541 bytes fnv1a64=cf888bf0c2bb6706
+  payload malformed.bin 29 bytes fnv1a64=4deefce439a9f053 served=Pinned
+large_10mib sender=files@example.com recipients=["bob@example.test"] raw=10469086 bytes fnv1a64=73783e369ef11bb5
+  payload big.bin 7000000 bytes fnv1a64=e1037a84a5ec977b served=Exact
+  payload filler.zip 650000 bytes fnv1a64=180aa43d2ab5cbda served=Exact

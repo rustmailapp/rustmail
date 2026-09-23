@@ -1,0 +1,101 @@
+>>> DELETE /api/v1/messages
+<<< 200 OK
+content-length: 14
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "deleted": 25
+}
+
+>>> GET /api/v1/messages
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+>>> GET /api/v1/messages?q=planning
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/assert/count?min=0
+<<< 200 OK
+content-length: 21
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 0,
+  "ok": true
+}
+
+>>> DELETE /api/v1/messages
+<<< 200 OK
+content-length: 13
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "deleted": 0
+}
+

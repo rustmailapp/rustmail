@@ -1,0 +1,465 @@
+## full source of every message
+
+>>> GET /api/v1/messages/{msg:welcome}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 273
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:welcome (273 bytes)
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 331
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:newsletter_html (331 bytes)
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 460
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:receipt_alternative (460 bytes)
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 327
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:latin1_subject (327 bytes)
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 283
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:invoice_reminder (283 bytes)
+
+>>> GET /api/v1/messages/{msg:auth_headers}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 719
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:auth_headers (719 bytes)
+
+>>> GET /api/v1/messages/{msg:folded_headers}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 461
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:folded_headers (461 bytes)
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 205
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:no_subject_no_content_type (205 bytes)
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 245
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:like_wildcards_subject (245 bytes)
+
+>>> GET /api/v1/messages/{msg:headers_only}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 160
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:headers_only (160 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 3252
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_crlf76 (3252 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2498
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_unwrapped (2498 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2092
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_lf_only (2092 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2067
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_trailing_whitespace (2067 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 1759
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_stray_bytes (1759 bytes)
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2175
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:quoted_printable_octet_stream (2175 bytes)
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 1605
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:binary_and_8bit (1605 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 1490
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:text_attachments (1490 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 7350
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:nested_related (7350 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 645
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:rfc822_plain (645 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 748
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:rfc822_base64 (748 bytes)
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 456
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:digest_without_content_types (456 bytes)
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 467
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:part_without_content_type (467 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 541
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_malformed (541 bytes)
+
+>>> GET /api/v1/messages/{msg:large_10mib}/raw
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 10469086
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:large_10mib (10469086 bytes)
+
+## limit
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=1
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 1
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| F
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=10
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 10
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| From: alic
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=100000000
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 273
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:welcome (273 bytes)
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=0
+<<< 400 Bad Request
+content-length: 52
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "limit must be a positive number of bytes"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=-1
+<<< 400 Bad Request
+content-length: 52
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "limit must be a positive number of bytes"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=abc
+<<< 400 Bad Request
+content-length: 52
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "limit must be a positive number of bytes"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=1.5
+<<< 400 Bad Request
+content-length: 52
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "limit must be a positive number of bytes"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/raw?limit=
+<<< 400 Bad Request
+content-length: 52
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "limit must be a positive number of bytes"
+}
+
+>>> GET /api/v1/messages/{msg:large_10mib}/raw?limit=64
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 64
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| From: files@example.com\r\n
+| To: bob@example.test\r\n
+| Subject: Ten mebi
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/raw?limit=40
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| From: files@example.com\n
+| To: bob@example.
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/raw
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/raw?limit=5
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+

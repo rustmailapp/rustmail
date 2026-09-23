@@ -1,0 +1,1562 @@
+## terms
+
+>>> GET /api/v1/messages?q=planning
+<<< 200 OK
+cache-control: no-store
+content-length: 1092
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:nested_related}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 7350,
+      "subject": "Nested related with cid images",
+      "tags": [
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:newsletter_html}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "news@example.org",
+      "size": 331,
+      "subject": "Weekly digest: Rust tips",
+      "tags": [
+        "newsletter"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 4
+}
+
+>>> GET /api/v1/messages?q=welcome
+<<< 200 OK
+cache-control: no-store
+content-length: 295
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=alice@example.com
+<<< 200 OK
+cache-control: no-store
+content-length: 295
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=bob@example.test
+<<< 200 OK
+cache-control: no-store
+content-length: 5952
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:large_10mib}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 10469086,
+      "subject": "Ten mebibytes with a seven megabyte attachment",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_malformed}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 541,
+      "subject": "Malformed base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:part_without_content_type}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 467,
+      "subject": "Attachment with no Content-Type",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:digest_without_content_types}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 456,
+      "subject": "Digest whose parts have no Content-Type",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:rfc822_base64}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 748,
+      "subject": "Forwarded message in base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:rfc822_plain}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 645,
+      "subject": "Forwarded message inline",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:nested_related}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 7350,
+      "subject": "Nested related with cid images",
+      "tags": [
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:text_attachments}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1490,
+      "subject": "Text attachments in several charsets",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:binary_and_8bit}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1605,
+      "subject": "Binary and 8bit transfer encodings",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:quoted_printable_octet_stream}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2175,
+      "subject": "Quoted-printable octet-stream",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_stray_bytes}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1759,
+      "subject": "Base64 with stray non-alphabet bytes",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_trailing_whitespace}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2067,
+      "subject": "Base64 with trailing whitespace",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_lf_only}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2092,
+      "subject": "Base64 with LF-only line endings",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_unwrapped}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2498,
+      "subject": "Base64 on a single line",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:headers_only}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "empty@example.com",
+      "size": 160,
+      "subject": "Headers only",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:no_subject_no_content_type}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "quiet@example.com",
+      "size": 205,
+      "subject": null,
+      "tags": [
+        "personal"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:folded_headers}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "relay@example.net",
+      "size": 461,
+      "subject": "A subject folded across two lines",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:auth_headers}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "sender@example.com",
+      "size": 719,
+      "subject": "Signed and sealed",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:latin1_subject}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "chef@example.fr",
+      "size": 327,
+      "subject": "Café crème",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:newsletter_html}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "news@example.org",
+      "size": 331,
+      "subject": "Weekly digest: Rust tips",
+      "tags": [
+        "newsletter"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 23
+}
+
+>>> GET /api/v1/messages?q=carol
+<<< 200 OK
+cache-control: no-store
+content-length: 586
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:like_wildcards_subject}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "Carol@Example.Test"
+      ],
+      "sender": "promo@example.org",
+      "size": 245,
+      "subject": "Discount 100% off_now",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:receipt_alternative}",
+      "is_read": true,
+      "is_starred": true,
+      "recipients": [
+        "carol@example.test",
+        "dave@example.test"
+      ],
+      "sender": "shop@example.net",
+      "size": 460,
+      "subject": "Your receipt #4471",
+      "tags": [
+        "work",
+        "finance"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 2
+}
+
+>>> GET /api/v1/messages?q=receipt
+<<< 200 OK
+cache-control: no-store
+content-length: 335
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:receipt_alternative}",
+      "is_read": true,
+      "is_starred": true,
+      "recipients": [
+        "carol@example.test",
+        "dave@example.test"
+      ],
+      "sender": "shop@example.net",
+      "size": 460,
+      "subject": "Your receipt #4471",
+      "tags": [
+        "work",
+        "finance"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=4471
+<<< 200 OK
+cache-control: no-store
+content-length: 335
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:receipt_alternative}",
+      "is_read": true,
+      "is_starred": true,
+      "recipients": [
+        "carol@example.test",
+        "dave@example.test"
+      ],
+      "sender": "shop@example.net",
+      "size": 460,
+      "subject": "Your receipt #4471",
+      "tags": [
+        "work",
+        "finance"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=Caf%C3%A9
+<<< 200 OK
+cache-control: no-store
+content-length: 292
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:latin1_subject}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "chef@example.fr",
+      "size": 327,
+      "subject": "Café crème",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=attached
+<<< 200 OK
+cache-control: no-store
+content-length: 1134
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:large_10mib}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 10469086,
+      "subject": "Ten mebibytes with a seven megabyte attachment",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:text_attachments}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1490,
+      "subject": "Text attachments in several charsets",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 4
+}
+
+>>> GET /api/v1/messages?q=base64
+<<< 200 OK
+cache-control: no-store
+content-length: 1848
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_malformed}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 541,
+      "subject": "Malformed base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:rfc822_base64}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 748,
+      "subject": "Forwarded message in base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_stray_bytes}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1759,
+      "subject": "Base64 with stray non-alphabet bytes",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_trailing_whitespace}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2067,
+      "subject": "Base64 with trailing whitespace",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_lf_only}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2092,
+      "subject": "Base64 with LF-only line endings",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_unwrapped}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 2498,
+      "subject": "Base64 on a single line",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 7
+}
+
+>>> GET /api/v1/messages?q=digest
+<<< 200 OK
+cache-control: no-store
+content-length: 583
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:digest_without_content_types}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 456,
+      "subject": "Digest whose parts have no Content-Type",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:newsletter_html}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "news@example.org",
+      "size": 331,
+      "subject": "Weekly digest: Rust tips",
+      "tags": [
+        "newsletter"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 2
+}
+
+>>> GET /api/v1/messages?q=forwarded
+<<< 200 OK
+cache-control: no-store
+content-length: 559
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:rfc822_base64}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 748,
+      "subject": "Forwarded message in base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:rfc822_plain}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 645,
+      "subject": "Forwarded message inline",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 2
+}
+
+>>> GET /api/v1/messages?q=Discount%20100%25
+<<< 200 OK
+cache-control: no-store
+content-length: 305
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:like_wildcards_subject}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "Carol@Example.Test"
+      ],
+      "sender": "promo@example.org",
+      "size": 245,
+      "subject": "Discount 100% off_now",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=off_now
+<<< 200 OK
+cache-control: no-store
+content-length: 305
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:like_wildcards_subject}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "Carol@Example.Test"
+      ],
+      "sender": "promo@example.org",
+      "size": 245,
+      "subject": "Discount 100% off_now",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=folded
+<<< 200 OK
+cache-control: no-store
+content-length: 315
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:folded_headers}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "relay@example.net",
+      "size": 461,
+      "subject": "A subject folded across two lines",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=zzzz-no-match
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+## sanitized to nothing
+
+>>> GET /api/v1/messages?q=
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+>>> GET /api/v1/messages?q=%21%21%21
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+>>> GET /api/v1/messages?q=%22%2A%28%29
+<<< 200 OK
+cache-control: no-store
+content-length: 55
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [],
+  "next_cursor": null,
+  "total": 0
+}
+
+## search with filters
+
+>>> GET /api/v1/messages?q=planning&starred=true
+<<< 200 OK
+cache-control: no-store
+content-length: 588
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:nested_related}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 7350,
+      "subject": "Nested related with cid images",
+      "tags": [
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 2
+}
+
+>>> GET /api/v1/messages?q=planning&unread=true
+<<< 200 OK
+cache-control: no-store
+content-length: 851
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:nested_related}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 7350,
+      "subject": "Nested related with cid images",
+      "tags": [
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:newsletter_html}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "news@example.org",
+      "size": 331,
+      "subject": "Weekly digest: Rust tips",
+      "tags": [
+        "newsletter"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 3
+}
+
+>>> GET /api/v1/messages?q=attached&has_attachments=true
+<<< 200 OK
+cache-control: no-store
+content-length: 865
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:large_10mib}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 10469086,
+      "subject": "Ten mebibytes with a seven megabyte attachment",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:text_attachments}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1490,
+      "subject": "Text attachments in several charsets",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 3
+}
+
+>>> GET /api/v1/messages?q=attached&tag=work
+<<< 200 OK
+cache-control: no-store
+content-length: 856
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:text_attachments}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1490,
+      "subject": "Text attachments in several charsets",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 3
+}
+
+>>> GET /api/v1/messages?q=Invoice&tag=urgent&starred=true
+<<< 200 OK
+cache-control: no-store
+content-length: 323
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?q=planning&offset=1&limit=1
+<<< 200 OK
+cache-control: no-store
+content-length: 346
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 1,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": "{msg:invoice_reminder}",
+  "total": 4
+}
+
+## search cursor chain, limit 3
+
+>>> GET /api/v1/messages?q=attached&limit=3
+<<< 200 OK
+cache-control: no-store
+content-length: 888
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 3,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:large_10mib}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 10469086,
+      "subject": "Ten mebibytes with a seven megabyte attachment",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:text_attachments}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 1490,
+      "subject": "Text attachments in several charsets",
+      "tags": [
+        "work"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_crlf76}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 3252,
+      "subject": "Base64 wrapped at 76 with CRLF",
+      "tags": [
+        "work"
+      ]
+    }
+  ],
+  "next_cursor": "{msg:base64_crlf76}",
+  "total": 4
+}
+
+>>> GET /api/v1/messages?q=attached&limit=3&before={msg:base64_crlf76}
+<<< 200 OK
+cache-control: no-store
+content-length: 322
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 3,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 4
+}
+

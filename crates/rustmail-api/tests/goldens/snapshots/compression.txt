@@ -1,0 +1,78 @@
+>>> GET /api/v1/messages
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: no-store
+content-encoding: gzip
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+
+>>> GET /api/v1/messages/{msg:nested_related}
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: no-store
+content-encoding: gzip
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+
+>>> GET /api/v1/messages/{msg:nested_related}/raw
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-encoding: gzip
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/0}
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="logo.png"
+content-length: 908
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/logo@corpus.test
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 908
+content-security-policy: default-src 'none'
+content-type: image/png
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+
+>>> GET /api/v1/messages/{msg:nested_related}/export
+> accept-encoding: gzip
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:nested_related}.eml"
+content-encoding: gzip
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (not rendered)
+

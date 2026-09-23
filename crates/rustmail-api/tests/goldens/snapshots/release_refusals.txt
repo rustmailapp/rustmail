@@ -1,0 +1,145 @@
+## release disabled
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"127.0.0.1"}
+<<< 403 Forbidden
+content-length: 74
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Email release is disabled. Configure --release-host to enable."
+}
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"port":25}
+<<< 422 Unprocessable Entity
+content-length: 98
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Failed to deserialize the JSON body into the target type: missing field `host` at line 1 column 11
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> {"host":"x"}
+<<< 415 Unsupported Media Type
+content-length: 54
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Expected request with `Content-Type: application/json`
+
+## release to 127.0.0.1:2525 configured
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"example.com"}
+<<< 403 Forbidden
+content-length: 62
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Release only allowed to configured host: 127.0.0.1"
+}
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"127.0.0.1","port":25}
+<<< 403 Forbidden
+content-length: 57
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Release only allowed on configured port: 2525"
+}
+
+>>> POST /api/v1/messages/01J0000000000000000000000Z/release
+> content-type: application/json
+> {"host":"127.0.0.1"}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+## release to 127.0.0.1 on any allowed port
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"127.0.0.1","port":1025}
+<<< 400 Bad Request
+content-length: 70
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Port 1025 is not an allowed SMTP port (25, 465, 587, 2525)"
+}
+
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"127.0.0.1","port":0}
+<<< 400 Bad Request
+content-length: 67
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Port 0 is not an allowed SMTP port (25, 465, 587, 2525)"
+}
+
+message inserted with no envelope recipients:
+>>> POST /api/v1/messages/{msg:no_recipients}/release
+> content-type: application/json
+> {"host":"127.0.0.1","port":2525}
+<<< 400 Bad Request
+content-length: 75
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Invalid envelope: missing destination address, invalid envelope"
+}
+

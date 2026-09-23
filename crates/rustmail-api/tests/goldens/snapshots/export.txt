@@ -1,0 +1,1150 @@
+>>> GET /api/v1/messages/{msg:welcome}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:welcome}.eml"
+content-length: 273
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:welcome (273 bytes)
+
+>>> GET /api/v1/messages/{msg:welcome}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:welcome}.json"
+content-length: 476
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:newsletter_html}.eml"
+content-length: 331
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:newsletter_html (331 bytes)
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:newsletter_html}.json"
+content-length: 441
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:newsletter_html}",
+  "sender": "news@example.org",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Weekly digest: Rust tips",
+  "text_body": "Weekly digestRust tips and tricks for planning.\n",
+  "html_body": "<html><body><h1>Weekly digest</h1><p>Rust tips and <b>tricks</b> for planning.</p></body></html>\r\n",
+  "size": 331,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [
+    "newsletter"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:receipt_alternative}.eml"
+content-length: 460
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:receipt_alternative (460 bytes)
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:receipt_alternative}.json"
+content-length: 394
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:receipt_alternative}",
+  "sender": "shop@example.net",
+  "recipients": [
+    "carol@example.test",
+    "dave@example.test"
+  ],
+  "subject": "Your receipt #4471",
+  "text_body": "Receipt 4471: total 12.50 EUR.",
+  "html_body": "<p>Receipt <strong>4471</strong>: total 12.50 EUR.</p>",
+  "size": 460,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": true,
+  "tags": [
+    "work",
+    "finance"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:latin1_subject}.eml"
+content-length: 327
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:latin1_subject (327 bytes)
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:latin1_subject}.json"
+content-length: 368
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:latin1_subject}",
+  "sender": "chef@example.fr",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Café crème",
+  "text_body": "Un café crème pour la réunion.\r\n",
+  "html_body": "<html><body>Un café crème pour la réunion.<br/></body></html>",
+  "size": 327,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:invoice_reminder}.eml"
+content-length: 283
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:invoice_reminder (283 bytes)
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:invoice_reminder}.json"
+content-length: 455
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:invoice_reminder}",
+  "sender": "billing@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Invoice 2026-091 reminder",
+  "text_body": "Invoice 2026-091 is due. Planning budget attached separately.\r\n",
+  "html_body": "<html><body>Invoice 2026-091 is due. Planning budget attached separately.<br/></body></html>",
+  "size": 283,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": true,
+  "tags": [
+    "work",
+    "urgent"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:auth_headers}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:auth_headers}.eml"
+content-length: 719
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:auth_headers (719 bytes)
+
+>>> GET /api/v1/messages/{msg:auth_headers}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:auth_headers}.json"
+content-length: 348
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:auth_headers}",
+  "sender": "sender@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Signed and sealed",
+  "text_body": "Authenticated body.\r\n",
+  "html_body": "<html><body>Authenticated body.<br/></body></html>",
+  "size": 719,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:folded_headers}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:folded_headers}.eml"
+content-length: 461
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:folded_headers (461 bytes)
+
+>>> GET /api/v1/messages/{msg:folded_headers}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:folded_headers}.json"
+content-length: 365
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:folded_headers}",
+  "sender": "relay@example.net",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "A subject folded across two lines",
+  "text_body": "Folded headers body.\r\n",
+  "html_body": "<html><body>Folded headers body.<br/></body></html>",
+  "size": 461,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:no_subject_no_content_type}.eml"
+content-length: 205
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:no_subject_no_content_type (205 bytes)
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:no_subject_no_content_type}.json"
+content-length: 407
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:no_subject_no_content_type}",
+  "sender": "quiet@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": null,
+  "text_body": "A message with neither a subject nor a content type.\r\n",
+  "html_body": "<html><body>A message with neither a subject nor a content type.<br/></body></html>",
+  "size": 205,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [
+    "personal"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:like_wildcards_subject}.eml"
+content-length: 245
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:like_wildcards_subject (245 bytes)
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:like_wildcards_subject}.json"
+content-length: 391
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:like_wildcards_subject}",
+  "sender": "promo@example.org",
+  "recipients": [
+    "Carol@Example.Test"
+  ],
+  "subject": "Discount 100% off_now",
+  "text_body": "Percent and underscore in the subject.\r\n",
+  "html_body": "<html><body>Percent and underscore in the subject.<br/></body></html>",
+  "size": 245,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:headers_only}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:headers_only}.eml"
+content-length: 160
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:headers_only (160 bytes)
+
+>>> GET /api/v1/messages/{msg:headers_only}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:headers_only}.json"
+content-length: 295
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:headers_only}",
+  "sender": "empty@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Headers only",
+  "text_body": "",
+  "html_body": "<html><body></body></html>",
+  "size": 160,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_crlf76}.eml"
+content-length: 3252
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_crlf76 (3252 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_crlf76}.json"
+content-length: 351
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_crlf76}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Base64 wrapped at 76 with CRLF",
+  "text_body": "Report attached.",
+  "html_body": "<html><body>Report attached.</body></html>",
+  "size": 3252,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [
+    "work"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_unwrapped}.eml"
+content-length: 2498
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_unwrapped (2498 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_unwrapped}.json"
+content-length: 348
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_unwrapped}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Base64 on a single line",
+  "text_body": "One long base64 line.",
+  "html_body": "<html><body>One long base64 line.</body></html>",
+  "size": 2498,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_lf_only}.eml"
+content-length: 2092
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_lf_only (2092 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_lf_only}.json"
+content-length: 372
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_lf_only}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Base64 with LF-only line endings",
+  "text_body": "Unix line endings throughout.",
+  "html_body": "<html><body>Unix line endings throughout.</body></html>",
+  "size": 2092,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": true,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_trailing_whitespace}.eml"
+content-length: 2067
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_trailing_whitespace (2067 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_trailing_whitespace}.json"
+content-length: 380
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_trailing_whitespace}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Base64 with trailing whitespace",
+  "text_body": "Every base64 line ends in blanks.",
+  "html_body": "<html><body>Every base64 line ends in blanks.</body></html>",
+  "size": 2067,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_stray_bytes}.eml"
+content-length: 1759
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_stray_bytes (1759 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_stray_bytes}.json"
+content-length: 409
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_stray_bytes}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Base64 with stray non-alphabet bytes",
+  "text_body": "A dash and an asterisk sit inside the base64.",
+  "html_body": "<html><body>A dash and an asterisk sit inside the base64.</body></html>",
+  "size": 1759,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:quoted_printable_octet_stream}.eml"
+content-length: 2175
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:quoted_printable_octet_stream (2175 bytes)
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:quoted_printable_octet_stream}.json"
+content-length: 382
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:quoted_printable_octet_stream}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Quoted-printable octet-stream",
+  "text_body": "Binary content in quoted-printable.",
+  "html_body": "<html><body>Binary content in quoted-printable.</body></html>",
+  "size": 2175,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:binary_and_8bit}.eml"
+content-length: 1605
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:binary_and_8bit (1605 bytes)
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:binary_and_8bit}.json"
+content-length: 351
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:binary_and_8bit}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Binary and 8bit transfer encodings",
+  "text_body": "Raw bytes follow.",
+  "html_body": "<html><body>Raw bytes follow.</body></html>",
+  "size": 1605,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:text_attachments}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:text_attachments}.eml"
+content-length: 1490
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:text_attachments (1490 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:text_attachments}.json"
+content-length: 374
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:text_attachments}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Text attachments in several charsets",
+  "text_body": "See the attached exports.",
+  "html_body": "<html><body>See the attached exports.</body></html>",
+  "size": 1490,
+  "has_attachments": true,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [
+    "work"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:nested_related}.eml"
+content-length: 7350
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:nested_related (7350 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:nested_related}.json"
+content-length: 426
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:nested_related}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Nested related with cid images",
+  "text_body": "Plain alternative of the planning update.",
+  "html_body": "<p>Planning update</p><img src=\"cid:logo@corpus.test\"><img src=\"cid:chart@corpus.test\">",
+  "size": 7350,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": true,
+  "tags": [
+    "urgent"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:rfc822_plain}.eml"
+content-length: 645
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:rfc822_plain (645 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:rfc822_plain}.json"
+content-length: 358
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:rfc822_plain}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Forwarded message inline",
+  "text_body": "Forwarding the note below.",
+  "html_body": "<html><body>Forwarding the note below.</body></html>",
+  "size": 645,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:rfc822_base64}.eml"
+content-length: 748
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:rfc822_base64 (748 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:rfc822_base64}.json"
+content-length: 377
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:rfc822_base64}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Forwarded message in base64",
+  "text_body": "Forwarding the encoded note below.",
+  "html_body": "<html><body>Forwarding the encoded note below.</body></html>",
+  "size": 748,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:digest_without_content_types}.eml"
+content-length: 456
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:digest_without_content_types (456 bytes)
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:digest_without_content_types}.json"
+content-length: 299
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:digest_without_content_types}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Digest whose parts have no Content-Type",
+  "text_body": null,
+  "html_body": null,
+  "size": 456,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:part_without_content_type}.eml"
+content-length: 467
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:part_without_content_type (467 bytes)
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:part_without_content_type}.json"
+content-length: 377
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:part_without_content_type}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Attachment with no Content-Type",
+  "text_body": "The attachment declares no type.",
+  "html_body": "<html><body>The attachment declares no type.</body></html>",
+  "size": 467,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:base64_malformed}.eml"
+content-length: 541
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:base64_malformed (541 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:base64_malformed}.json"
+content-length: 368
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:base64_malformed}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Malformed base64",
+  "text_body": "The attachment is not valid base64.",
+  "html_body": "<html><body>The attachment is not valid base64.</body></html>",
+  "size": 541,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> GET /api/v1/messages/{msg:large_10mib}/export
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:large_10mib}.eml"
+content-length: 10469086
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:large_10mib (10469086 bytes)
+
+>>> GET /api/v1/messages/{msg:large_10mib}/export?format=json
+<<< 200 OK
+cache-control: no-store
+content-disposition: attachment; filename="{msg:large_10mib}.json"
+content-length: 393
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:large_10mib}",
+  "sender": "files@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Ten mebibytes with a seven megabyte attachment",
+  "text_body": "The large archive is attached.",
+  "html_body": "<html><body>The large archive is attached.</body></html>",
+  "size": 10469086,
+  "has_attachments": true,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+## errors
+
+>>> GET /api/v1/messages/{msg:welcome}/export?format=eml
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="{msg:welcome}.eml"
+content-length: 273
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: message/rfc822
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == raw:welcome (273 bytes)
+
+>>> GET /api/v1/messages/{msg:welcome}/export?format=xml
+<<< 400 Bad Request
+content-length: 42
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "format must be 'eml' or 'json'"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/export?format=
+<<< 400 Bad Request
+content-length: 42
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "format must be 'eml' or 'json'"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/export
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/export?format=json
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/export?format=xml
+<<< 400 Bad Request
+content-length: 42
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "format must be 'eml' or 'json'"
+}
+
