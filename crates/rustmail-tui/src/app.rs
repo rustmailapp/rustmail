@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -68,6 +69,13 @@ impl PendingDeltas {
   }
 }
 
+/// The list order and cursor captured before the list mutates, so the cursor
+/// can be put back on the same message once it has.
+struct SelectionAnchor {
+  ids: Vec<String>,
+  index: usize,
+}
+
 pub struct App {
   pub running: bool,
   pub mode: Mode,
@@ -114,6 +122,7 @@ pub struct App {
   error_ticks: u16,
   pub loading: bool,
   view_stale: bool,
+  view_changed: bool,
   last_fetch_at: Option<Instant>,
 
   pub ws_connected: bool,
@@ -175,6 +184,7 @@ impl App {
       error_ticks: 0,
       loading: false,
       view_stale: false,
+      view_changed: false,
       last_fetch_at: None,
 
       ws_connected: false,
@@ -447,7 +457,7 @@ impl App {
     if self.preview_raw.is_some() {
       return;
     }
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       return;
     };
     let id = msg.id.clone();
@@ -477,8 +487,7 @@ impl App {
         self.search_query = self.search_input.clone();
         self.mode = Mode::Normal;
         self.offset = 0;
-        self.selected = 0;
-        self.sync_list_state();
+        self.view_changed = true;
         self.fetch_messages().await;
       }
       KeyCode::Esc => {
@@ -486,8 +495,7 @@ impl App {
           self.search_query.clear();
           self.mode = Mode::Normal;
           self.offset = 0;
-          self.selected = 0;
-          self.sync_list_state();
+          self.view_changed = true;
           self.fetch_messages().await;
         } else {
           self.mode = Mode::Normal;
@@ -662,6 +670,54 @@ impl App {
     self.select_message(idx)
   }
 
+  fn selected_message(&self) -> Option<&MessageSummary> {
+    self.messages.get(self.selected)
+  }
+
+  fn capture_selection(&self) -> SelectionAnchor {
+    SelectionAnchor {
+      ids: self.messages.iter().map(|m| m.id.clone()).collect(),
+      index: self.selected,
+    }
+  }
+
+  /// An anchor that keeps the selected message if the new list still holds
+  /// it and otherwise lands on the top row, for when the view itself changed.
+  fn capture_selected_only(&self) -> SelectionAnchor {
+    SelectionAnchor {
+      ids: self
+        .selected_message()
+        .map(|m| m.id.clone())
+        .into_iter()
+        .collect(),
+      index: 0,
+    }
+  }
+
+  /// Re-resolves the cursor against the mutated list and, when it now rests
+  /// on a different message, drops the old preview and loads the new one.
+  /// Returns whether the selected message changed.
+  async fn restore_selection(&mut self, anchor: SelectionAnchor) -> bool {
+    let previous = anchor.ids.get(anchor.index);
+    self.selected = resolve_selection(&anchor.ids, anchor.index, &self.messages);
+    self.sync_list_state();
+    let moved = self.selected_message().map(|m| &m.id) != previous;
+    if moved {
+      self.retarget_preview().await;
+    }
+    moved
+  }
+
+  async fn retarget_preview(&mut self) {
+    self.preview = None;
+    self.last_preview_id = None;
+    self.pending_preview = None;
+    self.preview_raw = None;
+    self.preview_raw_notice = None;
+    self.pending_raw = None;
+    self.load_preview().await;
+  }
+
   pub fn sync_list_state(&mut self) {
     self.list_state.select(Some(self.selected));
     self.list_scrollbar_state = self
@@ -707,6 +763,11 @@ impl App {
     let pending = std::mem::take(&mut self.pending_deltas);
     match result {
       Ok(resp) => {
+        let anchor = if std::mem::take(&mut self.view_changed) {
+          self.capture_selected_only()
+        } else {
+          self.capture_selection()
+        };
         self.messages = resp.messages;
         self.total = resp.total;
         self.view_stale = pending.overflowed;
@@ -715,11 +776,9 @@ impl App {
         }
         self.error = None;
         self.error_ticks = 0;
-        if self.selected >= self.messages.len() && !self.messages.is_empty() {
-          self.selected = self.messages.len() - 1;
+        if !self.restore_selection(anchor).await {
+          self.load_preview().await;
         }
-        self.sync_list_state();
-        self.load_preview().await;
       }
       Err(e) => {
         self.set_error(format!("Failed to fetch messages: {}", e));
@@ -728,7 +787,7 @@ impl App {
   }
 
   async fn load_preview(&mut self) {
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       self.preview = None;
       self.last_preview_id = None;
       self.pending_preview = None;
@@ -810,7 +869,7 @@ impl App {
   }
 
   async fn toggle_read(&mut self) {
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       return;
     };
     let new_state = !msg.is_read;
@@ -819,7 +878,7 @@ impl App {
   }
 
   async fn toggle_star(&mut self) {
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       return;
     };
     let new_state = !msg.is_starred;
@@ -849,7 +908,7 @@ impl App {
   }
 
   async fn delete_selected(&mut self) {
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       return;
     };
     let id = msg.id.clone();
@@ -864,17 +923,9 @@ impl App {
     if result.is_err() {
       return;
     }
+    let anchor = self.capture_selection();
     self.messages.retain(|m| m.id != id);
-    if self.selected >= self.messages.len() && self.selected > 0 {
-      self.selected -= 1;
-    }
-    self.last_preview_id = None;
-    self.pending_preview = None;
-    self.preview_raw = None;
-    self.preview_raw_notice = None;
-    self.pending_raw = None;
-    self.sync_list_state();
-    self.load_preview().await;
+    self.restore_selection(anchor).await;
   }
 
   async fn delete_all(&mut self) {
@@ -889,19 +940,13 @@ impl App {
     if result.is_err() {
       return;
     }
+    let anchor = self.capture_selection();
     self.messages.clear();
-    self.selected = 0;
-    self.preview = None;
-    self.last_preview_id = None;
-    self.pending_preview = None;
-    self.preview_raw = None;
-    self.preview_raw_notice = None;
-    self.pending_raw = None;
-    self.sync_list_state();
+    self.restore_selection(anchor).await;
   }
 
   async fn show_raw(&mut self) {
-    let Some(msg) = self.messages.get(self.selected) else {
+    let Some(msg) = self.selected_message() else {
       return;
     };
     let id = msg.id.clone();
@@ -968,13 +1013,7 @@ impl App {
     let new_offset = self.offset + self.page_size;
     if new_offset < self.total {
       self.offset = new_offset;
-      self.selected = 0;
-      self.last_preview_id = None;
-      self.pending_preview = None;
-      self.preview_raw = None;
-      self.preview_raw_notice = None;
-      self.pending_raw = None;
-      self.sync_list_state();
+      self.view_changed = true;
       self.fetch_messages().await;
     }
   }
@@ -982,13 +1021,7 @@ impl App {
   async fn prev_page(&mut self) {
     if self.offset > 0 {
       self.offset = (self.offset - self.page_size).max(0);
-      self.selected = 0;
-      self.last_preview_id = None;
-      self.pending_preview = None;
-      self.preview_raw = None;
-      self.preview_raw_notice = None;
-      self.pending_raw = None;
-      self.sync_list_state();
+      self.view_changed = true;
       self.fetch_messages().await;
     }
   }
@@ -1009,12 +1042,10 @@ impl App {
       WsEvent::MessageNew(summary) => {
         self.total += 1;
         if self.offset == 0 {
+          let anchor = self.capture_selection();
           self.messages.insert(0, summary);
-          if self.messages.len() > self.page_size as usize {
-            self.messages.pop();
-          }
-          self.selected = (self.selected + 1).min(self.messages.len().saturating_sub(1));
-          self.sync_list_state();
+          self.messages.truncate(self.page_size as usize);
+          self.restore_selection(anchor).await;
         }
       }
       WsEvent::MessageDelete { id } => {
@@ -1025,35 +1056,19 @@ impl App {
           self.view_stale = true;
         }
         if let Some(pos) = position {
+          let anchor = self.capture_selection();
           self.messages.remove(pos);
-          if self.selected >= self.messages.len() && self.selected > 0 {
-            self.selected -= 1;
-          }
-          self.sync_list_state();
-          if self.last_preview_id.as_deref() == Some(&id) {
-            self.last_preview_id = None;
-            self.pending_preview = None;
-            self.preview_raw = None;
-            self.preview_raw_notice = None;
-            self.pending_raw = None;
-            self.load_preview().await;
-          }
+          self.restore_selection(anchor).await;
         }
       }
       update @ (WsEvent::MessageRead { .. }
       | WsEvent::MessageStarred { .. }
       | WsEvent::MessageTags { .. }) => self.apply_update(update),
       WsEvent::MessagesClear => {
+        let anchor = self.capture_selection();
         self.messages.clear();
         self.total = 0;
-        self.selected = 0;
-        self.preview = None;
-        self.last_preview_id = None;
-        self.pending_preview = None;
-        self.preview_raw = None;
-        self.preview_raw_notice = None;
-        self.pending_raw = None;
-        self.sync_list_state();
+        self.restore_selection(anchor).await;
       }
     }
   }
@@ -1084,9 +1099,10 @@ impl App {
   }
 
   /// Re-applies a delta recorded during an in-flight fetch onto the snapshot
-  /// that fetch returned. Selection is left alone: the live handler already
-  /// shifted it when the delta first arrived. A delta whose effect on this
-  /// page cannot be decided locally marks the view stale instead of guessing.
+  /// that fetch returned. Selection is left alone: the caller re-resolves it
+  /// by message id once every delta has been replayed. A delta whose effect
+  /// on this page cannot be decided locally marks the view stale instead of
+  /// guessing.
   fn replay_delta(&mut self, delta: WsEvent) {
     match delta {
       WsEvent::MessageNew(summary) => {
@@ -1111,7 +1127,6 @@ impl App {
       WsEvent::MessagesClear => {
         self.messages.clear();
         self.total = 0;
-        self.selected = 0;
       }
       update => self.apply_update(update),
     }
@@ -1145,6 +1160,26 @@ fn raw_truncation_notice(size: i64, export_url: &str) -> Option<String> {
       export_url
     )
   })
+}
+
+/// Returns the index in `new` of the message that was selected at `index` in
+/// `old`. When that message is gone the cursor goes to the first message that
+/// followed it and survived, which is the row that took its place, then to
+/// the nearest surviving one above it, and finally to `index` clamped to the
+/// new list.
+fn resolve_selection(old: &[String], index: usize, new: &[MessageSummary]) -> usize {
+  let positions: HashMap<&str, usize> = new
+    .iter()
+    .enumerate()
+    .map(|(pos, m)| (m.id.as_str(), pos))
+    .collect();
+  let position_of = |id: &String| positions.get(id.as_str()).copied();
+  let (above, from_anchor) = old.split_at(index.min(old.len()));
+  from_anchor
+    .iter()
+    .find_map(position_of)
+    .or_else(|| above.iter().rev().find_map(position_of))
+    .unwrap_or_else(|| index.min(new.len().saturating_sub(1)))
 }
 
 async fn connect_ws(url: &str, tx: &mpsc::Sender<Event>) -> Result<()> {
@@ -2007,5 +2042,228 @@ mod tests {
 
     assert_eq!(app.preview_raw, None);
     assert_eq!(app.pending_raw, Some((RawTarget::Preview, 2)));
+  }
+
+  fn selected_id(app: &App) -> Option<&str> {
+    app.messages.get(app.selected).map(|m| m.id.as_str())
+  }
+
+  fn app_with_live_channel(count: usize) -> (App, event::EventHandler) {
+    let (events, event_tx) = event::channel();
+    let mut app = App::new(
+      "http://127.0.0.1:1".into(),
+      "ws://127.0.0.1:1".into(),
+      event_tx,
+    );
+    app.messages = (0..count)
+      .map(|i| sample_summary(&format!("id-{i}"), true))
+      .collect();
+    app.total = count as i64;
+    app.sync_list_state();
+    (app, events)
+  }
+
+  fn show_preview_of(app: &mut App, id: &str) {
+    app.preview = Some(sample_message(id));
+    app.last_preview_id = Some(id.to_string());
+  }
+
+  #[test]
+  fn resolution_keeps_the_anchor_when_it_survives_at_a_new_position() {
+    let old = ["a", "b", "c"].map(String::from);
+    let new = ["x", "c", "b", "a"].map(|id| sample_summary(id, true));
+    assert_eq!(resolve_selection(&old, 1, &new), 2);
+  }
+
+  #[test]
+  fn resolution_picks_the_first_surviving_successor_when_the_anchor_is_gone() {
+    let old = ["a", "b", "c", "d"].map(String::from);
+    let new = ["a", "d"].map(|id| sample_summary(id, true));
+    assert_eq!(resolve_selection(&old, 1, &new), 1);
+  }
+
+  #[test]
+  fn resolution_falls_back_to_the_nearest_surviving_predecessor() {
+    let old = ["a", "b", "c"].map(String::from);
+    let new = ["a", "x"].map(|id| sample_summary(id, true));
+    assert_eq!(resolve_selection(&old, 2, &new), 0);
+  }
+
+  #[test]
+  fn resolution_clamps_when_nothing_from_the_old_list_survives() {
+    let old = ["a", "b", "c"].map(String::from);
+    let new = ["x", "y"].map(|id| sample_summary(id, true));
+    assert_eq!(resolve_selection(&old, 2, &new), 1);
+    assert_eq!(resolve_selection(&old, 2, &[]), 0);
+  }
+
+  #[tokio::test]
+  async fn live_arrival_keeps_the_selected_message() {
+    let mut app = app_with_messages(3);
+    app.select_message(1);
+    show_preview_of(&mut app, "id-1");
+
+    app.handle_ws_message(&new_message_event("live")).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+    assert_eq!(app.last_preview_id.as_deref(), Some("id-1"));
+    assert_eq!(app.pending_preview, None);
+  }
+
+  #[tokio::test]
+  async fn live_arrival_that_pushes_the_selection_off_the_page_reloads_the_preview() {
+    let mut app = app_with_messages(3);
+    app.page_size = 3;
+    app.select_message(2);
+    show_preview_of(&mut app, "id-2");
+
+    app.handle_ws_message(&new_message_event("live")).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+    assert!(app.preview.is_none(), "preview of an off-page mail must go");
+    assert!(app.pending_preview.is_some());
+  }
+
+  #[tokio::test]
+  async fn live_delete_above_the_selection_keeps_the_selected_message() {
+    let mut app = app_with_messages(3);
+    app.select_message(1);
+    show_preview_of(&mut app, "id-1");
+
+    app.handle_ws_message(&delete_event("id-0")).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+    assert_eq!(app.last_preview_id.as_deref(), Some("id-1"));
+    assert_eq!(app.pending_preview, None);
+  }
+
+  #[tokio::test]
+  async fn live_delete_of_the_selection_moves_to_the_row_that_took_its_place() {
+    let mut app = app_with_messages(3);
+    app.select_message(1);
+    show_preview_of(&mut app, "id-1");
+
+    app.handle_ws_message(&delete_event("id-1")).await;
+
+    assert_eq!(selected_id(&app), Some("id-2"));
+    assert!(
+      app.preview.is_none(),
+      "deleted mail must not stay on screen"
+    );
+    assert!(app.pending_preview.is_some());
+  }
+
+  #[tokio::test]
+  async fn live_delete_of_the_last_selected_row_clamps_to_the_new_last() {
+    let mut app = app_with_messages(3);
+    app.select_message(2);
+
+    app.handle_ws_message(&delete_event("id-2")).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+  }
+
+  #[tokio::test]
+  async fn confirmed_delete_of_another_message_keeps_the_selection_and_preview() {
+    let mut app = app_with_messages(3);
+    app.select_message(1);
+    show_preview_of(&mut app, "id-1");
+
+    app.handle_deleted("id-0".into(), Ok(())).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+    assert_eq!(app.last_preview_id.as_deref(), Some("id-1"));
+    assert!(app.preview.is_some());
+  }
+
+  #[tokio::test]
+  async fn resync_with_a_reordered_list_keeps_the_selected_message() {
+    let mut app = in_flight_fetch(3);
+    app.select_message(0);
+    show_preview_of(&mut app, "id-0");
+
+    land_snapshot(&mut app, &["id-2", "id-1", "id-0"], 3).await;
+
+    assert_eq!(selected_id(&app), Some("id-0"));
+    assert_eq!(app.pending_preview, None);
+  }
+
+  #[tokio::test]
+  async fn resync_that_drops_the_selection_picks_its_surviving_successor() {
+    let mut app = in_flight_fetch(4);
+    app.select_message(1);
+
+    land_snapshot(&mut app, &["id-2", "id-3"], 2).await;
+
+    assert_eq!(selected_id(&app), Some("id-2"));
+  }
+
+  #[tokio::test]
+  async fn arrival_during_in_flight_fetch_keeps_the_selection_after_replay() {
+    let mut app = in_flight_fetch(3);
+    app.select_message(0);
+
+    app.handle_ws_message(&new_message_event("live")).await;
+    land_snapshot(&mut app, &["id-1", "id-0", "id-2"], 3).await;
+
+    assert_eq!(selected_id(&app), Some("id-0"));
+  }
+
+  #[tokio::test]
+  async fn filter_change_keeps_the_selection_when_it_still_matches() {
+    let mut app = app_with_messages(3);
+    app.select_message(1);
+    app.search_input = "invoice".into();
+
+    app.handle_search_key(KeyEvent::from(KeyCode::Enter)).await;
+    assert_eq!(
+      selected_id(&app),
+      Some("id-1"),
+      "cursor holds until results land"
+    );
+    land_snapshot(&mut app, &["id-7", "id-8", "id-1"], 3).await;
+
+    assert_eq!(selected_id(&app), Some("id-1"));
+  }
+
+  #[tokio::test]
+  async fn filter_change_selects_the_top_row_when_the_selection_no_longer_matches() {
+    let mut app = app_with_messages(3);
+    app.select_message(2);
+    app.search_input = "invoice".into();
+
+    app.handle_search_key(KeyEvent::from(KeyCode::Enter)).await;
+    land_snapshot(&mut app, &["id-7", "id-8", "id-9"], 3).await;
+
+    assert_eq!(selected_id(&app), Some("id-7"));
+  }
+
+  #[tokio::test]
+  async fn page_change_selects_the_top_row_of_the_new_page() {
+    let mut app = app_with_messages(3);
+    app.total = 120;
+    app.select_message(2);
+
+    app.next_page().await;
+    land_snapshot(&mut app, &["id-50", "id-51"], 120).await;
+
+    assert_eq!(selected_id(&app), Some("id-50"));
+  }
+
+  #[tokio::test]
+  async fn star_after_a_delete_above_targets_the_selected_message() {
+    let (mut app, mut events) = app_with_live_channel(3);
+    app.select_message(1);
+
+    app.handle_ws_message(&delete_event("id-0")).await;
+    app.toggle_star().await;
+
+    match events.next().await.expect("patch task must report back") {
+      Event::Patched { id, is_starred, .. } => {
+        assert_eq!(id, "id-1");
+        assert_eq!(is_starred, Some(true));
+      }
+      other => panic!("unexpected event: {other:?}"),
+    }
   }
 }
