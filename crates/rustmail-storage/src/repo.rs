@@ -484,6 +484,10 @@ impl MessageRepository {
       .execute(&mut *txn)
       .await?;
 
+    sqlx::query("DELETE FROM message_tags")
+      .execute(&mut *txn)
+      .await?;
+
     let result = sqlx::query("DELETE FROM messages")
       .execute(&mut *txn)
       .await?;
