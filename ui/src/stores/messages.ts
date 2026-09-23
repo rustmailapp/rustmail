@@ -517,7 +517,10 @@ function quoted(id: string): string {
 function clearInboxPrompt(): ConfirmDialogOptions {
   return {
     title: "Clear all messages",
-    message: `All ${total()} messages will be permanently deleted.`,
+    message:
+      search() || hasActiveFilters()
+        ? "Every message in the inbox will be permanently deleted, including those outside the current search and filters."
+        : `All ${total()} messages will be permanently deleted.`,
     confirmLabel: "Clear all",
   };
 }
