@@ -76,9 +76,21 @@ impl SmtpServer {
   ///
   /// Returns an error if the TCP listener cannot bind to the configured address.
   pub async fn run(&self) -> Result<(), std::io::Error> {
-    let addr = SocketAddr::new(self.config.host, self.config.port);
-    let listener = TcpListener::bind(addr).await?;
-    info!(addr = %addr, "SMTP server listening");
+    let listener = TcpListener::bind(SocketAddr::new(self.config.host, self.config.port)).await?;
+    self.serve(listener).await
+  }
+
+  /// Serves SMTP on an already-bound listener, accepting connections until
+  /// the future is dropped. The configured host and port are ignored.
+  ///
+  /// Lets a caller bind port 0 and learn the address the OS picked before
+  /// any client connects. The address actually bound is logged on start.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error if the listener's local address cannot be read.
+  pub async fn serve(&self, listener: TcpListener) -> Result<(), std::io::Error> {
+    info!(addr = %listener.local_addr()?, "SMTP server listening");
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_SESSIONS));
     let mut accept_backoff = ACCEPT_BACKOFF_INITIAL;
