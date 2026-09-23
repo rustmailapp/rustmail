@@ -112,15 +112,13 @@
 
 .rusted {
   --rust-surface: var(--color-white);
-  --rust-oxide-opacity: 0.32;
-  --rust-flare: oklch(70% 0.15 55 / 0.14);
+  --rust-oxide-opacity: 0.7;
   background-color: var(--rust-surface);
 }
 
 .rusted.dark {
   --rust-surface: var(--color-zinc-950);
-  --rust-oxide-opacity: 0.5;
-  --rust-flare: oklch(70% 0.15 55 / 0.22);
+  --rust-oxide-opacity: 0.3;
 }
 
 .rusted .app-shell {
@@ -130,12 +128,7 @@
 }
 
 .rusted .mesh-glow {
-  height: 100%;
-  background: radial-gradient(
-    ellipse calc(min(72rem, 140vw) * 0.7071) 36.77rem at 50% 4rem,
-    var(--rust-flare) 0%,
-    transparent 68%
-  );
+  display: none;
 }
 
 .rusted::after {
