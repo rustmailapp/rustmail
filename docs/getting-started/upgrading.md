@@ -106,12 +106,9 @@ Then change the image tag in your Compose file to the older version and start it
 
 ### If you downgrade without restoring
 
-Older binaries refuse the upgraded file at startup and write nothing to it:
+Older binaries refuse the upgraded file at startup and write nothing to it: RustMail 0.7.0 and earlier exit with an SQL error ending in `no such column: message_id`.
 
-- RustMail 0.7.0 and earlier exit with an SQL error ending in `no such column: message_id`.
-- Releases that include the schema check exit with `<db> is schema 1, written by a newer rustmail; this binary supports schema 0. Upgrade rustmail.`
-
-Either way your data is intact. Reinstall the new version, run `rustmail restore-backup`, then downgrade.
+Your data is intact. Reinstall the new version, run `rustmail restore-backup`, then downgrade.
 
 ## Docker notes
 
