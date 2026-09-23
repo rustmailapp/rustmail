@@ -1589,23 +1589,99 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
   assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
 }
 
-#[tokio::test]
-async fn serve_refuses_a_legacy_database_untouched() {
-  let data_dir = tempfile::tempdir().unwrap();
-  let db_path = data_dir.path().join("rustmail.db");
+/// The `messages` table of rustmail 0.1.0 through 0.7.0.
+const LEGACY_MESSAGES_DDL: &str = "CREATE TABLE messages (id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipients TEXT NOT NULL, subject TEXT, text_body TEXT, html_body TEXT, raw BLOB NOT NULL, size INTEGER NOT NULL, has_attachments INTEGER NOT NULL DEFAULT 0, is_read INTEGER NOT NULL DEFAULT 0, is_starred INTEGER NOT NULL DEFAULT 0, tags TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL)";
+const LEGACY_MESSAGE_ID: &str = "01J0000000000000000000LEGA";
+
+async fn legacy_database(db_path: &std::path::Path) {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .max_connections(1)
     .connect(&format!("sqlite:{}?mode=rwc", db_path.display()))
     .await
     .unwrap();
+  sqlx::query(LEGACY_MESSAGES_DDL)
+    .execute(&pool)
+    .await
+    .unwrap();
   sqlx::query(
-    "CREATE TABLE messages (id TEXT PRIMARY KEY, sender TEXT NOT NULL, recipients TEXT NOT NULL, raw BLOB NOT NULL, size INTEGER NOT NULL, created_at TEXT NOT NULL)",
+    "INSERT INTO messages (id, sender, recipients, subject, text_body, raw, size, is_read, tags, created_at) \
+     VALUES (?1, 'a@test.com', '[\"b@test.com\"]', 'kept', 'body', x'00', 1, 1, '[\"work\"]', '2026-01-01T00:00:00Z')",
   )
+  .bind(LEGACY_MESSAGE_ID)
   .execute(&pool)
   .await
   .unwrap();
   pool.close().await;
+}
+
+fn sidecar(path: &std::path::Path, suffix: &str) -> PathBuf {
+  let mut name = path.as_os_str().to_owned();
+  name.push(suffix);
+  PathBuf::from(name)
+}
+
+#[tokio::test]
+async fn serve_migrates_a_legacy_database_before_it_listens() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  legacy_database(&db_path).await;
   let bytes_before = std::fs::read(&db_path).unwrap();
+
+  let mut guard = ChildGuard::new(
+    rustmail_command()
+      .args([
+        "serve",
+        "--smtp-port",
+        ANY_FREE_PORT,
+        "--http-port",
+        ANY_FREE_PORT,
+        "--log-level",
+        CHILD_LOG_FILTER,
+      ])
+      .arg("--db-path")
+      .arg(&db_path)
+      .spawn()
+      .expect("failed to spawn rustmail serve"),
+  );
+  guard.smtp_addr().await;
+
+  let backup = sidecar(&db_path, ".schema0.bak");
+  assert_eq!(
+    std::fs::read(&backup).unwrap(),
+    bytes_before,
+    "the legacy database should be kept, unchanged, as the backup"
+  );
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(1)
+    .connect(&format!("sqlite:{}", db_path.display()))
+    .await
+    .unwrap();
+  let version: i64 = sqlx::query_scalar("PRAGMA user_version")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+  assert_eq!(version, 1);
+  let (id, is_read, tags): (String, bool, String) =
+    sqlx::query_as("SELECT id, is_read, tags FROM messages WHERE seq = 1")
+      .fetch_one(&pool)
+      .await
+      .unwrap();
+  pool.close().await;
+  assert_eq!(
+    (id.as_str(), is_read, tags.as_str()),
+    (LEGACY_MESSAGE_ID, true, r#"["work"]"#)
+  );
+}
+
+#[tokio::test]
+async fn serve_exits_while_another_process_holds_the_migration_lock() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  legacy_database(&db_path).await;
+  let bytes_before = std::fs::read(&db_path).unwrap();
+  let lock_path = sidecar(&db_path, ".migration-lock");
+  let lock = std::fs::File::create(&lock_path).unwrap();
+  lock.try_lock().unwrap();
 
   let output = tokio::time::timeout(
     STARTUP_FAILURE_TIMEOUT,
@@ -1624,8 +1700,9 @@ async fn serve_refuses_a_legacy_database_untouched() {
       .output(),
   )
   .await
-  .expect("rustmail serve did not exit on a legacy database")
+  .expect("rustmail serve did not exit on a held migration lock")
   .expect("failed to run rustmail serve");
+  drop(lock);
 
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(
@@ -1634,10 +1711,14 @@ async fn serve_refuses_a_legacy_database_untouched() {
   );
   assert!(!stderr.contains("panicked"), "startup panicked: {stderr}");
   assert!(
-    stderr.contains("rustmail.db is schema 0, written by rustmail 0.7 or earlier"),
+    stderr.contains(&format!(
+      "another rustmail process holds {} (storage migration or restore in progress)",
+      lock_path.display()
+    )),
     "unexpected stderr: {stderr}"
   );
   assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
+  assert!(!sidecar(&db_path, ".migrating").exists());
 }
 
 async fn connect_smtp_and_greet(addr: std::net::SocketAddr) -> BufReader<TcpStream> {

@@ -663,6 +663,43 @@ async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
     .with_context(|| format!("failed to open database for writing: {db_url}"))
 }
 
+/// Brings the database file at `db_path` to the current schema before it is
+/// opened, migrating a legacy database in place of the old one.
+///
+/// A stop requested while a migration runs pauses it after the batch in
+/// flight; the next start resumes it. Returns whether startup should go on:
+/// `false` once a stop was requested, even if the migration had finished.
+async fn prepare_database_file(db_path: &Path) -> Result<bool> {
+  let stop_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let listener = {
+    let stop_requested = Arc::clone(&stop_requested);
+    tokio::spawn(async move {
+      if shutdown_signal().await.is_ok() {
+        stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+      }
+    })
+  };
+  let preparation = rustmail_storage::prepare_database_file(db_path, || {
+    stop_requested.load(std::sync::atomic::Ordering::SeqCst)
+  })
+  .await;
+  listener.abort();
+  let preparation =
+    preparation.with_context(|| format!("failed to prepare database {}", db_path.display()))?;
+  if let rustmail_storage::Preparation::Paused { migrated, total } = preparation {
+    info!(
+      migrated,
+      total, "Storage migration paused at {migrated}/{total}; it resumes on next start"
+    );
+    return Ok(false);
+  }
+  if stop_requested.load(std::sync::atomic::Ordering::SeqCst) {
+    info!("Stop requested during startup; exiting before serving");
+    return Ok(false);
+  }
+  Ok(true)
+}
+
 /// Opens the repository for `db_url` and creates its schema.
 ///
 /// A file database gets a dedicated writer connection beside its pool of
@@ -924,6 +961,9 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
       std::fs::create_dir_all(parent)?;
     }
     info!(path = %db_path.display(), "Using persistent database");
+    if !prepare_database_file(&db_path).await? {
+      return Ok(());
+    }
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 
