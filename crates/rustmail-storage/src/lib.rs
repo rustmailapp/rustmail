@@ -26,6 +26,7 @@
 //! ```
 
 mod error;
+mod locator;
 mod models;
 mod prepared;
 mod query;

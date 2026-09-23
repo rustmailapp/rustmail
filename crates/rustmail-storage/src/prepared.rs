@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use mail_parser::{ContentType, MessageParser, MimeHeaders, PartType};
 
+use crate::locator::{Locator, locate};
+
 /// A captured message parsed into the rows it will be stored as.
 ///
 /// Parsing is pure and, for large MIME bodies, the most expensive CPU work
@@ -27,7 +29,19 @@ pub(crate) struct PreparedAttachment {
   pub(crate) filename: Option<String>,
   pub(crate) content_type: Option<String>,
   pub(crate) content_id: Option<String>,
-  pub(crate) content: Vec<u8>,
+  /// Length of the decoded contents, whichever way they are stored.
+  pub(crate) size: usize,
+  pub(crate) storage: AttachmentStorage,
+}
+
+/// How a part's contents are kept.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AttachmentStorage {
+  /// Decoded on request from the raw message, which already holds them.
+  Located(Locator),
+  /// Stored decoded, because serving them from the raw message could not be
+  /// proven to reproduce the parser's output.
+  Inline(Vec<u8>),
 }
 
 impl PreparedMessage {
@@ -44,7 +58,7 @@ impl PreparedMessage {
           parsed.body_text(0).map(|body| body.into_owned()),
           parsed.body_html(0).map(|body| body.into_owned()),
           parsed.attachment_count() > 0,
-          stored_parts(&parsed),
+          stored_parts(&parsed, &raw),
         ),
         None => (None, None, None, false, Vec::new()),
       };
@@ -61,7 +75,7 @@ impl PreparedMessage {
   }
 }
 
-fn stored_parts(parsed: &mail_parser::Message<'_>) -> Vec<PreparedAttachment> {
+fn stored_parts(parsed: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<PreparedAttachment> {
   let attachment_ids: HashSet<u32> = parsed.attachments.iter().copied().collect();
   parsed
     .parts
@@ -76,7 +90,11 @@ fn stored_parts(parsed: &mail_parser::Message<'_>) -> Vec<PreparedAttachment> {
       filename: part.attachment_name().map(String::from),
       content_type: part.content_type().map(mime_type),
       content_id: part.content_id().map(String::from),
-      content: part.contents().to_vec(),
+      size: part.contents().len(),
+      storage: locate(raw, part).map_or_else(
+        || AttachmentStorage::Inline(part.contents().to_vec()),
+        AttachmentStorage::Located,
+      ),
     })
     .collect()
 }
@@ -127,7 +145,14 @@ mod tests {
     let attachment = &prepared.attachments[0];
     assert_eq!(attachment.filename.as_deref(), Some("report.pdf"));
     assert_eq!(attachment.content_type.as_deref(), Some("application/pdf"));
-    assert_eq!(attachment.content, b"fake-pdf-content");
+    assert_eq!(attachment.size, b"fake-pdf-content".len());
+    let AttachmentStorage::Located(locator) = attachment.storage else {
+      panic!("an unencoded binary part should be located");
+    };
+    assert_eq!(
+      &MULTIPART.as_bytes()[locator.offset..locator.offset + locator.len],
+      b"fake-pdf-content"
+    );
     assert_eq!(prepared.raw, MULTIPART.as_bytes());
   }
 

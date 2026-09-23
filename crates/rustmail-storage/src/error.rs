@@ -35,6 +35,28 @@ pub enum StorageError {
     /// The schema version this binary supports.
     supported: i64,
   },
+  /// A located attachment did not decode, from its message's raw source, to
+  /// the size recorded at ingest. Nothing is served in its place.
+  #[error(
+    "attachment {attachment_id} of message {message_id} does not decode to its recorded size \
+     from the raw message; its locator or the raw source is damaged. Re-send the message."
+  )]
+  AttachmentCorrupt {
+    /// The message that carries the attachment.
+    message_id: String,
+    /// The attachment that failed its check.
+    attachment_id: String,
+    /// The stored `transfer_encoding` code, if any.
+    transfer_encoding: Option<i64>,
+    /// The decoded size recorded at ingest, if any.
+    expected_size: Option<i64>,
+    /// The size the located bytes decoded to, or `None` if they did not
+    /// decode or lie outside the raw message.
+    actual_size: Option<i64>,
+  },
+  /// The blocking task decoding a large attachment did not complete.
+  #[error("decoding a stored attachment did not complete: {0}")]
+  DecodeAborted(#[from] tokio::task::JoinError),
   /// The database holds tables rustmail did not create. It is refused before
   /// anything is written to it.
   #[error(
