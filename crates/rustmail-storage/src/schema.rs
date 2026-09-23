@@ -30,8 +30,8 @@ const MMAP_SIZE_BYTES: &str = "268435456";
 /// WAL pages that may accumulate before a commit also checkpoints.
 ///
 /// SQLite's default is 1000 pages, roughly 4 MiB. A captured message writes
-/// its raw bytes plus every decoded attachment, so a single mail with
-/// attachments can fill that on its own and make almost every commit pay for
+/// its raw bytes plus every attachment kept decoded, so a single mail with
+/// large attachments can fill that on its own and make almost every commit pay for
 /// a checkpoint: two `fsync` calls and a copy of the WAL back into the
 /// database, on the same connection that is trying to store the next message.
 /// Raising the threshold batches that work into rarer, larger checkpoints.
@@ -58,6 +58,12 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// every write path keeps the two equal without touching `message_tags`
 /// itself. `idx_messages_unread` holds only unread messages, like the starred
 /// index.
+///
+/// An attachment is either located or inline, never both. A located one
+/// keeps `raw_offset`, `raw_len` and `transfer_encoding` (0 identity, 1
+/// quoted-printable, 2 base64) into its message's `raw` and is decoded on
+/// request; an inline one keeps its decoded `content`, because serving it
+/// from `raw` could not be proven to reproduce the parser's output.
 const SCHEMA_1_DDL: &[&str] = &[
   r#"
   CREATE TABLE messages (
@@ -103,13 +109,18 @@ const SCHEMA_1_DDL: &[&str] = &[
   "#,
   r#"
   CREATE TABLE attachments (
-    id           TEXT PRIMARY KEY,
-    message_seq  INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
-    filename     TEXT,
-    content_type TEXT,
-    content_id   TEXT,
-    size         INTEGER,
-    content      BLOB NOT NULL
+    id                TEXT PRIMARY KEY,
+    message_seq       INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+    filename          TEXT,
+    content_type      TEXT,
+    content_id        TEXT,
+    size              INTEGER,
+    raw_offset        INTEGER,
+    raw_len           INTEGER,
+    transfer_encoding INTEGER,
+    content           BLOB,
+    CHECK ((content IS NULL) = (raw_offset IS NOT NULL)),
+    CHECK (raw_offset IS NULL OR (raw_offset >= 0 AND raw_len >= 0 AND transfer_encoding IN (0, 1, 2)))
   )
   "#,
   "CREATE INDEX idx_attachments_by_message ON attachments(message_seq)",

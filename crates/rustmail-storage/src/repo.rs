@@ -8,8 +8,9 @@ use tracing::debug;
 use ulid::Ulid;
 
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
+use crate::locator::TransferEncoding;
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
-use crate::prepared::PreparedMessage;
+use crate::prepared::{AttachmentStorage, PreparedMessage};
 use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page};
 use crate::schema::BUSY_TIMEOUT;
 
@@ -508,42 +509,58 @@ impl MessageRepository {
   }
 
   /// Fetches a single attachment by ID, scoped to its parent message.
+  ///
+  /// A located attachment is decoded from its message's raw source, which
+  /// SQLite loads whole to take the slice, so serving it costs a read of the
+  /// entire message. Large parts decode on the blocking pool.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if the message carries no such
+  /// attachment, and [`StorageError::AttachmentCorrupt`] if a located one
+  /// does not decode to its recorded size.
   pub async fn get_attachment(
     &self,
     message_id: &str,
     attachment_id: &str,
   ) -> Result<Attachment, StorageError> {
-    let attachment = sqlx::query_as::<_, Attachment>(
-      "SELECT a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content FROM attachments a JOIN messages m ON m.seq = a.message_seq WHERE a.id = ?1 AND m.id = ?2",
-    )
+    let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+      "SELECT {ATTACHMENT_ROW_COLUMNS} FROM attachments a JOIN messages m ON m.seq = a.message_seq JOIN message_content c ON c.seq = m.seq WHERE a.id = ?1 AND m.id = ?2",
+    ))
     .bind(attachment_id)
     .bind(message_id)
     .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(attachment_id.to_string()))?;
 
-    Ok(attachment)
+    row.resolve().await
   }
 
   /// Fetches a single attachment by Content-ID, scoped to its parent message.
   ///
   /// When several parts share the Content-ID, the first one the message
-  /// carries is returned.
+  /// carries is returned. Served as [`Self::get_attachment`] serves it.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no part of the message has that
+  /// Content-ID, and [`StorageError::AttachmentCorrupt`] if a located one
+  /// does not decode to its recorded size.
   pub async fn get_attachment_by_content_id(
     &self,
     message_id: &str,
     content_id: &str,
   ) -> Result<Attachment, StorageError> {
-    let attachment = sqlx::query_as::<_, Attachment>(
-      "SELECT a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content FROM messages m JOIN attachments a ON a.message_seq = m.seq WHERE a.content_id = ?1 AND m.id = ?2 ORDER BY a.rowid LIMIT 1",
-    )
+    let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+      "SELECT {ATTACHMENT_ROW_COLUMNS} FROM messages m JOIN attachments a ON a.message_seq = m.seq JOIN message_content c ON c.seq = m.seq WHERE a.content_id = ?1 AND m.id = ?2 ORDER BY a.rowid LIMIT 1",
+    ))
     .bind(content_id)
     .bind(message_id)
     .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(content_id.to_string()))?;
 
-    Ok(attachment)
+    row.resolve().await
   }
 
   /// Returns the raw RFC 5322 bytes for a message.
@@ -723,10 +740,14 @@ async fn insert_in(
   .await?;
 
   for attachment in &message.attachments {
+    let (locator, content) = match &attachment.storage {
+      AttachmentStorage::Located(locator) => (Some(locator), None),
+      AttachmentStorage::Inline(content) => (None, Some(content)),
+    };
     sqlx::query(
       r#"
-      INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, content)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+      INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
       "#,
     )
     .bind(Ulid::new().to_string())
@@ -734,8 +755,11 @@ async fn insert_in(
     .bind(&attachment.filename)
     .bind(&attachment.content_type)
     .bind(&attachment.content_id)
-    .bind(attachment.content.len() as i64)
-    .bind(&attachment.content)
+    .bind(attachment.size as i64)
+    .bind(locator.map(|locator| locator.offset as i64))
+    .bind(locator.map(|locator| locator.len as i64))
+    .bind(locator.map(|locator| locator.encoding.code()))
+    .bind(content)
     .execute(&mut *conn)
     .await?;
   }
@@ -752,6 +776,94 @@ async fn insert_in(
     tags: "[]".to_string(),
     created_at: now,
   })
+}
+
+/// Located parts at least this long are decoded on the blocking pool.
+const BLOCKING_DECODE_THRESHOLD_BYTES: i64 = 256 * 1024;
+
+/// Columns of an [`AttachmentRow`], read from `attachments` aliased `a`,
+/// `messages` aliased `m` and `message_content` aliased `c`.
+///
+/// `raw` is only touched for a located row, so an inline one never loads its
+/// message's raw source.
+const ATTACHMENT_ROW_COLUMNS: &str = "a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content, a.raw_offset, a.raw_len, a.transfer_encoding, CASE WHEN a.raw_offset IS NULL THEN NULL ELSE length(c.raw) END AS raw_size, CASE WHEN a.raw_offset IS NULL THEN NULL ELSE substr(c.raw, a.raw_offset + 1, a.raw_len) END AS located_body";
+
+/// An attachment as stored: inline content, or a located slice of its
+/// message's raw source still to be decoded.
+#[derive(sqlx::FromRow)]
+struct AttachmentRow {
+  id: String,
+  message_id: String,
+  filename: Option<String>,
+  content_type: Option<String>,
+  content_id: Option<String>,
+  size: Option<i64>,
+  content: Option<Vec<u8>>,
+  raw_offset: Option<i64>,
+  raw_len: Option<i64>,
+  transfer_encoding: Option<i64>,
+  raw_size: Option<i64>,
+  located_body: Option<Vec<u8>>,
+}
+
+impl AttachmentRow {
+  /// Resolves the row into the attachment it stores, decoding a large
+  /// located part off the async runtime.
+  async fn resolve(self) -> Result<Attachment, StorageError> {
+    if self
+      .raw_len
+      .is_some_and(|len| len >= BLOCKING_DECODE_THRESHOLD_BYTES)
+    {
+      return tokio::task::spawn_blocking(move || self.into_attachment()).await?;
+    }
+    self.into_attachment()
+  }
+
+  /// Returns the attachment with its decoded contents.
+  ///
+  /// A located part must lie within the raw source, decode, and decode to
+  /// the size recorded at ingest; otherwise the row is reported corrupt
+  /// rather than served.
+  fn into_attachment(self) -> Result<Attachment, StorageError> {
+    let content = match (self.content, &self.located_body) {
+      (Some(content), None) => Ok(content),
+      (None, Some(body)) => {
+        let in_bounds = matches!(
+          (self.raw_offset, self.raw_len, self.raw_size),
+          (Some(offset), Some(len), Some(raw_size))
+            if offset >= 0 && len >= 0 && offset.checked_add(len).is_some_and(|end| end <= raw_size)
+        );
+        let decoded = self
+          .transfer_encoding
+          .and_then(TransferEncoding::from_code)
+          .filter(|_| in_bounds)
+          .and_then(|encoding| encoding.decode(body));
+        match decoded {
+          Some(decoded) if self.size == Some(decoded.len() as i64) => Ok(decoded),
+          decoded => Err(decoded.map(|decoded| decoded.len() as i64)),
+        }
+      }
+      _ => Err(None),
+    };
+    match content {
+      Ok(content) => Ok(Attachment {
+        id: self.id,
+        message_id: self.message_id,
+        filename: self.filename,
+        content_type: self.content_type,
+        content_id: self.content_id,
+        size: self.size,
+        content,
+      }),
+      Err(actual_size) => Err(StorageError::AttachmentCorrupt {
+        message_id: self.message_id,
+        attachment_id: self.id,
+        transfer_encoding: self.transfer_encoding,
+        expected_size: self.size,
+        actual_size,
+      }),
+    }
+  }
 }
 
 /// Columns of a [`MessageSummary`], read from `messages` aliased `m`.
