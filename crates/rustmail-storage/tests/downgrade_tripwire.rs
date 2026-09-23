@@ -7,75 +7,15 @@
 //! `v0.7.0:crates/rustmail-storage/src/schema.rs`, which is also the last tag
 //! before phase 4.
 
+#[path = "common/legacy_v0_7_0.rs"]
+mod legacy_v0_7_0;
+
 use std::path::{Path, PathBuf};
 
+use legacy_v0_7_0::{file_url, initialize_as_v0_7_0};
 use rustmail_storage::{MessageRepository, SCHEMA_VERSION, connect_options, initialize_database};
-use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use ulid::Ulid;
-
-const V0_7_0_MESSAGES: &str = r#"
-        CREATE TABLE IF NOT EXISTS messages (
-            id              TEXT PRIMARY KEY,
-            sender          TEXT NOT NULL,
-            recipients      TEXT NOT NULL,
-            subject         TEXT,
-            text_body       TEXT,
-            html_body       TEXT,
-            raw             BLOB NOT NULL,
-            size            INTEGER NOT NULL,
-            has_attachments INTEGER NOT NULL DEFAULT 0,
-            is_read         INTEGER NOT NULL DEFAULT 0,
-            is_starred      INTEGER NOT NULL DEFAULT 0,
-            tags            TEXT NOT NULL DEFAULT '[]',
-            created_at      TEXT NOT NULL
-        )
-        "#;
-const V0_7_0_ADDED_COLUMNS: &[(&str, &str, &str)] = &[
-  (
-    "messages",
-    "is_starred",
-    "is_starred INTEGER NOT NULL DEFAULT 0",
-  ),
-  ("messages", "tags", "tags TEXT NOT NULL DEFAULT '[]'"),
-];
-const V0_7_0_AFTER_COLUMNS: &[&str] = &[
-  r#"
-        CREATE TABLE IF NOT EXISTS attachments (
-            id           TEXT PRIMARY KEY,
-            message_id   TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
-            filename     TEXT,
-            content_type TEXT,
-            content_id   TEXT,
-            size         INTEGER,
-            content      BLOB NOT NULL
-        )
-        "#,
-  r#"
-        CREATE INDEX IF NOT EXISTS idx_attachments_content_id
-        ON attachments(message_id, content_id)
-        WHERE content_id IS NOT NULL
-        "#,
-  r#"
-        CREATE INDEX IF NOT EXISTS idx_attachments_message_id
-        ON attachments(message_id)
-        "#,
-  r#"
-        CREATE INDEX IF NOT EXISTS idx_messages_created_at
-        ON messages(created_at)
-        "#,
-  r#"
-        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            subject,
-            text_body,
-            sender,
-            recipients,
-            content='messages',
-            content_rowid='rowid'
-        )
-        "#,
-  "PRAGMA journal_mode=WAL",
-];
 
 struct TempDir(PathBuf);
 impl Drop for TempDir {
@@ -88,31 +28,6 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
   let mut name = path.as_os_str().to_owned();
   name.push(suffix);
   PathBuf::from(name)
-}
-
-fn file_url(path: &Path) -> String {
-  format!("sqlite://{}?mode=rwc", path.display())
-}
-
-async fn initialize_as_v0_7_0(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-  sqlx::query(V0_7_0_MESSAGES).execute(pool).await?;
-  for (table, column, definition) in V0_7_0_ADDED_COLUMNS {
-    let exists: Option<(String,)> =
-      sqlx::query_as("SELECT name FROM pragma_table_info(?) WHERE name = ?")
-        .bind(table)
-        .bind(column)
-        .fetch_optional(pool)
-        .await?;
-    if exists.is_none() {
-      sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {definition}"))
-        .execute(pool)
-        .await?;
-    }
-  }
-  for statement in V0_7_0_AFTER_COLUMNS {
-    sqlx::query(statement).execute(pool).await?;
-  }
-  Ok(())
 }
 
 async fn schema_1_file_with_one_message(path: &Path) -> String {

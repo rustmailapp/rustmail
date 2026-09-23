@@ -5,10 +5,18 @@
 //! `tests/goldens/snapshots/`; regenerate them with
 //! `UPDATE_GOLDENS=1 cargo test -p rustmail-api --test goldens` and review
 //! the diff. See [`golden`] for what is normalized.
+//!
+//! Every golden that reads storage runs twice against the same snapshot:
+//! `fresh::` stores the corpus through today's ingest, and `migrated::`
+//! stores it through rustmail v0.7.0's write path into a legacy file, then
+//! migrates that file. Identical snapshots prove the migration keeps ids,
+//! cursors, search and downloads.
 
 mod corpus;
 mod golden;
 mod harness;
+#[path = "../../../rustmail-storage/tests/common/legacy_v0_7_0.rs"]
+mod legacy_v0_7_0;
 mod mime;
 mod ws_wire;
 
@@ -21,7 +29,7 @@ use tokio::io::AsyncReadExt;
 
 use crate::corpus::{Served, corpus};
 use crate::golden::assert_golden;
-use crate::harness::{Req, fixture, fixture_with};
+use crate::harness::{Backend, Req, fixture, fixture_with};
 use crate::mime::fnv1a64;
 use crate::ws_wire::WsClient;
 
@@ -68,9 +76,8 @@ fn corpus_bytes_are_pinned() {
   assert_golden("corpus", &out);
 }
 
-#[tokio::test]
-async fn list_pages_filters_and_cursors() {
-  let fx = fixture().await;
+async fn list_pages_filters_and_cursors(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
 
   t.section("defaults and limits");
@@ -160,9 +167,8 @@ async fn list_pages_filters_and_cursors() {
   assert_golden("list", &t.finish());
 }
 
-#[tokio::test]
-async fn search_ids_order_and_totals() {
-  let fx = fixture().await;
+async fn search_ids_order_and_totals(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
 
   t.section("terms");
@@ -221,9 +227,8 @@ async fn search_ids_order_and_totals() {
   assert_golden("search", &t.finish());
 }
 
-#[tokio::test]
-async fn get_every_message() {
-  let fx = fixture().await;
+async fn get_every_message(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   for name in names() {
     t.get(format!("{API}/messages/{}", fx.id(name))).await;
@@ -232,9 +237,8 @@ async fn get_every_message() {
   assert_golden("get", &t.finish());
 }
 
-#[tokio::test]
-async fn patch_updates_and_rejections() {
-  let fx = fixture().await;
+async fn patch_updates_and_rejections(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   let id = fx.id("welcome").to_string();
   let uri = format!("{API}/messages/{id}");
@@ -280,9 +284,8 @@ async fn patch_updates_and_rejections() {
   assert_golden("patch", &t.finish());
 }
 
-#[tokio::test]
-async fn delete_one_message() {
-  let fx = fixture().await;
+async fn delete_one_message(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   let id = fx.id("nested_related").to_string();
 
@@ -314,9 +317,8 @@ async fn delete_one_message() {
   assert_golden("delete_one", &t.finish());
 }
 
-#[tokio::test]
-async fn delete_all_messages() {
-  let fx = fixture().await;
+async fn delete_all_messages(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
 
   t.send(Req::new(Method::DELETE, format!("{API}/messages")))
@@ -336,9 +338,8 @@ async fn delete_all_messages() {
   assert_golden("delete_all", &t.finish());
 }
 
-#[tokio::test]
-async fn raw_source_and_prefixes() {
-  let fx = fixture().await;
+async fn raw_source_and_prefixes(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
 
   t.section("full source of every message");
@@ -374,9 +375,8 @@ async fn raw_source_and_prefixes() {
   assert_golden("raw", &t.finish());
 }
 
-#[tokio::test]
-async fn headers_of_every_message() {
-  let fx = fixture().await;
+async fn headers_of_every_message(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   for name in names() {
     t.get(format!("{API}/messages/{}/headers", fx.id(name)))
@@ -386,9 +386,8 @@ async fn headers_of_every_message() {
   assert_golden("headers", &t.finish());
 }
 
-#[tokio::test]
-async fn auth_results_of_every_message() {
-  let fx = fixture().await;
+async fn auth_results_of_every_message(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   for name in names() {
     t.get(format!("{API}/messages/{}/auth", fx.id(name))).await;
@@ -397,9 +396,8 @@ async fn auth_results_of_every_message() {
   assert_golden("auth", &t.finish());
 }
 
-#[tokio::test]
-async fn attachment_lists() {
-  let fx = fixture().await;
+async fn attachment_lists(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   for name in names() {
     t.get(format!("{API}/messages/{}/attachments", fx.id(name)))
@@ -410,9 +408,8 @@ async fn attachment_lists() {
   assert_golden("attachments", &t.finish());
 }
 
-#[tokio::test]
-async fn attachment_downloads() {
-  let fx = fixture().await;
+async fn attachment_downloads(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   let mut served: Vec<(&str, Vec<u8>)> = Vec::new();
 
@@ -459,9 +456,8 @@ async fn attachment_downloads() {
   }
 }
 
-#[tokio::test]
-async fn inline_parts_by_content_id() {
-  let fx = fixture().await;
+async fn inline_parts_by_content_id(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   let nested = fx.id("nested_related").to_string();
 
@@ -489,9 +485,8 @@ async fn inline_parts_by_content_id() {
   assert_golden("inline", &t.finish());
 }
 
-#[tokio::test]
-async fn export_as_eml_and_json() {
-  let fx = fixture().await;
+async fn export_as_eml_and_json(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
 
   for name in names() {
@@ -522,9 +517,8 @@ async fn export_as_eml_and_json() {
   assert_golden("export", &t.finish());
 }
 
-#[tokio::test]
-async fn assert_count_matching() {
-  let fx = fixture().await;
+async fn assert_count_matching(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   for query in [
     "",
@@ -554,9 +548,8 @@ async fn assert_count_matching() {
   assert_golden("assert_count", &t.finish());
 }
 
-#[tokio::test]
-async fn release_refusals_without_a_relay() {
-  let disabled = fixture().await;
+async fn release_refusals_without_a_relay(backend: Backend) {
+  let disabled = fixture(backend).await;
   let welcome = disabled.id("welcome").to_string();
   let mut t = disabled.transcript();
 
@@ -576,7 +569,10 @@ async fn release_refusals_without_a_relay() {
   .await;
   let mut out = t.finish();
 
-  let pinned_port = fixture_with(|state| release_to(state, RELEASE_HOST, Some(RELEASE_PORT))).await;
+  let pinned_port = fixture_with(backend, |state| {
+    release_to(state, RELEASE_HOST, Some(RELEASE_PORT))
+  })
+  .await;
   let welcome = pinned_port.id("welcome").to_string();
   let mut t = pinned_port.transcript();
   t.section("release to 127.0.0.1:2525 configured");
@@ -594,7 +590,7 @@ async fn release_refusals_without_a_relay() {
   .await;
   out.push_str(&t.finish());
 
-  let mut any_port = fixture_with(|state| release_to(state, RELEASE_HOST, None)).await;
+  let mut any_port = fixture_with(backend, |state| release_to(state, RELEASE_HOST, None)).await;
   let no_recipients = any_port
     .repo
     .insert(
@@ -631,8 +627,7 @@ async fn release_refusals_without_a_relay() {
   assert_golden("release_refusals", &out);
 }
 
-#[tokio::test]
-async fn release_to_a_relay_that_drops_the_connection() {
+async fn release_to_a_relay_that_drops_the_connection(backend: Backend) {
   let listener = tokio::net::TcpListener::bind((RELEASE_HOST, RELEASE_PORT))
     .await
     .unwrap_or_else(|error| {
@@ -645,7 +640,10 @@ async fn release_to_a_relay_that_drops_the_connection() {
     first[0]
   });
 
-  let fx = fixture_with(|state| release_to(state, RELEASE_HOST, Some(RELEASE_PORT))).await;
+  let fx = fixture_with(backend, |state| {
+    release_to(state, RELEASE_HOST, Some(RELEASE_PORT))
+  })
+  .await;
   let mut t = fx.transcript();
   let release = tokio::time::timeout(
     RELEASE_TIMEOUT,
@@ -679,9 +677,8 @@ fn release_to(mut state: AppState, host: &str, port: Option<u16>) -> AppState {
   state
 }
 
-#[tokio::test]
-async fn compression_is_negotiated_for_json_but_not_downloads() {
-  let fx = fixture().await;
+async fn compression_is_negotiated_for_json_but_not_downloads(backend: Backend) {
+  let fx = fixture(backend).await;
   let mut t = fx.transcript();
   let nested = fx.stored("nested_related");
   for uri in [
@@ -704,9 +701,8 @@ async fn compression_is_negotiated_for_json_but_not_downloads() {
   assert_golden("compression", &t.finish());
 }
 
-#[tokio::test]
-async fn websocket_frames_for_new_update_delete_and_clear() {
-  let fx = fixture().await;
+async fn websocket_frames_for_new_update_delete_and_clear(backend: Backend) {
+  let fx = fixture(backend).await;
   let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
   let addr = listener.local_addr().unwrap();
   let app = fx.app.clone();
@@ -748,3 +744,67 @@ async fn websocket_frames_for_new_update_delete_and_clear() {
   server.abort();
   assert_golden("websocket", &t.finish());
 }
+
+/// Declares one `#[tokio::test]` per golden, in a module named after the
+/// backend it runs on.
+macro_rules! goldens_on {
+  ($module:ident, $backend:expr, [$($golden:ident),* $(,)?]) => {
+    mod $module {
+      $(
+        #[tokio::test]
+        async fn $golden() {
+          super::$golden($backend).await;
+        }
+      )*
+    }
+  };
+}
+
+goldens_on!(
+  fresh,
+  crate::Backend::Fresh,
+  [
+    list_pages_filters_and_cursors,
+    search_ids_order_and_totals,
+    get_every_message,
+    patch_updates_and_rejections,
+    delete_one_message,
+    delete_all_messages,
+    raw_source_and_prefixes,
+    headers_of_every_message,
+    auth_results_of_every_message,
+    attachment_lists,
+    attachment_downloads,
+    inline_parts_by_content_id,
+    export_as_eml_and_json,
+    assert_count_matching,
+    release_refusals_without_a_relay,
+    release_to_a_relay_that_drops_the_connection,
+    compression_is_negotiated_for_json_but_not_downloads,
+    websocket_frames_for_new_update_delete_and_clear,
+  ]
+);
+
+goldens_on!(
+  migrated,
+  crate::Backend::MigratedFromV0_7_0,
+  [
+    list_pages_filters_and_cursors,
+    search_ids_order_and_totals,
+    get_every_message,
+    patch_updates_and_rejections,
+    delete_one_message,
+    delete_all_messages,
+    raw_source_and_prefixes,
+    headers_of_every_message,
+    auth_results_of_every_message,
+    attachment_lists,
+    attachment_downloads,
+    inline_parts_by_content_id,
+    export_as_eml_and_json,
+    assert_count_matching,
+    release_refusals_without_a_relay,
+    compression_is_negotiated_for_json_but_not_downloads,
+    websocket_frames_for_new_update_delete_and_clear,
+  ]
+);

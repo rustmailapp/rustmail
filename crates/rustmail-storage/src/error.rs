@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 /// Errors returned by the storage layer.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
@@ -23,11 +25,11 @@ pub enum StorageError {
   },
   /// The database predates schema versioning: rustmail 0.7 and earlier kept
   /// every message in one `messages` row. It is refused before anything is
-  /// written to it.
+  /// written to it; [`crate::prepare_database_file`] migrates it first.
   #[error(
     "{database} is schema 0, written by rustmail 0.7 or earlier; \
-     this binary supports schema {supported} and cannot upgrade it yet. \
-     Open it with the rustmail that wrote it, or start this one on a new database file."
+     this binary supports schema {supported} and migrates such a file before opening it. \
+     Start rustmail on it to migrate it, or open it with the rustmail that wrote it."
   )]
   LegacySchema {
     /// The database file, as SQLite reports it.
@@ -72,6 +74,180 @@ pub enum StorageError {
     /// The tables and views found in the file, by name.
     tables: Vec<String>,
   },
+  /// Another process holds the migration lock beside the database.
+  #[error(
+    "another rustmail process holds {} (storage migration or restore in progress); \
+     wait for it to finish, its log shows progress, or stop it",
+    .lock_path.display()
+  )]
+  MigrationLocked {
+    /// The lock file, `<db>.migration-lock`.
+    lock_path: PathBuf,
+  },
+  /// The files beside the database are in a state the migration cannot
+  /// resolve on its own. Nothing was changed.
+  #[error(transparent)]
+  MigrationRefused(#[from] MigrationRefusal),
+  /// The migrated copy failed a check against the legacy database. The copy
+  /// is kept for a bug report and the legacy database is untouched.
+  #[error(
+    "the migrated copy {} failed its {check} check (expected {expected}, found {found}); \
+     {} is untouched. Keep both files and report this as a bug.",
+    .target.display(),
+    .database.display()
+  )]
+  MigrationVerifyFailed {
+    /// The legacy database being migrated.
+    database: PathBuf,
+    /// The copy being built, `<db>.migrating`.
+    target: PathBuf,
+    /// Which check failed.
+    check: &'static str,
+    /// What the legacy database implies.
+    expected: String,
+    /// What the copy holds.
+    found: String,
+  },
+  /// The disk filled while the migrated copy was being written. The legacy
+  /// database is untouched, and the copy resumes where it stopped.
+  #[error(
+    "migrating {} needs about {} MB free next to it (estimate); \
+     the existing database is untouched; free space and restart to resume",
+    .database.display(),
+    .needed_bytes.div_ceil(BYTES_PER_MB)
+  )]
+  MigrationDiskFull {
+    /// The legacy database being migrated.
+    database: PathBuf,
+    /// Estimated bytes the copy still needs.
+    needed_bytes: u64,
+  },
+  /// A file operation of the migration failed.
+  #[error("could not {action} {}: {source}", .path.display())]
+  MigrationIo {
+    /// What was being done, as a verb phrase.
+    action: &'static str,
+    /// The file it was done to.
+    path: PathBuf,
+    /// The underlying error.
+    source: std::io::Error,
+  },
+  /// A blocking file operation of the migration did not complete.
+  #[error("a file operation of the storage migration did not complete: {0}")]
+  MigrationTaskAborted(tokio::task::JoinError),
+}
+
+/// Bytes in the megabyte the migration's free-space estimate is quoted in.
+const BYTES_PER_MB: u64 = 1_000_000;
+
+/// Why the migration refused to touch the files beside a database.
+///
+/// Each message names the files involved and how to resolve the state by
+/// hand; the refusal itself changes nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum MigrationRefusal {
+  /// A legacy database sits next to a backup from an earlier migration, so
+  /// an older rustmail probably created a new database after a partial swap.
+  #[error(
+    "{} is schema 0 but the backup {} already exists, so an older rustmail may have \
+     written a new database after an interrupted migration (migration copy: {}). Keep the \
+     file whose mail you want as {}, move the others away, and restart.",
+    .database.display(),
+    .backup.display(),
+    .migrating.as_ref().map_or_else(|| "none".to_string(), |path| path.display().to_string()),
+    .database.display()
+  )]
+  AmbiguousBackup {
+    /// The database.
+    database: PathBuf,
+    /// The existing backup.
+    backup: PathBuf,
+    /// The migration copy, if one exists.
+    migrating: Option<PathBuf>,
+  },
+  /// A migration copy sits next to a database that is already schema 1.
+  #[error(
+    "{} is already schema 1, but a stray migration copy {} sits next to it. \
+     Move {} away, with any -wal or -shm beside it, and restart.",
+    .database.display(),
+    .migrating.display(),
+    .migrating.display()
+  )]
+  StrayMigrationCopy {
+    /// The database.
+    database: PathBuf,
+    /// The stray copy.
+    migrating: PathBuf,
+  },
+  /// The finished copy was not made from the backup beside it, so the
+  /// interrupted swap cannot be completed safely.
+  #[error(
+    "{} is missing and the finished migration copy {} was not made from the backup {}. \
+     Rename the file you want to keep to {} and restart.",
+    .database.display(),
+    .migrating.display(),
+    .backup.display(),
+    .database.display()
+  )]
+  BackupChanged {
+    /// The database.
+    database: PathBuf,
+    /// The backup.
+    backup: PathBuf,
+    /// The finished copy.
+    migrating: PathBuf,
+  },
+  /// Another process still has the database or the copy open, so swapping
+  /// them would leave its writes behind.
+  #[error(
+    "{} exists, so another process still has it open; stop every rustmail and sqlite3 \
+     using {} and restart to finish the migration",
+    .file.display(),
+    .database.display()
+  )]
+  FileInUse {
+    /// The database.
+    database: PathBuf,
+    /// The `-wal` or `-shm` file found.
+    file: PathBuf,
+  },
+  /// The legacy database changed while the migration held its write lock,
+  /// which only a writer bypassing SQLite's locks can do.
+  #[error(
+    "{} changed while the migration held its write lock; stop every process \
+     writing to it and restart",
+    .database.display()
+  )]
+  SourceUnstable {
+    /// The database.
+    database: PathBuf,
+  },
+  /// Any other combination of database, backup and migration copy.
+  #[error(
+    "cannot tell how to open {}: the database is {}, the backup {} is {}, and the \
+     migration copy {} is {}. Put the file you want at {}, move the others away, and restart.",
+    .database.display(),
+    .database_state,
+    .backup.display(),
+    .backup_state,
+    .migrating.display(),
+    .migrating_state,
+    .database.display()
+  )]
+  UnknownState {
+    /// The database.
+    database: PathBuf,
+    /// What the database is: absent, empty, schema 0 or schema 1.
+    database_state: &'static str,
+    /// The backup.
+    backup: PathBuf,
+    /// Whether the backup exists.
+    backup_state: &'static str,
+    /// The migration copy.
+    migrating: PathBuf,
+    /// Whether the copy exists, and whether it is complete.
+    migrating_state: &'static str,
+  },
 }
 
 /// SQLite primary result code for `SQLITE_BUSY`.
@@ -87,7 +263,7 @@ const SQLITE_IOERR: i32 = 10;
 /// SQLite primary result code for `SQLITE_CORRUPT`.
 const SQLITE_CORRUPT: i32 = 11;
 /// SQLite primary result code for `SQLITE_FULL`.
-const SQLITE_FULL: i32 = 13;
+pub(crate) const SQLITE_FULL: i32 = 13;
 /// SQLite primary result code for `SQLITE_CANTOPEN`.
 const SQLITE_CANTOPEN: i32 = 14;
 /// SQLite primary result code for `SQLITE_NOTADB`.

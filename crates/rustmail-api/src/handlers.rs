@@ -945,6 +945,20 @@ impl IntoResponse for AppError {
           "Internal server error".to_string(),
         )
       }
+      AppError::Storage(
+        e @ (StorageError::MigrationLocked { .. }
+        | StorageError::MigrationRefused(_)
+        | StorageError::MigrationVerifyFailed { .. }
+        | StorageError::MigrationDiskFull { .. }
+        | StorageError::MigrationIo { .. }
+        | StorageError::MigrationTaskAborted(_)),
+      ) => {
+        tracing::error!(error = %e, "Storage migration error");
+        (
+          StatusCode::INTERNAL_SERVER_ERROR,
+          "Internal server error".to_string(),
+        )
+      }
     };
 
     (status, Json(serde_json::json!({ "error": message }))).into_response()

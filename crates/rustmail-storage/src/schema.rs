@@ -70,7 +70,7 @@ const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 /// quoted-printable, 2 base64) into its message's `raw` and is decoded on
 /// request; an inline one keeps its decoded `content`, because serving it
 /// from `raw` could not be proven to reproduce the parser's output.
-const SCHEMA_1_DDL: &[&str] = &[
+pub(crate) const SCHEMA_1_DDL: &[&str] = &[
   r#"
   CREATE TABLE messages (
     seq             INTEGER PRIMARY KEY,
@@ -180,18 +180,21 @@ const SCHEMA_1_DDL: &[&str] = &[
 ///
 /// Returns [`StorageError::Database`] if `db_url` is not a valid SQLite URL.
 pub fn connect_options(db_url: &str) -> Result<SqliteConnectOptions, StorageError> {
-  Ok(
-    SqliteConnectOptions::from_str(db_url)?
-      .auto_vacuum(SqliteAutoVacuum::Incremental)
-      .busy_timeout(BUSY_TIMEOUT)
-      .foreign_keys(true)
-      .pragma("synchronous", "NORMAL")
-      .pragma("cache_size", CACHE_SIZE_KIB)
-      .pragma("mmap_size", MMAP_SIZE_BYTES)
-      .pragma("temp_store", "MEMORY")
-      .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)
-      .pragma("journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES),
-  )
+  Ok(tuned(SqliteConnectOptions::from_str(db_url)?))
+}
+
+/// `options` with every tuning pragma of [`connect_options`] applied.
+pub(crate) fn tuned(options: SqliteConnectOptions) -> SqliteConnectOptions {
+  options
+    .auto_vacuum(SqliteAutoVacuum::Incremental)
+    .busy_timeout(BUSY_TIMEOUT)
+    .foreign_keys(true)
+    .pragma("synchronous", "NORMAL")
+    .pragma("cache_size", CACHE_SIZE_KIB)
+    .pragma("mmap_size", MMAP_SIZE_BYTES)
+    .pragma("temp_store", "MEMORY")
+    .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT_PAGES)
+    .pragma("journal_size_limit", JOURNAL_SIZE_LIMIT_BYTES)
 }
 
 /// A database this binary can open, as found before anything is written.
@@ -252,11 +255,40 @@ async fn create_schema(conn: &mut SqliteConnection) -> Result<(), StorageError> 
 }
 
 async fn inspect_layout(conn: &mut SqliteConnection) -> Result<Layout, StorageError> {
+  match probe(conn).await? {
+    FileSchema::Empty => Ok(Layout::Empty),
+    FileSchema::Current => Ok(Layout::Current),
+    FileSchema::Legacy => Err(StorageError::LegacySchema {
+      database: database_name(conn).await?,
+      supported: SCHEMA_VERSION,
+    }),
+  }
+}
+
+/// What a database file holds, as far as rustmail can use it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileSchema {
+  /// No tables yet.
+  Empty,
+  /// Schema 0: one `messages` row per message, raw source included.
+  Legacy,
+  /// [`SCHEMA_VERSION`].
+  Current,
+}
+
+/// Reads the file's `user_version` and tables without writing anything.
+///
+/// # Errors
+///
+/// Returns [`StorageError::NewerSchema`] or [`StorageError::UnrecognizedSchema`]
+/// for a file rustmail cannot open at any schema it knows, and
+/// [`StorageError::Database`] if a query fails.
+pub(crate) async fn probe(conn: &mut SqliteConnection) -> Result<FileSchema, StorageError> {
   let found: i64 = sqlx::query_scalar("PRAGMA user_version")
     .fetch_one(&mut *conn)
     .await?;
   if found == SCHEMA_VERSION {
-    return Ok(Layout::Current);
+    return Ok(FileSchema::Current);
   }
   if found > SCHEMA_VERSION {
     return Err(StorageError::NewerSchema {
@@ -271,22 +303,18 @@ async fn inspect_layout(conn: &mut SqliteConnection) -> Result<Layout, StorageEr
   .fetch_all(&mut *conn)
   .await?;
   if found == LEGACY_SCHEMA_VERSION && tables.is_empty() {
-    return Ok(Layout::Empty);
+    return Ok(FileSchema::Empty);
   }
   let has_legacy_messages: bool = sqlx::query_scalar(
     "SELECT EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name = 'raw')",
   )
   .fetch_one(&mut *conn)
   .await?;
-  let database = database_name(conn).await?;
   if found == LEGACY_SCHEMA_VERSION && has_legacy_messages {
-    return Err(StorageError::LegacySchema {
-      database,
-      supported: SCHEMA_VERSION,
-    });
+    return Ok(FileSchema::Legacy);
   }
   Err(StorageError::UnrecognizedSchema {
-    database,
+    database: database_name(conn).await?,
     found,
     tables,
   })

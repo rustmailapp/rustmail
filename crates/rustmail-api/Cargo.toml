@@ -30,6 +30,7 @@ rustmail-storage = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+ulid = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 tower = { workspace = true }
