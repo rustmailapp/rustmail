@@ -81,9 +81,9 @@ fn stored_parts(parsed: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<PreparedAt
       filename: part.attachment_name().map(String::from),
       content_type: part.content_type().map(mime_type),
       content_id: part.content_id().map(String::from),
-      size: part.contents().len(),
+      size: part_contents(part).len(),
       storage: locate(raw, part).map_or_else(
-        || AttachmentStorage::Inline(part.contents().to_vec()),
+        || AttachmentStorage::Inline(part_contents(part).to_vec()),
         AttachmentStorage::Located,
       ),
     })
@@ -105,7 +105,18 @@ pub(crate) fn stored_part_refs<'p, 'x>(
       is_attachment || matches!(part.body, PartType::InlineBinary(_))
     })
     .map(|(_, part)| part)
-    .filter(|part| !part.contents().is_empty())
+    .filter(|part| !part_contents(part).is_empty())
+}
+
+/// The part's decoded contents, as [`MessagePart::contents`] returns them.
+///
+/// A nested message the parser recovered with no parts at all counts as
+/// empty: `contents` would index its missing root part and panic.
+pub(crate) fn part_contents<'p>(part: &'p MessagePart<'_>) -> &'p [u8] {
+  match &part.body {
+    PartType::Message(nested) if nested.parts.is_empty() => b"",
+    _ => part.contents(),
+  }
 }
 
 fn mime_type(content_type: &ContentType<'_>) -> String {
@@ -163,6 +174,29 @@ mod tests {
       b"fake-pdf-content"
     );
     assert_eq!(prepared.raw, MULTIPART.as_bytes());
+  }
+
+  #[test]
+  fn a_digest_item_that_is_not_a_message_is_skipped() {
+    let raw = concat!(
+      "From: sender@test.com\r\n",
+      "Subject: Digest\r\n",
+      "MIME-Version: 1.0\r\n",
+      "Content-Type: multipart/digest; boundary=\"D\"\r\n",
+      "\r\n",
+      "--D\r\n",
+      "Content-Disposition: attachment; filename=\"item.bin\"\r\n",
+      "\r\n",
+      "caf\u{e9}\r\n",
+      "line  =\t--caf\u{e9} beta\r\n",
+      "=line= beta\r\n",
+      "--D--\r\n",
+    );
+    let prepared =
+      PreparedMessage::parse("sender@test.com".to_string(), &[], raw.as_bytes().to_vec());
+
+    assert!(prepared.attachments.is_empty());
+    assert_eq!(prepared.raw, raw.as_bytes());
   }
 
   #[test]

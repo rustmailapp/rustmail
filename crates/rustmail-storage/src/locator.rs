@@ -4,6 +4,8 @@ use mail_parser::decoders::base64::base64_decode;
 use mail_parser::decoders::quoted_printable::quoted_printable_decode;
 use mail_parser::{Encoding, MessagePart, MimeHeaders, PartType};
 
+use crate::prepared::part_contents;
+
 /// Base64 characters that make up one quantum.
 const BASE64_QUANTUM_CHARS: u8 = 4;
 /// Bytes one complete base64 quantum decodes to.
@@ -101,7 +103,7 @@ pub(crate) fn locate(raw: &[u8], part: &MessagePart<'_>) -> Option<Locator> {
   let encoding = TransferEncoding::of(part.encoding);
   let range = body_range(part, encoding)?;
   let body = raw.get(range.clone())?;
-  let contents = part.contents();
+  let contents = part_contents(part);
   let decodes_to_contents = match encoding {
     TransferEncoding::Identity => body == contents,
     TransferEncoding::QuotedPrintable => {
