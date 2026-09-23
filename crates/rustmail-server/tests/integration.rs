@@ -1689,8 +1689,7 @@ async fn serve_exits_while_another_process_holds_the_migration_lock() {
   legacy_database(&db_path).await;
   let bytes_before = std::fs::read(&db_path).unwrap();
   let lock_path = sidecar(&db_path, ".migration-lock");
-  let lock = std::fs::File::create(&lock_path).unwrap();
-  lock.try_lock().unwrap();
+  let lock = hold_migration_lock(std::fs::File::create(&lock_path).unwrap()).await;
 
   let output = tokio::time::timeout(
     STARTUP_FAILURE_TIMEOUT,
@@ -1758,6 +1757,24 @@ async fn legacy_v0_7_0_database(db_path: &std::path::Path) -> Vec<String> {
 }
 
 /// Migrates a legacy database in this process, the way `serve` does at startup.
+/// Takes the migration lock on `file`, waiting for any earlier holder.
+///
+/// A lock the test's own migration just dropped can stay held for a moment
+/// while a parallel test forks a `rustmail` child, which inherits every open
+/// descriptor until it execs, so a single `try_lock` is racy here.
+async fn hold_migration_lock(file: std::fs::File) -> std::fs::File {
+  tokio::time::timeout(
+    STARTUP_FAILURE_TIMEOUT,
+    tokio::task::spawn_blocking(move || {
+      file.lock().unwrap();
+      file
+    }),
+  )
+  .await
+  .expect("the migration lock was not released in time")
+  .unwrap()
+}
+
 async fn migrated_database(db_path: &std::path::Path) {
   legacy_v0_7_0_database(db_path).await;
   let preparation = rustmail_storage::prepare_database_file(db_path, || false)
@@ -1956,12 +1973,14 @@ async fn restore_backup_refuses_while_another_process_holds_the_migration_lock()
   migrated_database(&db_path).await;
   let backup_bytes = std::fs::read(sidecar(&db_path, ".schema0.bak")).unwrap();
   let lock_path = sidecar(&db_path, ".migration-lock");
-  let lock = std::fs::OpenOptions::new()
-    .read(true)
-    .write(true)
-    .open(&lock_path)
-    .unwrap();
-  lock.try_lock().unwrap();
+  let lock = hold_migration_lock(
+    std::fs::OpenOptions::new()
+      .read(true)
+      .write(true)
+      .open(&lock_path)
+      .unwrap(),
+  )
+  .await;
 
   let output = run_restore_backup(&db_path).await;
   drop(lock);
