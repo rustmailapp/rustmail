@@ -30,8 +30,8 @@ const MMAP_SIZE_BYTES: &str = "268435456";
 /// WAL pages that may accumulate before a commit also checkpoints.
 ///
 /// SQLite's default is 1000 pages, roughly 4 MiB. A captured message writes
-/// its raw bytes plus every decoded attachment, so a single mail with
-/// attachments can fill that on its own and make almost every commit pay for
+/// its raw bytes plus every attachment kept decoded, so a single mail with
+/// large attachments can fill that on its own and make almost every commit pay for
 /// a checkpoint: two `fsync` calls and a copy of the WAL back into the
 /// database, on the same connection that is trying to store the next message.
 /// Raising the threshold batches that work into rarer, larger checkpoints.
@@ -56,6 +56,20 @@ const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 /// `message_id` and none of the legacy index names, so a rustmail from before
 /// schema versioning fails on its first `CREATE INDEX` against this file,
 /// before it writes anything.
+///
+/// `messages.tags` stays the JSON array the API returns, order and duplicates
+/// included. `message_tags` indexes it, one row per distinct tag, so the tag
+/// filter is a primary-key lookup. Triggers rewrite a message's rows whenever
+/// its `tags` change, and the rows follow a deleted message by cascade, so
+/// every write path keeps the two equal without touching `message_tags`
+/// itself. `idx_messages_unread` holds only unread messages, like the starred
+/// index.
+///
+/// An attachment is either located or inline, never both. A located one
+/// keeps `raw_offset`, `raw_len` and `transfer_encoding` (0 identity, 1
+/// quoted-printable, 2 base64) into its message's `raw` and is decoded on
+/// request; an inline one keeps its decoded `content`, because serving it
+/// from `raw` could not be proven to reproduce the parser's output.
 const SCHEMA_1_DDL: &[&str] = &[
   r#"
   CREATE TABLE messages (
@@ -74,6 +88,7 @@ const SCHEMA_1_DDL: &[&str] = &[
   "#,
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
+  "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
   r#"
   CREATE TABLE message_content (
     seq       INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
@@ -100,19 +115,49 @@ const SCHEMA_1_DDL: &[&str] = &[
   "#,
   r#"
   CREATE TABLE attachments (
-    id           TEXT PRIMARY KEY,
-    message_seq  INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
-    filename     TEXT,
-    content_type TEXT,
-    content_id   TEXT,
-    size         INTEGER,
-    content      BLOB NOT NULL
+    id                TEXT PRIMARY KEY,
+    message_seq       INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+    filename          TEXT,
+    content_type      TEXT,
+    content_id        TEXT,
+    size              INTEGER,
+    raw_offset        INTEGER,
+    raw_len           INTEGER,
+    transfer_encoding INTEGER,
+    content           BLOB,
+    CHECK ((content IS NULL) = (raw_offset IS NOT NULL)),
+    CHECK (raw_offset IS NULL OR (raw_offset >= 0 AND raw_len >= 0 AND transfer_encoding IN (0, 1, 2)))
   )
   "#,
   "CREATE INDEX idx_attachments_by_message ON attachments(message_seq)",
   r#"
   CREATE INDEX idx_attachments_by_cid ON attachments(message_seq, content_id)
   WHERE content_id IS NOT NULL
+  "#,
+  r#"
+  CREATE TABLE message_tags (
+    tag         TEXT NOT NULL,
+    message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+    PRIMARY KEY (tag, message_seq)
+  ) WITHOUT ROWID
+  "#,
+  "CREATE INDEX idx_message_tags_by_message ON message_tags(message_seq)",
+  r#"
+  CREATE TRIGGER message_tags_after_insert AFTER INSERT ON messages
+  WHEN NEW.tags <> '[]'
+  BEGIN
+    INSERT OR IGNORE INTO message_tags(tag, message_seq)
+      SELECT value, NEW.seq FROM json_each(NEW.tags);
+  END
+  "#,
+  r#"
+  CREATE TRIGGER message_tags_after_update AFTER UPDATE OF tags ON messages
+  WHEN NEW.tags IS NOT OLD.tags
+  BEGIN
+    DELETE FROM message_tags WHERE message_seq = NEW.seq;
+    INSERT OR IGNORE INTO message_tags(tag, message_seq)
+      SELECT value, NEW.seq FROM json_each(NEW.tags);
+  END
   "#,
 ];
 

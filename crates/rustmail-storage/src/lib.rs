@@ -26,6 +26,9 @@
 //! ```
 
 mod error;
+mod locator;
+#[cfg(test)]
+mod locator_fuzz;
 mod models;
 mod prepared;
 mod query;
