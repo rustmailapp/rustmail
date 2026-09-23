@@ -229,6 +229,7 @@ pub async fn delete_all_messages(
 ) -> Result<impl IntoResponse, AppError> {
   let count = state.repo.delete_all().await?;
   state.broadcast(WsEvent::MessagesClear);
+  state.repo.reclaim_after_delete_all().await;
   Ok(Json(serde_json::json!({ "deleted": count })))
 }
 

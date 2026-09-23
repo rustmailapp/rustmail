@@ -329,6 +329,17 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn delete_all_returns_before_it_reclaims_so_the_caller_can_announce_it_first() {
+    let file = file_repo("delete-all-then-reclaim").await;
+    fill(&file.repo, (0..SMALL_MESSAGES).map(small_message).collect()).await;
+
+    file.repo.delete_all().await.unwrap();
+
+    assert_eq!(file.repo.count().await.unwrap(), 0);
+    assert!(page_stats(&file.writer).await.unwrap().freelist_count > 0);
+  }
+
+  #[tokio::test]
   async fn delete_all_leaves_no_free_pages_and_a_small_file() {
     let file = file_repo("delete-all").await;
     fill(&file.repo, (0..SMALL_MESSAGES).map(small_message).collect()).await;
@@ -339,6 +350,7 @@ mod tests {
     );
 
     let deleted = file.repo.delete_all().await.unwrap();
+    file.repo.reclaim_after_delete_all().await;
 
     assert_eq!(deleted, SMALL_MESSAGES as u64);
     assert_eq!(page_stats(&file.writer).await.unwrap().freelist_count, 0);
@@ -435,6 +447,7 @@ mod tests {
     let populated = page_stats(&pool).await.unwrap();
 
     repo.delete_all().await.unwrap();
+    repo.reclaim_after_delete_all().await;
 
     let emptied = page_stats(&pool).await.unwrap();
     assert_eq!(emptied.freelist_count, 0);
