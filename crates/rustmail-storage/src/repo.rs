@@ -434,9 +434,8 @@ impl MessageRepository {
     Ok(())
   }
 
-  /// Deletes all messages and clears the FTS5 index atomically, then gives
-  /// the freed pages back to the filesystem. Returns the count of deleted
-  /// messages.
+  /// Deletes all messages and clears the FTS5 index atomically. Returns the
+  /// count of deleted messages.
   ///
   /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
   /// An external-content index reads the content row to work out which tokens
@@ -446,11 +445,20 @@ impl MessageRepository {
   /// dropping its pages whole, so removing `messages` last has no cascade left
   /// to walk.
   ///
-  /// The reclaim runs after the commit and before this returns. The messages
-  /// are gone once the commit lands, so a failed reclaim is logged rather than
-  /// reported: the pages stay on the freelist for new mail to reuse.
+  /// The freed pages stay on the freelist until
+  /// [`reclaim_after_delete_all`](Self::reclaim_after_delete_all) gives them
+  /// back to the filesystem.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
-    let deleted = retry_on_lock(|| self.delete_all_once()).await?;
+    retry_on_lock(|| self.delete_all_once()).await
+  }
+
+  /// Gives the pages a [`delete_all`](Self::delete_all) freed back to the
+  /// filesystem, within a time budget.
+  ///
+  /// Inserts keep committing between its steps. The messages are already gone,
+  /// so a failed reclaim is logged rather than reported: the pages stay on the
+  /// freelist for new mail to reuse.
+  pub async fn reclaim_after_delete_all(&self) {
     if let Err(failure) = reclaim(
       &self.writer,
       ReclaimTrigger::DeleteAll,
@@ -466,7 +474,6 @@ impl MessageRepository {
         "failed to reclaim disk after deleting every message"
       );
     }
-    Ok(deleted)
   }
 
   async fn delete_all_once(&self) -> Result<u64, StorageError> {
