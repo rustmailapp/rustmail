@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use mail_parser::{ContentType, MessageParser, MimeHeaders, PartType};
+use mail_parser::{ContentType, MessageParser, MessagePart, MimeHeaders, PartType};
 
 use crate::locator::{Locator, locate};
 
@@ -76,17 +76,8 @@ impl PreparedMessage {
 }
 
 fn stored_parts(parsed: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<PreparedAttachment> {
-  let attachment_ids: HashSet<u32> = parsed.attachments.iter().copied().collect();
-  parsed
-    .parts
-    .iter()
-    .enumerate()
-    .filter(|(idx, part)| {
-      let is_attachment = u32::try_from(*idx).is_ok_and(|idx| attachment_ids.contains(&idx));
-      is_attachment || matches!(part.body, PartType::InlineBinary(_))
-    })
-    .filter(|(_, part)| !part.contents().is_empty())
-    .map(|(_, part)| PreparedAttachment {
+  stored_part_refs(parsed)
+    .map(|part| PreparedAttachment {
       filename: part.attachment_name().map(String::from),
       content_type: part.content_type().map(mime_type),
       content_id: part.content_id().map(String::from),
@@ -97,6 +88,24 @@ fn stored_parts(parsed: &mail_parser::Message<'_>, raw: &[u8]) -> Vec<PreparedAt
       ),
     })
     .collect()
+}
+
+/// The parts of `parsed` stored as attachment rows, in message order: each
+/// declared attachment and inline binary part with non-empty contents.
+pub(crate) fn stored_part_refs<'p, 'x>(
+  parsed: &'p mail_parser::Message<'x>,
+) -> impl Iterator<Item = &'p MessagePart<'x>> {
+  let attachment_ids: HashSet<u32> = parsed.attachments.iter().copied().collect();
+  parsed
+    .parts
+    .iter()
+    .enumerate()
+    .filter(move |(idx, part)| {
+      let is_attachment = u32::try_from(*idx).is_ok_and(|idx| attachment_ids.contains(&idx));
+      is_attachment || matches!(part.body, PartType::InlineBinary(_))
+    })
+    .map(|(_, part)| part)
+    .filter(|part| !part.contents().is_empty())
 }
 
 fn mime_type(content_type: &ContentType<'_>) -> String {
