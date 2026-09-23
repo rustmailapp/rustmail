@@ -32,6 +32,7 @@ mod locator_fuzz;
 mod models;
 mod prepared;
 mod query;
+mod reclaim;
 mod repo;
 mod schema;
 

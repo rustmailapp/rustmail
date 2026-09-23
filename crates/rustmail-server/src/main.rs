@@ -845,7 +845,8 @@ fn parse_release_host(s: &str) -> (String, Option<u16>) {
 
 /// Runs a single retention sweep: purges messages older than `retention_hours`
 /// and trims to `max_messages` when configured, broadcasting `MessageDelete`
-/// events for each removed id.
+/// events for each removed id, then reclaims disk once the freelist is large
+/// enough to be worth it.
 ///
 /// `now` is injected so callers can drive deterministic cutoffs in tests.
 async fn run_retention_tick(
@@ -887,6 +888,9 @@ async fn run_retention_tick(
       }
       _ => {}
     }
+  }
+  if let Err(e) = repo.reclaim_after_retention().await {
+    tracing::error!(error = %e, "Retention: failed to reclaim disk");
   }
 }
 
