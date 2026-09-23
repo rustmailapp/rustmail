@@ -14,4 +14,4 @@ body-json:
   "error": "SMTP delivery failed"
 }
 
-relay received a TLS handshake record first: true
+relay received in plaintext, before dropping the connection: EHLO, STARTTLS

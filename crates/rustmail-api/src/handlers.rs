@@ -577,6 +577,43 @@ pub struct ReleaseBody {
 
 const ALLOWED_SMTP_PORTS: &[u16] = &[25, 465, 587, 2525];
 
+/// The SMTPS port: the relay expects TLS from the connection's first byte.
+const IMPLICIT_TLS_SMTP_PORT: u16 = 465;
+
+/// How the connection to the release relay is secured.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RelaySecurity {
+  /// TLS from the first byte (SMTPS).
+  ImplicitTls,
+  /// Plaintext greeting and EHLO, then a mandatory STARTTLS upgrade; the
+  /// message is never sent if the relay cannot upgrade.
+  RequiredStartTls,
+}
+
+impl RelaySecurity {
+  fn for_port(port: u16) -> Self {
+    if port == IMPLICIT_TLS_SMTP_PORT {
+      Self::ImplicitTls
+    } else {
+      Self::RequiredStartTls
+    }
+  }
+}
+
+fn relay_transport(
+  host: &str,
+  port: u16,
+  security: RelaySecurity,
+) -> Result<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>, lettre::transport::smtp::Error> {
+  use lettre::{AsyncSmtpTransport, Tokio1Executor};
+
+  let builder = match security {
+    RelaySecurity::ImplicitTls => AsyncSmtpTransport::<Tokio1Executor>::relay(host),
+    RelaySecurity::RequiredStartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host),
+  }?;
+  Ok(builder.port(port).build())
+}
+
 pub async fn release_message(
   State(state): State<AppState>,
   Path(id): Path<String>,
@@ -645,12 +682,9 @@ pub async fn release_message(
 
   match envelope {
     Ok(envelope) => {
-      use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
+      use lettre::AsyncTransport;
 
-      let mailer_result =
-        AsyncSmtpTransport::<Tokio1Executor>::relay(&body.host).map(|b| b.port(port).build());
-
-      let mailer = match mailer_result {
+      let mailer = match relay_transport(&body.host, port, RelaySecurity::for_port(port)) {
         Ok(m) => m,
         Err(e) => {
           tracing::error!(error = %e, "TLS setup failed for relay host");
@@ -1070,5 +1104,139 @@ mod auth_parser_tests {
     assert_eq!(method, "");
     assert_eq!(status, "broken");
     assert_eq!(details, "broken");
+  }
+}
+
+#[cfg(test)]
+mod relay_transport_tests {
+  use super::*;
+  use lettre::AsyncTransport;
+  use lettre::address::Envelope;
+  use std::time::Duration;
+  use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+  use tokio::net::TcpListener;
+
+  const LOOPBACK: &str = "127.0.0.1";
+  const STARTTLS_SUBMISSION_PORT: u16 = 2525;
+  const TLS_HANDSHAKE_RECORD: u8 = 0x16;
+  const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+  const GREETING: &[u8] = b"220 relay.test ESMTP\r\n";
+  const EHLO_WITH_STARTTLS: &[u8] = b"250-relay.test\r\n250 STARTTLS\r\n";
+  const EHLO_WITHOUT_STARTTLS: &[u8] = b"250 relay.test\r\n";
+  const RAW_MESSAGE: &[u8] = b"Subject: relay\r\n\r\nBody.\r\n";
+
+  fn envelope() -> Envelope {
+    Envelope::new(
+      Some("sender@example.com".parse().unwrap()),
+      vec!["rcpt@example.com".parse().unwrap()],
+    )
+    .unwrap()
+  }
+
+  async fn loopback_listener() -> (TcpListener, u16) {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    (listener, port)
+  }
+
+  async fn send_through(port: u16, security: RelaySecurity) -> bool {
+    let mailer = relay_transport(LOOPBACK, port, security).unwrap();
+    tokio::time::timeout(EXCHANGE_TIMEOUT, mailer.send_raw(&envelope(), RAW_MESSAGE))
+      .await
+      .expect("the client never gave up on the relay")
+      .is_ok()
+  }
+
+  async fn plaintext_commands_until_close(
+    listener: TcpListener,
+    ehlo_reply: &'static [u8],
+  ) -> Vec<String> {
+    let (socket, _) = listener.accept().await.unwrap();
+    let mut socket = BufReader::new(socket);
+    socket.get_mut().write_all(GREETING).await.unwrap();
+    let mut commands = Vec::new();
+    let mut line = String::new();
+    while socket.read_line(&mut line).await.unwrap() > 0 {
+      let command = line.trim_end().to_string();
+      line.clear();
+      if command.starts_with("EHLO ") {
+        socket.get_mut().write_all(ehlo_reply).await.unwrap();
+      }
+      let is_starttls = command == "STARTTLS";
+      commands.push(command);
+      if is_starttls {
+        break;
+      }
+    }
+    commands
+  }
+
+  #[test]
+  fn port_465_is_implicit_tls_and_every_other_allowed_port_requires_starttls() {
+    for port in ALLOWED_SMTP_PORTS {
+      let expected = if *port == IMPLICIT_TLS_SMTP_PORT {
+        RelaySecurity::ImplicitTls
+      } else {
+        RelaySecurity::RequiredStartTls
+      };
+      assert_eq!(RelaySecurity::for_port(*port), expected, "port {port}");
+    }
+  }
+
+  #[tokio::test]
+  async fn starttls_relay_sends_ehlo_then_starttls_in_plaintext() {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(plaintext_commands_until_close(listener, EHLO_WITH_STARTTLS));
+
+    assert!(!send_through(port, RelaySecurity::for_port(STARTTLS_SUBMISSION_PORT)).await);
+
+    let commands = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+    let verbs: Vec<&str> = commands
+      .iter()
+      .map(|c| c.split(' ').next().unwrap_or_default())
+      .collect();
+    assert_eq!(verbs, ["EHLO", "STARTTLS"]);
+  }
+
+  #[tokio::test]
+  async fn starttls_relay_refuses_to_send_when_the_upgrade_is_not_offered() {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(plaintext_commands_until_close(
+      listener,
+      EHLO_WITHOUT_STARTTLS,
+    ));
+
+    assert!(!send_through(port, RelaySecurity::RequiredStartTls).await);
+
+    let commands = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+    assert!(
+      commands.iter().all(|c| !c.starts_with("MAIL")),
+      "the client sent the envelope in plaintext: {commands:?}"
+    );
+  }
+
+  #[tokio::test]
+  async fn implicit_tls_relay_opens_with_a_tls_handshake_record() {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      let mut first = [0u8; 1];
+      socket.read_exact(&mut first).await.unwrap();
+      first[0]
+    });
+
+    assert!(!send_through(port, RelaySecurity::for_port(IMPLICIT_TLS_SMTP_PORT)).await);
+
+    let first_byte = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(first_byte, TLS_HANDSHAKE_RECORD);
   }
 }

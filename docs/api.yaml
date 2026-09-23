@@ -506,9 +506,11 @@ paths:
       description: >
         Disabled unless the server was started with `--release-host`. The
         message's raw source is sent unchanged, with the captured envelope
-        (MAIL FROM and RCPT TO), to `host` over implicit TLS: the connection
-        is TLS from its first byte, on whichever port is used, so the relay
-        must accept SMTPS there. Checks run in this order: release enabled,
+        (MAIL FROM and RCPT TO), to `host` over TLS. On port 465 the
+        connection is implicit TLS (SMTPS), TLS from its first byte. On every
+        other allowed port (25, 587, 2525) it starts in plaintext and STARTTLS
+        is required: if the relay does not offer it or the upgrade fails, the
+        message is not sent. Checks run in this order: release enabled,
         host, configured port, allowed port, message lookup, envelope.
       tags: [Release]
       requestBody:
