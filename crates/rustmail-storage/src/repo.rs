@@ -2366,7 +2366,7 @@ mod tests {
   }
 
   const SEEDED_MESSAGES: usize = 6;
-  const PLAN_TABLES_ALLOWED: &[&str] = &["m", "fts", "messages", "messages_fts", "json_each"];
+  const PLAN_TABLES_ALLOWED: &[&str] = &["m", "fts", "messages", "messages_fts", "message_tags"];
 
   fn every_filter() -> MessageFilter {
     MessageFilter {
@@ -2676,10 +2676,71 @@ mod tests {
       .any(|step| step.starts_with("USE TEMP B-TREE FOR ORDER BY"))
   }
 
+  fn tagged_a_or_b() -> MessageFilter {
+    MessageFilter {
+      tags: vec!["a".to_string(), "b".to_string()],
+      ..MessageFilter::default()
+    }
+  }
+
   fn only_unread() -> MessageFilter {
     MessageFilter {
       unread: true,
       ..MessageFilter::default()
+    }
+  }
+
+  #[tokio::test]
+  async fn the_tag_filter_looks_tags_up_by_primary_key() {
+    let repo = test_repo().await;
+    let quoted = || "\"term\"".to_string();
+    let filter = tagged_a_or_b();
+    let statements = [
+      (
+        "list",
+        list_statement(&filter, PageStart::Offset(0), 50).into_sql(),
+      ),
+      (
+        "list before cursor",
+        list_statement(&filter, PageStart::Before(Cursor(1)), 50).into_sql(),
+      ),
+      ("count", count_statement(&filter).into_sql()),
+      (
+        "search",
+        search_statement(quoted(), &filter, PageStart::Offset(0), 50).into_sql(),
+      ),
+      (
+        "search count",
+        search_count_statement(quoted(), &filter).into_sql(),
+      ),
+    ];
+
+    for (path, sql) in statements {
+      let plan = plan_of(&repo, &sql).await;
+      assert!(
+        plan
+          .iter()
+          .any(|step| step.starts_with("SEARCH message_tags USING PRIMARY KEY (tag=?)")),
+        "{path} does not look the tags up in message_tags: {plan:?}"
+      );
+      assert!(
+        !scans_table(&plan, &["m", "messages", "message_tags"]),
+        "{path} scans a whole table: {plan:?}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn a_tag_filtered_page_needs_no_sort() {
+    let repo = test_repo().await;
+    let filter = tagged_a_or_b();
+
+    for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
+      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_sql()).await;
+      assert!(
+        !sorts_for_order_by(&plan),
+        "{start:?}: the tagged page sorts its matches: {plan:?}"
+      );
     }
   }
 
@@ -2718,5 +2779,293 @@ mod tests {
       ["SEARCH m USING COVERING INDEX idx_messages_unread (is_read=?)"],
       "the unread count touches more than the unread index entries"
     );
+  }
+
+  async fn tag_pairs(repo: &MessageRepository, sql: &str) -> Vec<(String, i64)> {
+    sqlx::query_as(sql).fetch_all(&repo.writer).await.unwrap()
+  }
+
+  /// Asserts `message_tags` holds exactly the distinct `(tag, seq)` pairs of
+  /// every stored message's `tags` JSON, and returns how many there are.
+  async fn assert_tags_follow_json(repo: &MessageRepository) -> usize {
+    let indexed = tag_pairs(
+      repo,
+      "SELECT tag, message_seq FROM message_tags ORDER BY tag, message_seq",
+    )
+    .await;
+    let from_json = tag_pairs(
+      repo,
+      "SELECT DISTINCT j.value, m.seq FROM messages m, json_each(m.tags) j ORDER BY 1, 2",
+    )
+    .await;
+    assert_eq!(
+      indexed, from_json,
+      "message_tags must mirror the tags JSON of every stored message"
+    );
+    indexed.len()
+  }
+
+  fn seeded_tags(index: usize) -> Vec<String> {
+    let parity = if index.is_multiple_of(2) {
+      "even"
+    } else {
+      "odd"
+    };
+    vec![
+      format!("item{index}"),
+      "shared".to_string(),
+      format!("item{index}"),
+      parity.to_string(),
+    ]
+  }
+
+  const DISTINCT_TAGS_PER_SEEDED_MESSAGE: usize = 3;
+
+  async fn seed_tagged_mailbox(repo: &MessageRepository) -> Vec<String> {
+    let ids = seed_mailbox(repo).await;
+    for (index, id) in ids.iter().enumerate() {
+      repo
+        .update_message(id, None, None, Some(&seeded_tags(index)))
+        .await
+        .unwrap();
+    }
+    ids
+  }
+
+  #[tokio::test]
+  async fn a_message_stored_with_tags_indexes_each_distinct_tag_once() {
+    let repo = test_repo().await;
+
+    sqlx::query(
+      r#"INSERT INTO messages (id, sender, recipients, size, tags, created_at)
+         VALUES ('tagged', 'a@test.com', '[]', 1, '["a","b","a"]', '2026-01-01T00:00:00Z'),
+                ('untagged', 'a@test.com', '[]', 1, '[]', '2026-01-01T00:00:00Z')"#,
+    )
+    .execute(&repo.writer)
+    .await
+    .unwrap();
+
+    assert_eq!(assert_tags_follow_json(&repo).await, 2);
+  }
+
+  #[tokio::test]
+  async fn tagging_through_update_message_keeps_the_tag_index_equal_to_the_json() {
+    let repo = test_repo().await;
+    let ids = seed_tagged_mailbox(&repo).await;
+    assert_eq!(
+      assert_tags_follow_json(&repo).await,
+      SEEDED_MESSAGES * DISTINCT_TAGS_PER_SEEDED_MESSAGE
+    );
+
+    tag(&repo, &ids[0], &["replaced"]).await;
+    tag(&repo, &ids[1], &[]).await;
+    mark_read(&repo, &ids[2]).await;
+    let unchanged = seeded_tags(3);
+    repo
+      .update_message(&ids[3], Some(true), Some(true), Some(&unchanged))
+      .await
+      .unwrap();
+
+    assert_eq!(
+      assert_tags_follow_json(&repo).await,
+      (SEEDED_MESSAGES - 2) * DISTINCT_TAGS_PER_SEEDED_MESSAGE + 1
+    );
+  }
+
+  #[tokio::test]
+  async fn deleting_a_message_drops_its_indexed_tags() {
+    let repo = test_repo().await;
+    let ids = seed_tagged_mailbox(&repo).await;
+
+    repo.delete(&ids[0]).await.unwrap();
+
+    assert_eq!(
+      assert_tags_follow_json(&repo).await,
+      (SEEDED_MESSAGES - 1) * DISTINCT_TAGS_PER_SEEDED_MESSAGE
+    );
+  }
+
+  #[tokio::test]
+  async fn deleting_every_message_drops_every_indexed_tag() {
+    let repo = test_repo().await;
+    seed_tagged_mailbox(&repo).await;
+
+    repo.delete_all().await.unwrap();
+
+    assert_eq!(assert_tags_follow_json(&repo).await, 0);
+  }
+
+  #[tokio::test]
+  async fn expiring_messages_drops_their_indexed_tags() {
+    let repo = test_repo().await;
+    let ids = seed_tagged_mailbox(&repo).await;
+    backdate(&repo, &ids[..2]).await;
+
+    repo
+      .delete_older_than("2001-01-01T00:00:00Z")
+      .await
+      .unwrap();
+
+    assert_eq!(
+      assert_tags_follow_json(&repo).await,
+      (SEEDED_MESSAGES - 2) * DISTINCT_TAGS_PER_SEEDED_MESSAGE
+    );
+  }
+
+  #[tokio::test]
+  async fn trimming_messages_drops_their_indexed_tags() {
+    let repo = test_repo().await;
+    seed_tagged_mailbox(&repo).await;
+
+    repo.trim_to_max(2).await.unwrap();
+
+    assert_eq!(
+      assert_tags_follow_json(&repo).await,
+      2 * DISTINCT_TAGS_PER_SEEDED_MESSAGE
+    );
+  }
+
+  /// A fixed-seed linear congruential generator, so the oracle dataset is the
+  /// same on every run.
+  struct Lcg(u64);
+
+  impl Lcg {
+    const MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+    const INCREMENT: u64 = 1_442_695_040_888_963_407;
+    const OUTPUT_SHIFT: u32 = 33;
+
+    fn below(&mut self, bound: usize) -> usize {
+      self.0 = self
+        .0
+        .wrapping_mul(Self::MULTIPLIER)
+        .wrapping_add(Self::INCREMENT);
+      ((self.0 >> Self::OUTPUT_SHIFT) % bound as u64) as usize
+    }
+  }
+
+  const ORACLE_SEED: u64 = 0x5eed;
+  const ORACLE_MESSAGES: usize = 150;
+  const ORACLE_MAX_TAGS: usize = 4;
+  const ORACLE_RETAG_EVERY: usize = 5;
+  const ORACLE_DELETE_EVERY: usize = 13;
+  const ORACLE_SUBJECT: &str = "oracle";
+  const ORACLE_TAGS: &[&str] = &["alpha", "beta", "gamma", "Alpha", "alpha-beta", "", "ünï"];
+
+  fn random_tags(rng: &mut Lcg) -> Vec<String> {
+    (0..rng.below(ORACLE_MAX_TAGS + 1))
+      .map(|_| ORACLE_TAGS[rng.below(ORACLE_TAGS.len())].to_string())
+      .collect()
+  }
+
+  async fn seed_oracle_mailbox(repo: &MessageRepository) {
+    let batch: Vec<PreparedMessage> = (0..ORACLE_MESSAGES)
+      .map(|i| prepared(&format!("{ORACLE_SUBJECT} {i}")))
+      .collect();
+    let stored = repo.insert_batch(&batch).await.unwrap();
+    let mut rng = Lcg(ORACLE_SEED);
+    for (index, summary) in stored.iter().enumerate() {
+      let is_read = rng.below(2) == 0;
+      let is_starred = rng.below(3) == 0;
+      repo
+        .update_message(
+          &summary.id,
+          Some(is_read),
+          Some(is_starred),
+          Some(&random_tags(&mut rng)),
+        )
+        .await
+        .unwrap();
+      if index.is_multiple_of(ORACLE_RETAG_EVERY) {
+        repo
+          .update_message(&summary.id, None, None, Some(&random_tags(&mut rng)))
+          .await
+          .unwrap();
+      }
+    }
+    for summary in stored.iter().step_by(ORACLE_DELETE_EVERY) {
+      repo.delete(&summary.id).await.unwrap();
+    }
+  }
+
+  fn oracle_filters() -> Vec<MessageFilter> {
+    let mut tag_sets: Vec<Vec<String>> = vec![Vec::new()];
+    tag_sets.extend(ORACLE_TAGS.iter().map(|tag| vec![tag.to_string()]));
+    tag_sets.push(vec!["alpha".into(), "beta".into()]);
+    tag_sets.push(vec!["alpha".into(), "alpha".into()]);
+    tag_sets.push(vec!["gamma".into(), "ünï".into(), "missing".into()]);
+    tag_sets.push(vec!["missing".into()]);
+    let mut filters = Vec::new();
+    for tags in tag_sets {
+      for unread in [false, true] {
+        for starred in [false, true] {
+          filters.push(MessageFilter {
+            starred,
+            unread,
+            has_attachments: false,
+            tags: tags.clone(),
+          });
+        }
+      }
+    }
+    filters
+  }
+
+  /// The messages `filter` should let through, newest first, found by
+  /// reading every message's tags JSON directly.
+  async fn oracle_ids(repo: &MessageRepository, filter: &MessageFilter) -> Vec<String> {
+    let mut builder = QueryBuilder::<Sqlite>::new("SELECT m.id FROM messages m WHERE 1=1");
+    if filter.starred {
+      builder.push(" AND m.is_starred = 1");
+    }
+    if filter.unread {
+      builder.push(" AND m.is_read = 0");
+    }
+    if !filter.tags.is_empty() {
+      builder.push(" AND EXISTS (SELECT 1 FROM json_each(m.tags) j WHERE j.value IN (");
+      let mut tags = builder.separated(", ");
+      for tag in &filter.tags {
+        tags.push_bind(tag.clone());
+      }
+      builder.push("))");
+    }
+    builder.push(" ORDER BY m.seq DESC");
+    builder
+      .build_query_scalar()
+      .fetch_all(&repo.writer)
+      .await
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn filtered_listings_and_counts_agree_with_the_tags_json() {
+    let repo = test_repo().await;
+    seed_oracle_mailbox(&repo).await;
+    assert_tags_follow_json(&repo).await;
+    let whole_mailbox = ORACLE_MESSAGES as i64;
+
+    for filter in oracle_filters() {
+      let expected = oracle_ids(&repo, &filter).await;
+      let listed: Vec<String> = repo
+        .list_page(&filter, PageStart::Offset(0), whole_mailbox)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.id)
+        .collect();
+      assert_eq!(listed, expected, "listing disagrees for {filter:?}");
+      assert_eq!(
+        repo.count_filtered(&filter).await.unwrap(),
+        expected.len() as i64,
+        "count disagrees for {filter:?}"
+      );
+      assert_eq!(
+        repo
+          .search_count_filtered(ORACLE_SUBJECT, &filter)
+          .await
+          .unwrap(),
+        expected.len() as i64,
+        "search count disagrees for {filter:?}"
+      );
+    }
   }
 }
