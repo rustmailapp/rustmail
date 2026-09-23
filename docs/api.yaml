@@ -723,8 +723,11 @@ paths:
       summary: WebSocket real-time event stream
       description: >
         Upgrade to a WebSocket connection to receive real-time inbox events.
-        The server sends JSON text frames. Clients do not need to send frames
-        (ping/pong is handled at the protocol level).
+        Each event is one JSON text frame of the form
+        `{"type": "<event>", "data": {...}}`; `messages:clear` has no `data`
+        field. Only events that happen after the connection opens are sent:
+        there is no replay, so fetch `GET /api/v1/messages` to build the
+        initial view. Frames the client sends carry no meaning to the server.
 
 
         **Event types:**
@@ -732,22 +735,47 @@ paths:
 
         | type | data |
         |---|---|
-        | `message:new` | `MessageSummary` object |
+        | `message:new` | `MessageSummary` object, `recipients` and `tags` as arrays |
         | `message:delete` | `{ "id": "<ulid>" }` |
         | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
         | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
         | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |
         | `messages:clear` | _(no data field)_ |
+
+
+        One `PATCH` that sets several fields sends one event per field, in the
+        order read, starred, tags.
+
+
+        **Keepalive and idle timeout.** The server pings on connect and every
+        30 seconds. Only frames from the client (a pong, or anything else)
+        count as activity: a client silent for 90 seconds is sent a Close
+        frame and disconnected, however many events are flowing to it.
+        Browsers answer pings on their own; other clients must answer them.
+        A single send that cannot complete within 10 seconds (a client that
+        stopped reading) also closes the connection.
+
+
+        **Slow clients.** Events are fanned out through a bounded buffer. A
+        client that falls far enough behind to lose events is not sent the
+        ones that survive: it is sent a Close frame and disconnected. Its
+        incremental view is already wrong at that point, so on any
+        disconnect a client should reconnect and refetch the message list
+        rather than resume from the events it saw.
       tags: [WebSocket]
       responses:
         '101':
-          description: Switching Protocols — WebSocket handshake successful
+          description: Switching Protocols. The WebSocket handshake succeeded.
         '403':
           description: >
-            Forbidden — the handshake carried an `Origin` header that is
+            Forbidden. The handshake carried an `Origin` header that is
             neither the origin the server is reached at nor one passed to
             `--allowed-origin`. Clients that send no `Origin` at all are
             unaffected.
+        '503':
+          description: >
+            50 WebSocket connections are already open. Retry later; a slot
+            frees when any connection closes. No body.
 
 components:
 
