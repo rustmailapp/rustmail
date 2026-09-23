@@ -72,7 +72,7 @@ pub struct AttachmentSummary {
 pub struct Attachment {
   /// ULID identifier.
   pub id: String,
-  /// Parent message ID (foreign key).
+  /// ID of the message that carries the attachment.
   pub message_id: String,
   /// Original filename from Content-Disposition, if present.
   pub filename: Option<String>,
