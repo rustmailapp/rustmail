@@ -2486,25 +2486,6 @@ describe("flag changes under a filter", () => {
     vi.useRealTimers();
   });
 
-  it("reads the list again when a message it never loaded starts matching", async () => {
-    const starredNow = message(1, { is_starred: true });
-    listMessages.mockResolvedValue(
-      page([starredNow, message(0, { is_starred: true })]),
-    );
-
-    deliver(
-      JSON.stringify({
-        type: "message:starred",
-        data: { id: "id-1", is_starred: true },
-      }),
-    );
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
-
-    expect(listMessages).toHaveBeenCalledOnce();
-    expect(filteredMessages().map((m) => m.id)).toEqual(["id-1", "id-0"]);
-    expect(total()).toBe(2);
-  });
-
   it("asks the server for the count when a message it never loaded is deleted", async () => {
     listMessages.mockResolvedValue(page([], 1));
 

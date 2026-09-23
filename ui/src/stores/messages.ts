@@ -646,12 +646,7 @@ async function refreshTotal(): Promise<void> {
 function countedInTotal(id: string): boolean | undefined {
   const row = findMessage(id) ?? heldRows.get(id);
   if (row !== undefined) return matchesFilters(row, filters());
-  return viewNarrowed() ? undefined : true;
-}
-
-/** Whether a search or a filter narrows the list the total counts. */
-function viewNarrowed(): boolean {
-  return search() !== "" || hasActiveFilters();
+  return search() !== "" || hasActiveFilters() ? undefined : true;
 }
 
 /**
@@ -991,32 +986,32 @@ async function readFirstPage(): Promise<boolean> {
       currentListRead = null;
       eventsDuringRead = null;
       setLoading(false);
-      if (searchStale) scheduleViewRefresh();
+      if (searchStale) scheduleSearchRefresh();
     }
   }
 }
 
 /**
- * Marks the narrowed list stale and refetches it once the window closes.
+ * Marks the search results stale and refetches them once the window closes.
  *
  * A search cannot place a live message itself, since only the server knows
- * whether it matches, and a filtered list cannot place a message it never
- * loaded that a flag change brought into its filters. Both are folded into one
- * trailing read per {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight
- * when the window closes is left alone; the stale flag outlives it and
- * schedules the next.
+ * whether it matches, so arrivals are folded into one trailing read per
+ * {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight when the window
+ * closes is left alone; the stale flag outlives it and schedules the next.
  */
-function scheduleViewRefresh(): void {
+function scheduleSearchRefresh(): void {
   searchStale = true;
   if (searchRefreshTimer !== null) return;
   searchRefreshTimer = setTimeout(() => {
     searchRefreshTimer = null;
-    if (!searchStale || !viewNarrowed() || loading()) return;
+    if (!searchStale || !search() || loading()) return;
     if (liveHeld()) {
       setHeldRefresh(true);
       return;
     }
-    fetchMessages().catch(() => notify("Could not refresh the list."));
+    fetchMessages().catch(() =>
+      notify("Could not refresh the search results."),
+    );
   }, SEARCH_REFRESH_WINDOW_MS);
 }
 
@@ -1142,7 +1137,7 @@ function readEvent(frame: unknown): WsEvent | undefined {
 function admitArrivals(arrivals: readonly MessageSummary[]): void {
   if (arrivals.length === 0) return;
   if (search()) {
-    scheduleViewRefresh();
+    scheduleSearchRefresh();
     return;
   }
   const f = filters();
@@ -1197,10 +1192,7 @@ function patchMessage(id: string, patch: Partial<MessageSummary>): void {
     return;
   }
   const current = findMessage(id);
-  if (current === undefined) {
-    if (hasActiveFilters()) scheduleViewRefresh();
-    return;
-  }
+  if (current === undefined) return;
   const patched = { ...current, ...patch };
   const f = filters();
   const was = matchesFilters(current, f);
