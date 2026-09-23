@@ -17,6 +17,7 @@ const guide: DefaultTheme.SidebarItem[] = [
       { text: "Installation", link: "/getting-started/installation" },
       { text: "Quick Start", link: "/getting-started/quick-start" },
       { text: "Docker", link: "/getting-started/docker" },
+      { text: "Upgrading", link: "/getting-started/upgrading" },
       { text: "Architecture", link: "/getting-started/architecture" },
     ],
   },

@@ -80,6 +80,12 @@ cd rustmail && make build
 
 Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest): Linux x86_64/aarch64/armv7 (glibc and musl builds), macOS (Intel + Apple Silicon), and multi-arch Docker images.
 
+## Upgrading to 0.8
+
+RustMail 0.8 stores messages in a new database layout. On first start it migrates an existing database automatically, before SMTP and HTTP start (about 4 s per 100k small messages), and keeps the old file as `rustmail.db.schema0.bak` until you delete it. You need free disk for the old and the new file side by side.
+
+To go back, run `rustmail restore-backup` with the new binary **before** installing the older version; mail received after the upgrade stays only in the new file. Older binaries refuse an upgraded database without writing to it. See the [upgrade guide](https://docs.rustmail.app/getting-started/upgrading) for details, including Docker and Homebrew.
+
 ## Features
 
 | Feature | Description |
@@ -148,6 +154,7 @@ Full docs at [docs.rustmail.app](https://docs.rustmail.app):
 
 - [Getting Started](https://docs.rustmail.app/getting-started/introduction)
 - [Docker](https://docs.rustmail.app/getting-started/docker)
+- [Upgrading](https://docs.rustmail.app/getting-started/upgrading)
 - [Configuration](https://docs.rustmail.app/configuration/cli-flags)
 - [CI Integration](https://docs.rustmail.app/ci-integration/rest-assertions)
 - [API Reference](https://docs.rustmail.app/api/)

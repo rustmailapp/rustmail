@@ -48,3 +48,5 @@ axum = { workspace = true }
 tokio-tungstenite = "0.28"
 tempfile = "3.20"
 tokio-rustls = { workspace = true }
+mail-parser = { workspace = true }
+ulid = { workspace = true }

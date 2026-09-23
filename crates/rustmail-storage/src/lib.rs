@@ -26,13 +26,21 @@
 //! ```
 
 mod error;
+mod locator;
+#[cfg(test)]
+mod locator_fuzz;
+mod migrate;
 mod models;
 mod prepared;
 mod query;
+mod reclaim;
 mod repo;
 mod schema;
 
-pub use error::StorageError;
+pub use error::{MigrationRefusal, RestoreRefusal, StorageError};
+pub use migrate::{
+  MigrationReport, Preparation, RestoreReport, prepare_database_file, restore_backup,
+};
 pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
 pub use prepared::PreparedMessage;
 pub use query::{Cursor, MessageFilter, PageStart};

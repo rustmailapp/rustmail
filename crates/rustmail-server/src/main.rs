@@ -40,6 +40,8 @@ enum Command {
   Serve(ServeArgs),
   /// Start ephemeral SMTP, wait for matching emails, exit 0/1
   Assert(AssertArgs),
+  /// Put back the database kept by the storage migration, before downgrading rustmail
+  RestoreBackup(RestoreArgs),
   /// Launch the interactive terminal UI
   #[cfg(feature = "tui")]
   Tui(TuiArgs),
@@ -153,6 +155,19 @@ struct TuiArgs {
   port: u16,
 }
 
+#[derive(Parser)]
+struct RestoreArgs {
+  /// Database to restore the backup of; the same default as serve
+  #[arg(long, env = "RUSTMAIL_DB_PATH")]
+  db_path: Option<PathBuf>,
+
+  #[arg(long, env = "RUSTMAIL_LOG_LEVEL", default_value = "info")]
+  log_level: String,
+
+  #[arg(long)]
+  config: Option<String>,
+}
+
 #[derive(Deserialize, Default)]
 struct TomlConfig {
   bind: Option<String>,
@@ -261,6 +276,7 @@ async fn async_main() -> Result<()> {
   match cli.command {
     Some(Command::Assert(args)) => run_assert(args).await,
     Some(Command::Serve(args)) => run_serve(args).await,
+    Some(Command::RestoreBackup(args)) => run_restore_backup(args).await,
     #[cfg(feature = "tui")]
     Some(Command::Tui(args)) => rustmail_tui::run(&args.host, args.port).await,
     None => run_serve(cli.serve).await,
@@ -663,6 +679,43 @@ async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
     .with_context(|| format!("failed to open database for writing: {db_url}"))
 }
 
+/// Brings the database file at `db_path` to the current schema before it is
+/// opened, migrating a legacy database in place of the old one.
+///
+/// A stop requested while a migration runs pauses it after the batch in
+/// flight; the next start resumes it. Returns whether startup should go on:
+/// `false` once a stop was requested, even if the migration had finished.
+async fn prepare_database_file(db_path: &Path) -> Result<bool> {
+  let stop_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
+  let listener = {
+    let stop_requested = Arc::clone(&stop_requested);
+    tokio::spawn(async move {
+      if shutdown_signal().await.is_ok() {
+        stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
+      }
+    })
+  };
+  let preparation = rustmail_storage::prepare_database_file(db_path, || {
+    stop_requested.load(std::sync::atomic::Ordering::SeqCst)
+  })
+  .await;
+  listener.abort();
+  let preparation =
+    preparation.with_context(|| format!("failed to prepare database {}", db_path.display()))?;
+  if let rustmail_storage::Preparation::Paused { migrated, total } = preparation {
+    info!(
+      migrated,
+      total, "Storage migration paused at {migrated}/{total}; it resumes on next start"
+    );
+    return Ok(false);
+  }
+  if stop_requested.load(std::sync::atomic::Ordering::SeqCst) {
+    info!("Stop requested during startup; exiting before serving");
+    return Ok(false);
+  }
+  Ok(true)
+}
+
 /// Opens the repository for `db_url` and creates its schema.
 ///
 /// A file database gets a dedicated writer connection beside its pool of
@@ -845,7 +898,8 @@ fn parse_release_host(s: &str) -> (String, Option<u16>) {
 
 /// Runs a single retention sweep: purges messages older than `retention_hours`
 /// and trims to `max_messages` when configured, broadcasting `MessageDelete`
-/// events for each removed id.
+/// events for each removed id, then reclaims disk once the freelist is large
+/// enough to be worth it.
 ///
 /// `now` is injected so callers can drive deterministic cutoffs in tests.
 async fn run_retention_tick(
@@ -888,15 +942,50 @@ async fn run_retention_tick(
       _ => {}
     }
   }
+  if let Err(e) = repo.reclaim_after_retention().await {
+    tracing::error!(error = %e, "Retention: failed to reclaim disk");
+  }
 }
 
-async fn run_serve(args: ServeArgs) -> Result<()> {
+/// Puts the database from before the storage migration back in place and
+/// says where the migrated one went.
+async fn run_restore_backup(args: RestoreArgs) -> Result<()> {
+  init_logging(&args.log_level);
+  let db_path = args.db_path.unwrap_or_else(default_db_path);
+  let report = rustmail_storage::restore_backup(&db_path)
+    .await
+    .with_context(|| format!("failed to restore the backup of {}", db_path.display()))?;
+  println!(
+    "Restored {} to {}.",
+    report.restored_from.display(),
+    report.database.display()
+  );
+  println!(
+    "The migrated database is kept as {}.",
+    report.kept_as.display()
+  );
+  println!(
+    "Mail received after the storage migration is only in {}; the restored database does not have it.",
+    report.kept_as.display()
+  );
+  println!(
+    "Starting this rustmail again migrates {} again; run the older rustmail to keep it as it is.",
+    report.database.display()
+  );
+  Ok(())
+}
+
+fn init_logging(log_level: &str) {
   tracing_subscriber::fmt()
     .with_env_filter(
       tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| args.log_level.clone().into()),
+        .unwrap_or_else(|_| log_level.to_owned().into()),
     )
     .init();
+}
+
+async fn run_serve(args: ServeArgs) -> Result<()> {
+  init_logging(&args.log_level);
 
   let bind_addr = parse_bind_addr(&args.bind)?;
   let allowed_origins = parse_allowed_origins(&args.allowed_origins)?;
@@ -920,6 +1009,9 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
       std::fs::create_dir_all(parent)?;
     }
     info!(path = %db_path.display(), "Using persistent database");
+    if !prepare_database_file(&db_path).await? {
+      return Ok(());
+    }
     format!("sqlite:{}?mode=rwc", db_path.display())
   };
 

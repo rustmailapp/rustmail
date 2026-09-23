@@ -2359,6 +2359,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "ulid",
 ]
 
 [[package]]
@@ -2369,6 +2370,7 @@ dependencies = [
  "axum",
  "clap",
  "dirs",
+ "mail-parser",
  "reqwest",
  "rustls",
  "rustmail-api",
@@ -2386,6 +2388,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "ulid",
 ]
 
 [[package]]
