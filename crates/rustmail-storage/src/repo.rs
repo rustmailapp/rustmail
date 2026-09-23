@@ -4,13 +4,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
-use tracing::debug;
+use tracing::{debug, error};
 use ulid::Ulid;
 
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
 use crate::prepared::PreparedMessage;
 use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page};
+use crate::reclaim::{
+  DELETE_ALL_RECLAIM_BUDGET, RETENTION_RECLAIM_BUDGET, ReclaimTrigger, page_stats, reclaim,
+};
 use crate::schema::BUSY_TIMEOUT;
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
@@ -35,7 +38,7 @@ const WRITE_RETRY_BUDGET: Duration = BUSY_TIMEOUT;
 /// state rather than a rejection. `busy_timeout` covers most of it, but not
 /// the cases where SQLite refuses to wait — promoting a transaction that would
 /// deadlock, for one — so the caller still has to be prepared to retry.
-fn is_retryable_lock(error: &StorageError) -> bool {
+pub(crate) fn is_retryable_lock(error: &StorageError) -> bool {
   error
     .sqlite_primary_code()
     .is_some_and(|code| matches!(code, SQLITE_BUSY | SQLITE_LOCKED))
@@ -61,7 +64,7 @@ fn jitter(bound: Duration) -> Duration {
 /// safe because a failed write leaves nothing behind: the transaction rolls
 /// back, and an insert mints a fresh id per attempt, so no attempt can
 /// duplicate a row committed by an earlier one.
-async fn retry_on_lock<T, F, Fut>(mut op: F) -> Result<T, StorageError>
+pub(crate) async fn retry_on_lock<T, F, Fut>(mut op: F) -> Result<T, StorageError>
 where
   F: FnMut() -> Fut,
   Fut: Future<Output = Result<T, StorageError>>,
@@ -430,15 +433,39 @@ impl MessageRepository {
     Ok(())
   }
 
-  /// Deletes all messages and clears the FTS5 index atomically. Returns the count of deleted messages.
+  /// Deletes all messages and clears the FTS5 index atomically, then gives
+  /// the freed pages back to the filesystem. Returns the count of deleted
+  /// messages.
   ///
   /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
   /// An external-content index reads the content row to work out which tokens
   /// to remove, so a plain `DELETE` issued after the source rows are gone is a
-  /// silent no-op that leaves the whole index behind. Content and attachments
-  /// follow the `messages` rows by cascade.
+  /// silent no-op that leaves the whole index behind. The child tables are
+  /// emptied next, each by a `DELETE` without a `WHERE` that SQLite turns into
+  /// dropping its pages whole, so removing `messages` last has no cascade left
+  /// to walk.
+  ///
+  /// The reclaim runs after the commit and before this returns. The messages
+  /// are gone once the commit lands, so a failed reclaim is logged rather than
+  /// reported: the pages stay on the freelist for new mail to reuse.
   pub async fn delete_all(&self) -> Result<u64, StorageError> {
-    retry_on_lock(|| self.delete_all_once()).await
+    let deleted = retry_on_lock(|| self.delete_all_once()).await?;
+    if let Err(failure) = reclaim(
+      &self.writer,
+      ReclaimTrigger::DeleteAll,
+      DELETE_ALL_RECLAIM_BUDGET,
+    )
+    .await
+    {
+      error!(
+        event = "storage_reclaim_failed",
+        trigger = "delete_all",
+        error = %failure,
+        hint = "the space stays allocated to the database and is reused by new mail",
+        "failed to reclaim disk after deleting every message"
+      );
+    }
+    Ok(deleted)
   }
 
   async fn delete_all_once(&self) -> Result<u64, StorageError> {
@@ -448,12 +475,44 @@ impl MessageRepository {
       .execute(&mut *txn)
       .await?;
 
+    sqlx::query("DELETE FROM message_content")
+      .execute(&mut *txn)
+      .await?;
+
+    sqlx::query("DELETE FROM attachments")
+      .execute(&mut *txn)
+      .await?;
+
     let result = sqlx::query("DELETE FROM messages")
       .execute(&mut *txn)
       .await?;
 
     txn.commit().await?;
     Ok(result.rows_affected())
+  }
+
+  /// Gives the pages freed by a retention sweep back to the filesystem, when
+  /// the freelist has grown past the larger of 64 MiB and a quarter of the
+  /// file.
+  ///
+  /// Below that the free pages are left for new mail to reuse. A reclaim that
+  /// runs out of its time budget leaves the rest for a later call.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if the page counts cannot be read or
+  /// the reclaim fails.
+  pub async fn reclaim_after_retention(&self) -> Result<(), StorageError> {
+    let stats = page_stats(&self.readers).await?;
+    if !stats.warrants_retention_reclaim() {
+      return Ok(());
+    }
+    reclaim(
+      &self.writer,
+      ReclaimTrigger::Retention,
+      RETENTION_RECLAIM_BUDGET,
+    )
+    .await
   }
 
   /// Returns the total number of stored messages.

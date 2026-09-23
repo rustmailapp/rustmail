@@ -29,6 +29,7 @@ mod error;
 mod models;
 mod prepared;
 mod query;
+mod reclaim;
 mod repo;
 mod schema;
 
