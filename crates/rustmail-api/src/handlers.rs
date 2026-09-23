@@ -948,6 +948,7 @@ impl IntoResponse for AppError {
       AppError::Storage(
         e @ (StorageError::MigrationLocked { .. }
         | StorageError::MigrationRefused(_)
+        | StorageError::RestoreRefused(_)
         | StorageError::MigrationVerifyFailed { .. }
         | StorageError::MigrationDiskFull { .. }
         | StorageError::MigrationIo { .. }

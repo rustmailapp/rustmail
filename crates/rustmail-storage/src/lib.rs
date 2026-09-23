@@ -37,8 +37,10 @@ mod reclaim;
 mod repo;
 mod schema;
 
-pub use error::{MigrationRefusal, StorageError};
-pub use migrate::{MigrationReport, Preparation, prepare_database_file};
+pub use error::{MigrationRefusal, RestoreRefusal, StorageError};
+pub use migrate::{
+  MigrationReport, Preparation, RestoreReport, prepare_database_file, restore_backup,
+};
 pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
 pub use prepared::PreparedMessage;
 pub use query::{Cursor, MessageFilter, PageStart};

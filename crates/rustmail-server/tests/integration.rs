@@ -17,6 +17,9 @@ use rustmail_api::{AppState, WsEvent, WsFrame, router};
 use rustmail_smtp::{Delivery, ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
 use rustmail_storage::{MessageRepository, initialize_database};
 
+#[path = "../../rustmail-storage/tests/common/legacy_v0_7_0.rs"]
+mod legacy_v0_7_0;
+
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 /// Port 0 asks the OS for a free port, one no concurrent test can also be handed.
 const ANY_FREE_PORT: &str = "0";
@@ -129,6 +132,12 @@ impl ChildGuard {
       .await
       .expect("child did not exit in time")
       .expect("failed to wait on child")
+  }
+
+  /// Kills the child, as a crash or `SIGKILL` would, and waits for it to exit.
+  async fn kill(&mut self) {
+    let mut child = self.child.take().expect("child already consumed");
+    child.kill().await.expect("failed to kill child");
   }
 
   /// Waits for the child to log the SMTP address it bound.
@@ -1582,7 +1591,7 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
   );
   assert!(
     stderr.contains(
-      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail."
+      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
     ),
     "unexpected stderr: {stderr}"
   );
@@ -1719,6 +1728,283 @@ async fn serve_exits_while_another_process_holds_the_migration_lock() {
   );
   assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
   assert!(!sidecar(&db_path, ".migrating").exists());
+}
+
+const RESTORE_SUBJECTS: [&str; 2] = ["before one", "before two"];
+const POST_MIGRATION_SUBJECT: &str = "after the migration";
+const KEPT_INFIX: &str = ".schema1-";
+
+/// Writes a legacy database with rustmail v0.7.0's own statements and
+/// returns its message ids in arrival order.
+async fn legacy_v0_7_0_database(db_path: &std::path::Path) -> Vec<String> {
+  let pool = legacy_v0_7_0::create_legacy_database(db_path).await;
+  let mut ids = Vec::new();
+  for (index, subject) in RESTORE_SUBJECTS.iter().enumerate() {
+    let raw =
+      format!("From: a@test.com\r\nTo: b@test.com\r\nSubject: {subject}\r\n\r\nbody {index}");
+    let stored = legacy_v0_7_0::insert_as_v0_7_0(
+      &pool,
+      "a@test.com",
+      &["b@test.com".to_string()],
+      raw.as_bytes(),
+      &format!("2026-09-23T10:00:0{index}Z"),
+    )
+    .await
+    .unwrap();
+    ids.push(stored.id);
+  }
+  pool.close().await;
+  ids
+}
+
+/// Migrates a legacy database in this process, the way `serve` does at startup.
+async fn migrated_database(db_path: &std::path::Path) {
+  legacy_v0_7_0_database(db_path).await;
+  let preparation = rustmail_storage::prepare_database_file(db_path, || false)
+    .await
+    .unwrap();
+  assert!(matches!(
+    preparation,
+    rustmail_storage::Preparation::Ready(Some(_))
+  ));
+}
+
+fn kept_schema_1_files(db_path: &std::path::Path) -> Vec<PathBuf> {
+  let prefix = format!(
+    "{}{KEPT_INFIX}",
+    db_path.file_name().unwrap().to_string_lossy()
+  );
+  std::fs::read_dir(db_path.parent().unwrap())
+    .unwrap()
+    .map(|entry| entry.unwrap().path())
+    .filter(|path| {
+      path
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+    })
+    .collect()
+}
+
+async fn run_restore_backup(db_path: &std::path::Path) -> std::process::Output {
+  tokio::time::timeout(
+    STARTUP_FAILURE_TIMEOUT,
+    rustmail_command()
+      .args(["restore-backup", "--log-level", "info"])
+      .arg("--db-path")
+      .arg(db_path)
+      .output(),
+  )
+  .await
+  .expect("rustmail restore-backup did not exit in time")
+  .expect("failed to run rustmail restore-backup")
+}
+
+fn spawn_serve(db_path: &std::path::Path) -> ChildGuard {
+  ChildGuard::new(
+    rustmail_command()
+      .args([
+        "serve",
+        "--smtp-port",
+        ANY_FREE_PORT,
+        "--http-port",
+        ANY_FREE_PORT,
+        "--log-level",
+        CHILD_LOG_FILTER,
+      ])
+      .arg("--db-path")
+      .arg(db_path)
+      .spawn()
+      .expect("failed to spawn rustmail serve"),
+  )
+}
+
+async fn query_ids(db_path: &std::path::Path) -> Vec<String> {
+  let pool = legacy_v0_7_0::open_plain(db_path).await;
+  let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM messages ORDER BY rowid")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+  pool.close().await;
+  ids
+}
+
+async fn query_i64(db_path: &std::path::Path, sql: &str) -> i64 {
+  let pool = legacy_v0_7_0::open_plain(db_path).await;
+  let value: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+  pool.close().await;
+  value
+}
+
+#[tokio::test]
+async fn restore_backup_puts_the_v0_7_0_mailbox_back_and_serve_migrates_it_again() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  let backup = sidecar(&db_path, ".schema0.bak");
+  let legacy_ids = legacy_v0_7_0_database(&db_path).await;
+  let legacy_bytes = std::fs::read(&db_path).unwrap();
+
+  let mut server = spawn_serve(&db_path);
+  let addr = server.smtp_addr().await;
+  smtp_send(
+    addr,
+    "late@test.com",
+    "b@test.com",
+    POST_MIGRATION_SUBJECT,
+    "new",
+  )
+  .await;
+  server.kill().await;
+
+  let output = run_restore_backup(&db_path).await;
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    output.status.success(),
+    "restore-backup failed: {}",
+    String::from_utf8_lossy(&output.stderr)
+  );
+  let kept = kept_schema_1_files(&db_path);
+  assert_eq!(kept.len(), 1, "expected one kept schema-1 file: {kept:?}");
+  let kept = &kept[0];
+  for expected in [
+    format!("Restored {} to {}.", backup.display(), db_path.display()),
+    format!("The migrated database is kept as {}.", kept.display()),
+    format!(
+      "Mail received after the storage migration is only in {}",
+      kept.display()
+    ),
+    "event=\"storage_restore\"".to_string(),
+  ] {
+    assert!(
+      stdout.contains(&expected),
+      "missing {expected:?} in: {stdout}"
+    );
+  }
+
+  assert_eq!(std::fs::read(&db_path).unwrap(), legacy_bytes);
+  assert!(!backup.exists());
+  for suffix in ["-wal", "-shm", "-journal"] {
+    assert!(
+      !sidecar(&db_path, suffix).exists(),
+      "{suffix} left beside the restored file"
+    );
+    assert!(
+      !sidecar(kept, suffix).exists(),
+      "{suffix} left beside the kept file"
+    );
+  }
+  let pool = legacy_v0_7_0::open_plain(&db_path).await;
+  legacy_v0_7_0::initialize_as_v0_7_0(&pool).await.unwrap();
+  pool.close().await;
+  assert_eq!(query_ids(&db_path).await, legacy_ids);
+  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 0);
+  assert_eq!(query_i64(kept, "PRAGMA user_version").await, 1);
+  assert_eq!(
+    query_i64(
+      kept,
+      &format!("SELECT count(*) FROM messages WHERE subject = '{POST_MIGRATION_SUBJECT}'")
+    )
+    .await,
+    1
+  );
+  let kept_bytes = std::fs::read(kept).unwrap();
+
+  let mut server = spawn_serve(&db_path);
+  server.smtp_addr().await;
+  assert_eq!(std::fs::read(&backup).unwrap(), legacy_bytes);
+  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+  assert_eq!(
+    query_i64(&db_path, "SELECT count(*) FROM messages").await,
+    legacy_ids.len() as i64
+  );
+  assert_eq!(std::fs::read(kept).unwrap(), kept_bytes);
+  assert!(!sidecar(&db_path, ".migrating").exists());
+}
+
+#[tokio::test]
+async fn restore_backup_refuses_while_a_server_has_the_database_open() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  migrated_database(&db_path).await;
+  let mut server = spawn_serve(&db_path);
+  server.smtp_addr().await;
+
+  let output = run_restore_backup(&db_path).await;
+  server.kill().await;
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(!output.status.success(), "expected a refusal: {stderr}");
+  assert!(
+    !stderr.contains("panicked"),
+    "restore-backup panicked: {stderr}"
+  );
+  assert!(
+    stderr.contains(&format!(
+      "{} exists, so another process still has it open",
+      sidecar(&db_path, "-wal").display()
+    )),
+    "unexpected stderr: {stderr}"
+  );
+  assert!(sidecar(&db_path, ".schema0.bak").exists());
+  assert!(kept_schema_1_files(&db_path).is_empty());
+  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+}
+
+#[tokio::test]
+async fn restore_backup_refuses_while_another_process_holds_the_migration_lock() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  migrated_database(&db_path).await;
+  let backup_bytes = std::fs::read(sidecar(&db_path, ".schema0.bak")).unwrap();
+  let lock_path = sidecar(&db_path, ".migration-lock");
+  let lock = std::fs::OpenOptions::new()
+    .read(true)
+    .write(true)
+    .open(&lock_path)
+    .unwrap();
+  lock.try_lock().unwrap();
+
+  let output = run_restore_backup(&db_path).await;
+  drop(lock);
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(!output.status.success(), "expected a refusal: {stderr}");
+  assert!(
+    stderr.contains(&format!(
+      "another rustmail process holds {} (storage migration or restore in progress)",
+      lock_path.display()
+    )),
+    "unexpected stderr: {stderr}"
+  );
+  assert_eq!(
+    std::fs::read(sidecar(&db_path, ".schema0.bak")).unwrap(),
+    backup_bytes
+  );
+  assert!(kept_schema_1_files(&db_path).is_empty());
+  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+}
+
+#[tokio::test]
+async fn restore_backup_refuses_without_a_backup() {
+  let data_dir = tempfile::tempdir().unwrap();
+  let db_path = data_dir.path().join("rustmail.db");
+  migrated_database(&db_path).await;
+  let backup = sidecar(&db_path, ".schema0.bak");
+  std::fs::remove_file(&backup).unwrap();
+
+  let output = run_restore_backup(&db_path).await;
+
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(!output.status.success(), "expected a refusal: {stderr}");
+  assert!(
+    stderr.contains(&format!(
+      "there is no backup {} to restore over {}",
+      backup.display(),
+      db_path.display()
+    )),
+    "unexpected stderr: {stderr}"
+  );
+  assert!(kept_schema_1_files(&db_path).is_empty());
+  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
 }
 
 async fn connect_smtp_and_greet(addr: std::net::SocketAddr) -> BufReader<TcpStream> {

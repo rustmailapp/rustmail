@@ -13,7 +13,7 @@ pub enum StorageError {
   /// cannot read. It is refused before anything is written to it.
   #[error(
     "{database} is schema {found}, written by a newer rustmail; \
-     this binary supports schema {supported}. Upgrade rustmail."
+     this binary supports schema {supported}. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
   )]
   NewerSchema {
     /// The database file, as SQLite reports it.
@@ -88,6 +88,10 @@ pub enum StorageError {
   /// resolve on its own. Nothing was changed.
   #[error(transparent)]
   MigrationRefused(#[from] MigrationRefusal),
+  /// The files beside the database are not in a state the backup can be
+  /// restored from. Nothing was changed.
+  #[error(transparent)]
+  RestoreRefused(#[from] RestoreRefusal),
   /// The migrated copy failed a check against the legacy database. The copy
   /// is kept for a bug report and the legacy database is untouched.
   #[error(
@@ -247,6 +251,99 @@ pub enum MigrationRefusal {
     migrating: PathBuf,
     /// Whether the copy exists, and whether it is complete.
     migrating_state: &'static str,
+  },
+}
+
+/// Why `restore-backup` refused to put the backup back in place.
+///
+/// Each message names the files involved and what to do; the refusal itself
+/// renames nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum RestoreRefusal {
+  /// The database is not a migrated schema-1 file, so there is nothing to
+  /// restore the backup over.
+  #[error(
+    "{} is {}, not a schema-1 database, so there is nothing to restore the backup over; \
+     restore-backup only undoes a completed storage migration (was the backup already restored?)",
+    .database.display(),
+    .database_state
+  )]
+  NotMigrated {
+    /// The database.
+    database: PathBuf,
+    /// What the database is: absent, empty or schema 0.
+    database_state: &'static str,
+  },
+  /// No backup sits beside the database.
+  #[error(
+    "there is no backup {} to restore over {}; only a database migrated from rustmail 0.7 \
+     or earlier has one, and it is gone once deleted or restored",
+    .backup.display(),
+    .database.display()
+  )]
+  NoBackup {
+    /// The database.
+    database: PathBuf,
+    /// Where the backup would be, `<db>.schema0.bak`.
+    backup: PathBuf,
+  },
+  /// The backup is not an intact schema-0 database.
+  #[error(
+    "{} is not an intact schema-0 rustmail database ({reason}), so it is not restored; \
+     nothing was changed. Keep the file for inspection.",
+    .backup.display()
+  )]
+  BackupInvalid {
+    /// The backup.
+    backup: PathBuf,
+    /// What is wrong with it.
+    reason: String,
+  },
+  /// A migration copy sits beside the database.
+  #[error(
+    "a migration copy {} sits next to {}; move it away, with any -wal or -shm beside it, \
+     and run restore-backup again",
+    .migrating.display(),
+    .database.display()
+  )]
+  MigrationCopyPresent {
+    /// The database.
+    database: PathBuf,
+    /// The copy.
+    migrating: PathBuf,
+  },
+  /// A process still has the database or the backup open, or SQLite left a
+  /// journal beside one that it would apply to the file renamed there.
+  #[error(
+    "{} exists, so another process still has it open; stop every rustmail and sqlite3 \
+     using {} and run restore-backup again",
+    .file.display(),
+    .database.display()
+  )]
+  FileInUse {
+    /// The database.
+    database: PathBuf,
+    /// The `-wal`, `-shm` or `-journal` file found.
+    file: PathBuf,
+  },
+  /// The database's write-ahead log could not be checkpointed.
+  #[error(
+    "the write-ahead log of {} could not be checkpointed because another process is using \
+     it; stop every rustmail and sqlite3 using it and run restore-backup again",
+    .database.display()
+  )]
+  CheckpointBusy {
+    /// The database.
+    database: PathBuf,
+  },
+  /// The name the schema-1 database would be kept under is taken.
+  #[error(
+    "{} already exists; move it away, or wait a second, and run restore-backup again",
+    .kept.display()
+  )]
+  KeptNameTaken {
+    /// The name that is taken.
+    kept: PathBuf,
   },
 }
 
