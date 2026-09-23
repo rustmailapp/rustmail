@@ -13,7 +13,7 @@ pub enum StorageError {
   /// cannot read. It is refused before anything is written to it.
   #[error(
     "{database} is schema {found}, written by a newer rustmail; \
-     this binary supports schema {supported}. Upgrade rustmail."
+     this binary supports schema {supported}. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
   )]
   NewerSchema {
     /// The database file, as SQLite reports it.

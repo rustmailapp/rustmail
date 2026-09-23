@@ -1591,7 +1591,7 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
   );
   assert!(
     stderr.contains(
-      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail."
+      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
     ),
     "unexpected stderr: {stderr}"
   );

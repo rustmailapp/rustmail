@@ -580,7 +580,7 @@ mod tests {
       error.to_string(),
       format!(
         "{database} is schema 2, written by a newer rustmail; \
-         this binary supports schema 1. Upgrade rustmail."
+         this binary supports schema 1. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
       )
     );
   }
