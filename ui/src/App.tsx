@@ -125,7 +125,7 @@ export default function App() {
   });
 
   return (
-    <div class="flex flex-col h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+    <div class="app-shell flex flex-col h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <div class="mesh-glow" />
       <Header />
       <div class="flex flex-1 overflow-hidden">
