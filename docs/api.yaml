@@ -101,11 +101,13 @@ paths:
                 messages:
                   - id: 01HZ9RQABCDEFGHJKMNPQRSTUV
                     sender: alice@example.com
-                    recipients: '["bob@example.com"]'
+                    recipients: [bob@example.com]
                     subject: Hello world
                     size: 1024
                     has_attachments: false
                     is_read: false
+                    is_starred: false
+                    tags: []
                     created_at: '2026-03-21T10:00:00Z'
                 total: 1
                 next_cursor: null
@@ -167,14 +169,16 @@ paths:
               example:
                 id: 01HZ9RQABCDEFGHJKMNPQRSTUV
                 sender: alice@example.com
-                recipients: '["bob@example.com"]'
+                recipients: [bob@example.com]
                 subject: Hello world
+                text_body: Hello Bob!
+                html_body: '<p>Hello Bob!</p>'
                 size: 1024
                 has_attachments: false
                 is_read: true
+                is_starred: false
+                tags: []
                 created_at: '2026-03-21T10:00:00Z'
-                text_body: Hello Bob!
-                html_body: '<p>Hello Bob!</p>'
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -294,29 +298,28 @@ paths:
     get:
       operationId: listAttachments
       summary: List attachments for a message (metadata only)
+      description: >
+        Returns a bare JSON array, in MIME part order. An id that names no
+        stored message is not an error: it answers `200` with `[]`.
       tags: [Attachments]
       responses:
         '200':
-          description: List of attachment metadata
+          description: >
+            Attachment metadata, possibly empty. Sent with
+            `Cache-Control: private, max-age=31536000, immutable`.
           content:
             application/json:
               schema:
-                type: object
-                required: [attachments]
-                properties:
-                  attachments:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Attachment'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attachment'
               example:
-                attachments:
-                  - id: 01HZ9RQABCDEFGHJKMNPQRFILE
-                    message_id: 01HZ9RQABCDEFGHJKMNPQRSTUV
-                    filename: invoice.pdf
-                    content_type: application/pdf
-                    size: 48321
-        '404':
-          $ref: '#/components/responses/NotFound'
+                - id: 01HZ9RQABCDEFGHJKMNPQRFILE
+                  message_id: 01HZ9RQABCDEFGHJKMNPQRSTUV
+                  filename: invoice.pdf
+                  content_type: application/pdf
+                  content_id: null
+                  size: 48321
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -478,16 +481,16 @@ paths:
                   - status: pass
                     details: "dkim=pass header.d=example.com header.s=selector1"
                   - status: info
-                    details: "domain=example.com selector=selector1 algorithm=rsa-sha256"
+                    details: "d=example.com s=selector1 a=rsa-sha256"
                 spf:
                   - status: pass
                     details: "spf=pass smtp.mailfrom=alice@example.com"
                 dmarc:
                   - status: pass
-                    details: "dmarc=pass header.from=example.com"
+                    details: "dmarc=pass action=none header.from=example.com"
                 arc:
-                  - status: pass
-                    details: "arc=pass"
+                  - status: arc:pass
+                    details: "dkim=pass header.d=example.com"
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -655,9 +658,12 @@ components:
         - id
         - sender
         - recipients
+        - subject
         - size
         - has_attachments
         - is_read
+        - is_starred
+        - tags
         - created_at
       properties:
         id:
@@ -669,13 +675,14 @@ components:
           description: Envelope sender address (MAIL FROM)
           example: alice@example.com
         recipients:
-          type: string
-          description: JSON-encoded array of recipient addresses (RCPT TO)
-          example: '["bob@example.com","carol@example.com"]'
+          type: array
+          items:
+            type: string
+          description: Envelope recipient addresses (RCPT TO), in the order given
+          example: [bob@example.com, carol@example.com]
         subject:
-          type: string
-          nullable: true
-          description: Message subject header value
+          type: [string, 'null']
+          description: Decoded Subject header value; `null` when the message has none
           example: Hello world
         size:
           type: integer
@@ -702,22 +709,23 @@ components:
         created_at:
           type: string
           format: date-time
-          description: Timestamp when the message was received (ISO 8601 UTC)
+          description: >
+            When the message was received, UTC, to the second
+            (`YYYY-MM-DDTHH:MM:SSZ`)
           example: '2026-03-21T10:00:00Z'
 
     Message:
       allOf:
         - $ref: '#/components/schemas/MessageSummary'
         - type: object
+          required: [text_body, html_body]
           properties:
             text_body:
-              type: string
-              nullable: true
-              description: Decoded plain-text body part
+              type: [string, 'null']
+              description: Decoded plain-text body part; `null` when there is none
             html_body:
-              type: string
-              nullable: true
-              description: Decoded HTML body part
+              type: [string, 'null']
+              description: Decoded HTML body part; `null` when there is none
 
     MessageList:
       type: object
@@ -761,7 +769,7 @@ components:
 
     Attachment:
       type: object
-      required: [id, message_id]
+      required: [id, message_id, filename, content_type, content_id, size]
       properties:
         id:
           type: string
@@ -772,19 +780,22 @@ components:
           description: ULID of the parent message
           example: 01HZ9RQABCDEFGHJKMNPQRSTUV
         filename:
-          type: string
-          nullable: true
-          description: Original filename from the MIME part
+          type: [string, 'null']
+          description: Original filename from the MIME part; `null` when it names none
           example: invoice.pdf
         content_type:
-          type: string
-          nullable: true
-          description: MIME content type of the attachment
+          type: [string, 'null']
+          description: MIME content type the part declares; `null` when it declares none
           example: application/pdf
+        content_id:
+          type: [string, 'null']
+          description: >
+            Content-ID without angle brackets, as used by
+            `/messages/{id}/inline/{cid}`; `null` when the part has none
+          example: logo@example.com
         size:
-          type: integer
-          nullable: true
-          description: Attachment size in bytes
+          type: [integer, 'null']
+          description: Decoded attachment size in bytes
           example: 48321
 
     ReleaseRequest:
@@ -820,6 +831,17 @@ components:
           type: integer
           description: Number of messages that matched the given filters
           example: 2
+        expected_min:
+          type: integer
+          description: The `min` bound applied. Present only on a `417`.
+          example: 1
+        expected_max:
+          type: integer
+          format: int64
+          description: >
+            The `max` bound applied, `9223372036854775807` when none was given.
+            Present only on a `417`.
+          example: 9223372036854775807
 
     MessageHeader:
       type: object
@@ -890,7 +912,7 @@ components:
         error:
           type: string
           description: Human-readable error message
-          example: message not found
+          example: Resource not found
         code:
           type: string
           enum: [unknown_cursor]
@@ -916,4 +938,4 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: message not found
+            error: Resource not found
