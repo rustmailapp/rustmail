@@ -635,7 +635,26 @@ async function refreshTotal(): Promise<void> {
   }
 }
 
-/** Applies either confirmation once, removing the row regardless of the snapshot. */
+/**
+ * Whether the total counts `id`, or `undefined` when only the server knows.
+ *
+ * A row the list holds counts while it matches the filters: one a flag change
+ * took out of them was already subtracted, though it stays on screen. A row
+ * the list never loaded counts in an unnarrowed view, which counts everything,
+ * but a search or a filter cannot tell whether it was among its matches.
+ */
+function countedInTotal(id: string): boolean | undefined {
+  const row = findMessage(id) ?? heldRows.get(id);
+  if (row !== undefined) return matchesFilters(row, filters());
+  return search() !== "" || hasActiveFilters() ? undefined : true;
+}
+
+/**
+ * Applies either confirmation once, removing the row regardless of the snapshot.
+ *
+ * The total drops only by a message it counts, per {@link countedInTotal}, and
+ * is read from the server when that cannot be told locally.
+ */
 function reconcileDeletion(id: string): void {
   const issued = issuedDeletes.get(id);
   if (issued?.confirmed === true) {
@@ -645,7 +664,9 @@ function reconcileDeletion(id: string): void {
 
   const cleared =
     issued !== undefined && issued.clearRevision !== clearRevision;
+  const counted = countedInTotal(id);
   const countIsCurrent =
+    counted !== undefined &&
     !countNeedsRefresh &&
     (issued === undefined || issued.snapshot === snapshot);
   if (issued) issued.confirmed = true;
@@ -655,7 +676,7 @@ function reconcileDeletion(id: string): void {
   }
   batch(() => {
     forgetMessage(id);
-    if (!cleared && countIsCurrent) {
+    if (!cleared && countIsCurrent && counted) {
       setStoredTotal((current) => Math.max(0, current - 1));
     }
   });

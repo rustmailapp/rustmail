@@ -606,6 +606,47 @@ async fn release_rejects_wrong_host() {
 }
 
 #[tokio::test]
+async fn release_refuses_an_envelope_it_cannot_carry_whole() {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let repo = MessageRepository::new(pool);
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(256);
+  let state = AppState::new(repo.clone(), ws_tx, Some("relay.invalid".into()), Some(587));
+  let app = router(state);
+
+  let summary = repo
+    .insert(
+      "a@t.com",
+      &["b@t.com".into(), "not an address".into()],
+      &raw_email("Release", "a@t.com", "b@t.com"),
+    )
+    .await
+    .unwrap();
+
+  let response = app
+    .oneshot(
+      Request::builder()
+        .method("POST")
+        .uri(format!("/api/v1/messages/{}/release", summary.id))
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"host": "relay.invalid"}"#))
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+
+  assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+  let body = json_body(response).await;
+  assert_eq!(
+    body["error"],
+    "Invalid envelope: a captured recipient is not an address a relay accepts"
+  );
+}
+
+#[tokio::test]
 async fn security_headers_present() {
   let (app, _, _) = setup().await;
 

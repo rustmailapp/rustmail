@@ -2466,3 +2466,72 @@ describe("clearInboxPrompt", () => {
     expect(clearInboxPrompt().message).toBe(everything);
   });
 });
+
+describe("flag changes under a filter", () => {
+  beforeEach(async () => {
+    useFakeClock();
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    listMessages.mockResolvedValue(page([message(0, { is_starred: true })]));
+    toggleFilter("starred");
+    await vi.advanceTimersByTimeAsync(0);
+    connectWebSocket();
+    listMessages.mockClear();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("asks the server for the count when a message it never loaded is deleted", async () => {
+    listMessages.mockResolvedValue(page([], 1));
+
+    deliver(JSON.stringify({ type: "message:delete", data: { id: "id-7" } }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0"]);
+    expect(total()).toBe(1);
+    expect(listMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ limit: 1 }),
+    );
+  });
+});
+
+describe("deleting a row a flag change took out of the filter", () => {
+  beforeEach(async () => {
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    listMessages.mockResolvedValue(
+      page([
+        message(0, { is_starred: true }),
+        message(1, { is_starred: true }),
+      ]),
+    );
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not count it out a second time", () => {
+    deliver(
+      JSON.stringify({
+        type: "message:starred",
+        data: { id: "id-0", is_starred: false },
+      }),
+    );
+    expect(total()).toBe(1);
+
+    deliver(JSON.stringify({ type: "message:delete", data: { id: "id-0" } }));
+
+    expect(total()).toBe(1);
+  });
+});

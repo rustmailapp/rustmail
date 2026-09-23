@@ -630,11 +630,14 @@ impl App {
     }
   }
 
+  /// Refetches a stale view once the throttle allows, but never over a fetch
+  /// still in flight: a newer request would supersede it, and a server slower
+  /// than the throttle would then never land one.
   async fn refetch_if_stale(&mut self) {
     let throttle_elapsed = self
       .last_fetch_at
       .is_none_or(|at| at.elapsed() >= STALE_VIEW_REFETCH_INTERVAL);
-    if self.view_stale && throttle_elapsed {
+    if self.view_stale && !self.loading && throttle_elapsed {
       self.fetch_messages().await;
     }
   }
@@ -1211,30 +1214,63 @@ async fn connect_ws(url: &str, tx: &mpsc::Sender<Event>) -> Result<()> {
 
   let (ws_stream, _) = connect_async(url).await?;
   let _ = tx.send(Event::WsStatus(true)).await;
-  let (_, mut read) = ws_stream.split();
-
-  while let Some(msg) = read.next().await {
-    match msg {
-      Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-        forward_ws_frame(tx, text.to_string());
-      }
-      Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => break,
-      Err(_) => break,
-      _ => {}
-    }
-  }
+  let (_, read) = ws_stream.split();
+  use tokio_tungstenite::tungstenite::Message;
+  let frames = read
+    .take_while(|msg| std::future::ready(!matches!(msg, Ok(Message::Close(_)) | Err(_))))
+    .filter_map(|msg| {
+      std::future::ready(match msg {
+        Ok(Message::Text(text)) => Some(text.to_string()),
+        _ => None,
+      })
+    });
+  pump_ws_frames(frames, tx).await;
 
   Ok(())
 }
 
-/// Forwards a WebSocket frame without blocking the socket reader. If the
-/// bounded event queue is full, the frame is dropped and a single
-/// [`Event::WsOverflow`] marker is attempted in its place, so the app marks
-/// its view stale and resyncs once it catches up, instead of the reader
-/// stalling and the server treating this client as lagging.
-fn forward_ws_frame(tx: &mpsc::Sender<Event>, text: String) {
-  if tx.try_send(Event::WsMessage(text)).is_err() {
-    let _ = tx.try_send(Event::WsOverflow);
+/// Forwards WebSocket text frames to the event queue without blocking the
+/// socket reader on it.
+///
+/// A frame that finds the bounded queue full is dropped and the view owes a
+/// resync. That debt is kept here until an [`Event::WsOverflow`] fits, rather
+/// than tried once on a queue that is still full, so a drop is never lost
+/// together with the signal that would repair it. Frames arriving meanwhile
+/// are dropped too, since the resync covers them. The reader never stalls, so
+/// the server never sees this client as lagging. A debt still owed when the
+/// socket closes is paid before returning, waiting for room if it must.
+async fn pump_ws_frames(
+  frames: impl futures_util::Stream<Item = String>,
+  tx: &mpsc::Sender<Event>,
+) {
+  use futures_util::StreamExt;
+
+  let mut frames = std::pin::pin!(frames);
+  let mut overflow_owed = false;
+  loop {
+    tokio::select! {
+      permit = tx.reserve(), if overflow_owed => match permit {
+        Ok(permit) => {
+          permit.send(Event::WsOverflow);
+          overflow_owed = false;
+        }
+        Err(_) => return,
+      },
+      frame = frames.next() => match frame {
+        Some(text) => {
+          if overflow_owed {
+            continue;
+          }
+          if tx.try_send(Event::WsMessage(text)).is_err() {
+            overflow_owed = tx.try_send(Event::WsOverflow).is_err();
+          }
+        }
+        None => break,
+      },
+    }
+  }
+  if overflow_owed {
+    let _ = tx.send(Event::WsOverflow).await;
   }
 }
 
@@ -1645,31 +1681,83 @@ mod tests {
     assert!(app.view_stale);
   }
 
-  #[tokio::test]
-  async fn ws_frame_forwarding_delivers_when_the_queue_has_room() {
-    let (tx, mut rx) = mpsc::channel::<Event>(1);
-    forward_ws_frame(&tx, "first".into());
-
-    match rx.recv().await.unwrap() {
-      Event::WsMessage(text) => assert_eq!(text, "first"),
-      other => panic!("unexpected event: {other:?}"),
-    }
+  fn frames_then_silence(frames: &[&str]) -> impl futures_util::Stream<Item = String> {
+    use futures_util::StreamExt;
+    let frames: Vec<String> = frames.iter().map(|f| f.to_string()).collect();
+    futures_util::stream::iter(frames).chain(futures_util::stream::pending())
   }
 
   #[tokio::test]
-  async fn ws_frame_forwarding_drops_the_frame_when_the_queue_stays_full() {
-    let (tx, rx) = mpsc::channel::<Event>(1);
-    tx.try_send(Event::Tick).unwrap();
+  async fn ws_frame_forwarding_delivers_when_the_queue_has_room() {
+    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    let pump =
+      tokio::spawn(async move { pump_ws_frames(frames_then_silence(&["first"]), &tx).await });
 
-    forward_ws_frame(&tx, "dropped".into());
-
-    let mut rx = rx;
-    let mut remaining = Vec::new();
-    while let Ok(event) = rx.try_recv() {
-      remaining.push(event);
+    match tokio::time::timeout(SHUTDOWN_TEST_DEADLINE, rx.recv())
+      .await
+      .unwrap()
+      .unwrap()
+    {
+      Event::WsMessage(text) => assert_eq!(text, "first"),
+      other => panic!("unexpected event: {other:?}"),
     }
-    assert_eq!(remaining.len(), 1);
-    assert!(matches!(remaining[0], Event::Tick));
+    pump.abort();
+  }
+
+  #[tokio::test]
+  async fn a_frame_dropped_on_a_full_queue_is_followed_by_a_resync_once_it_drains() {
+    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    tx.try_send(Event::Tick).unwrap();
+    let pump = tokio::spawn(async move {
+      pump_ws_frames(frames_then_silence(&["dropped", "also dropped"]), &tx).await
+    });
+    tokio::task::yield_now().await;
+
+    assert!(matches!(rx.recv().await, Some(Event::Tick)));
+    let next = tokio::time::timeout(SHUTDOWN_TEST_DEADLINE, rx.recv())
+      .await
+      .expect("the owed overflow marker must be delivered once there is room");
+
+    assert!(matches!(next, Some(Event::WsOverflow)));
+    assert!(
+      rx.try_recv().is_err(),
+      "frames dropped while the resync was owed stay dropped"
+    );
+    pump.abort();
+  }
+
+  #[tokio::test]
+  async fn a_resync_owed_when_the_socket_closes_is_still_delivered() {
+    let (tx, mut rx) = mpsc::channel::<Event>(1);
+    tx.try_send(Event::Tick).unwrap();
+    let pump = tokio::spawn(async move {
+      pump_ws_frames(futures_util::stream::iter(vec!["dropped".to_string()]), &tx).await
+    });
+    tokio::task::yield_now().await;
+
+    assert!(matches!(rx.recv().await, Some(Event::Tick)));
+    let next = tokio::time::timeout(SHUTDOWN_TEST_DEADLINE, rx.recv())
+      .await
+      .expect("the owed overflow marker must outlive the socket");
+
+    assert!(matches!(next, Some(Event::WsOverflow)));
+    tokio::time::timeout(SHUTDOWN_TEST_DEADLINE, pump)
+      .await
+      .unwrap()
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_stale_view_is_not_refetched_over_a_fetch_in_flight() {
+    let mut app = app_with_messages(1);
+    app.view_stale = true;
+    app.loading = true;
+    app.last_fetch_at = None;
+    let generation = app.fetch_generation;
+
+    app.refetch_if_stale().await;
+
+    assert_eq!(app.fetch_generation, generation);
   }
 
   #[tokio::test]

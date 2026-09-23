@@ -8,7 +8,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::Deserialize;
 use time::OffsetDateTime;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{info, warn};
 
 use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
@@ -185,6 +185,7 @@ struct TomlConfig {
   release_host: Option<String>,
   allowed_origins: Option<Vec<String>>,
   allowed_hosts: Option<Vec<String>>,
+  ws_buffer: Option<u32>,
 }
 
 fn apply_toml_to_env(config: &TomlConfig) {
@@ -238,6 +239,9 @@ fn apply_toml_to_env(config: &TomlConfig) {
   }
   if let Some(v) = &config.allowed_hosts {
     set_if_absent("RUSTMAIL_ALLOWED_HOSTS", &v.join(","));
+  }
+  if let Some(v) = config.ws_buffer {
+    set_if_absent("RUSTMAIL_WS_BUFFER", &v.to_string());
   }
 }
 
@@ -405,22 +409,65 @@ const BLOCKING_PARSE_THRESHOLD_BYTES: usize = 256 * 1024;
 /// How long closing the database, and with it the final WAL checkpoint, may take.
 const DB_CLOSE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Resolves when the process is asked to stop, by `SIGTERM` or Ctrl-C.
+/// Whether the process has been asked to stop, by `SIGTERM` or Ctrl-C.
 ///
-/// `SIGTERM` needs a handler of its own: as PID 1 in a container the kernel
-/// ignores it by default, so `docker stop` would otherwise wait out its
-/// timeout and then `SIGKILL` the server.
-async fn shutdown_signal() -> std::io::Result<()> {
-  #[cfg(unix)]
-  {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    tokio::select! {
-      result = tokio::signal::ctrl_c() => result,
-      _ = terminate.recv() => Ok(()),
-    }
+/// One listener, started before the database is prepared, serves the whole
+/// run. Once Tokio has installed its handler for a signal, a signal that
+/// arrives while nothing is waiting on it is consumed and lost, so startup and
+/// serving must not each wait on their own. `SIGTERM` needs the handler at
+/// all because as PID 1 in a container the kernel ignores it by default, and
+/// `docker stop` would otherwise wait out its timeout and `SIGKILL` the server.
+#[derive(Clone)]
+struct StopRequest(watch::Receiver<bool>);
+
+/// The task behind a [`StopRequest`], stopped when this is dropped.
+struct StopListener(tokio::task::JoinHandle<()>);
+
+impl Drop for StopListener {
+  fn drop(&mut self) {
+    self.0.abort();
   }
-  #[cfg(not(unix))]
-  tokio::signal::ctrl_c().await
+}
+
+impl StopRequest {
+  /// Installs the signal handlers and starts listening.
+  fn listen() -> std::io::Result<(Self, StopListener)> {
+    let (requested, stop) = watch::channel(false);
+    #[cfg(unix)]
+    let task = {
+      use tokio::signal::unix::{SignalKind, signal};
+      let mut terminate = signal(SignalKind::terminate())?;
+      let mut interrupt = signal(SignalKind::interrupt())?;
+      tokio::spawn(async move {
+        tokio::select! {
+          _ = terminate.recv() => {}
+          _ = interrupt.recv() => {}
+        }
+        let _ = requested.send(true);
+      })
+    };
+    #[cfg(not(unix))]
+    let task = tokio::spawn(async move {
+      match tokio::signal::ctrl_c().await {
+        Ok(()) => {
+          let _ = requested.send(true);
+        }
+        Err(e) => {
+          tracing::error!(error = %e, "failed to listen for Ctrl-C; stop the process another way")
+        }
+      }
+    });
+    Ok((Self(stop), StopListener(task)))
+  }
+
+  fn is_requested(&self) -> bool {
+    *self.0.borrow()
+  }
+
+  /// Resolves once a stop has been requested, at once if it already was.
+  async fn requested(&mut self) {
+    let _ = self.0.wait_for(|requested| *requested).await;
+  }
 }
 
 /// Receives the next run of queued deliveries into `batch`, closing the queue
@@ -703,21 +750,8 @@ async fn connect_writer(db_url: &str) -> Result<sqlx::SqlitePool> {
 /// A stop requested while a migration runs pauses it after the batch in
 /// flight; the next start resumes it. Returns whether startup should go on:
 /// `false` once a stop was requested, even if the migration had finished.
-async fn prepare_database_file(db_path: &Path) -> Result<bool> {
-  let stop_requested = Arc::new(std::sync::atomic::AtomicBool::new(false));
-  let listener = {
-    let stop_requested = Arc::clone(&stop_requested);
-    tokio::spawn(async move {
-      if shutdown_signal().await.is_ok() {
-        stop_requested.store(true, std::sync::atomic::Ordering::SeqCst);
-      }
-    })
-  };
-  let preparation = rustmail_storage::prepare_database_file(db_path, || {
-    stop_requested.load(std::sync::atomic::Ordering::SeqCst)
-  })
-  .await;
-  listener.abort();
+async fn prepare_database_file(db_path: &Path, stop: &StopRequest) -> Result<bool> {
+  let preparation = rustmail_storage::prepare_database_file(db_path, || stop.is_requested()).await;
   let preparation =
     preparation.with_context(|| format!("failed to prepare database {}", db_path.display()))?;
   if let rustmail_storage::Preparation::Paused { migrated, total } = preparation {
@@ -727,7 +761,7 @@ async fn prepare_database_file(db_path: &Path) -> Result<bool> {
     );
     return Ok(false);
   }
-  if stop_requested.load(std::sync::atomic::Ordering::SeqCst) {
+  if stop.is_requested() {
     info!("Stop requested during startup; exiting before serving");
     return Ok(false);
   }
@@ -1018,6 +1052,9 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     );
   }
 
+  let (mut stop, _stop_listener) =
+    StopRequest::listen().context("failed to listen for shutdown signals")?;
+
   let db_url = if args.ephemeral {
     info!("Running in ephemeral mode (in-memory database)");
     IN_MEMORY_DB_URL.to_string()
@@ -1027,7 +1064,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
       std::fs::create_dir_all(parent)?;
     }
     info!(path = %db_path.display(), "Using persistent database");
-    if !prepare_database_file(&db_path).await? {
+    if !prepare_database_file(&db_path, &stop).await? {
       return Ok(());
     }
     format!("sqlite:{}?mode=rwc", db_path.display())
@@ -1183,9 +1220,7 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
           anyhow::bail!("Message processor stopped unexpectedly");
       }
       _ = &mut retention_task => {}
-      result = shutdown_signal() => {
-          result.context("failed to listen for shutdown signals")?;
-      }
+      _ = stop.requested() => {}
   }
 
   info!("Shutting down: SMTP closed, draining queued messages");
@@ -1222,6 +1257,26 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod stop_request_tests {
+  use super::*;
+
+  const WAIT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(1);
+
+  #[tokio::test]
+  async fn a_stop_requested_while_nothing_waits_is_still_seen_later() {
+    let (requested, receiver) = watch::channel(false);
+    let mut stop = StopRequest(receiver);
+
+    requested.send(true).unwrap();
+
+    assert!(stop.is_requested());
+    tokio::time::timeout(WAIT_DEADLINE, stop.requested())
+      .await
+      .expect("a stop requested before serving must end the serve loop at once");
+  }
 }
 
 #[cfg(test)]

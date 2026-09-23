@@ -210,6 +210,25 @@ mod tests {
   }
 
   #[test]
+  fn a_new_message_frame_decodes_back_to_its_event() {
+    let event = WsEvent::MessageNew(rustmail_storage::MessageSummary {
+      id: "a".into(),
+      sender: "s@example.test".into(),
+      recipients: r#"["r@example.test"]"#.into(),
+      subject: None,
+      size: 1,
+      has_attachments: false,
+      is_read: false,
+      is_starred: false,
+      tags: "[]".into(),
+      created_at: "2026-09-23T00:00:00Z".into(),
+    });
+    let decoded = WsFrame::encode(&event).unwrap().decode().unwrap();
+
+    assert_eq!(wire(&decoded), wire(&event));
+  }
+
+  #[test]
   fn a_malformed_frame_decodes_to_a_ws_frame_error() {
     let frame = WsFrame(r#"{"type":"not-an-event"}"#.into());
 
