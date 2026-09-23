@@ -51,6 +51,14 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// schema versioning fails on its first `CREATE INDEX` against this file,
 /// before it writes anything.
 ///
+/// `messages.tags` stays the JSON array the API returns, order and duplicates
+/// included. `message_tags` indexes it, one row per distinct tag, so the tag
+/// filter is a primary-key lookup. Triggers rewrite a message's rows whenever
+/// its `tags` change, and the rows follow a deleted message by cascade, so
+/// every write path keeps the two equal without touching `message_tags`
+/// itself. `idx_messages_unread` holds only unread messages, like the starred
+/// index.
+///
 /// An attachment is either located or inline, never both. A located one
 /// keeps `raw_offset`, `raw_len` and `transfer_encoding` (0 identity, 1
 /// quoted-printable, 2 base64) into its message's `raw` and is decoded on
@@ -74,6 +82,7 @@ const SCHEMA_1_DDL: &[&str] = &[
   "#,
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
+  "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
   r#"
   CREATE TABLE message_content (
     seq       INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
@@ -118,6 +127,31 @@ const SCHEMA_1_DDL: &[&str] = &[
   r#"
   CREATE INDEX idx_attachments_by_cid ON attachments(message_seq, content_id)
   WHERE content_id IS NOT NULL
+  "#,
+  r#"
+  CREATE TABLE message_tags (
+    tag         TEXT NOT NULL,
+    message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
+    PRIMARY KEY (tag, message_seq)
+  ) WITHOUT ROWID
+  "#,
+  "CREATE INDEX idx_message_tags_by_message ON message_tags(message_seq)",
+  r#"
+  CREATE TRIGGER message_tags_after_insert AFTER INSERT ON messages
+  WHEN NEW.tags <> '[]'
+  BEGIN
+    INSERT OR IGNORE INTO message_tags(tag, message_seq)
+      SELECT value, NEW.seq FROM json_each(NEW.tags);
+  END
+  "#,
+  r#"
+  CREATE TRIGGER message_tags_after_update AFTER UPDATE OF tags ON messages
+  WHEN NEW.tags IS NOT OLD.tags
+  BEGIN
+    DELETE FROM message_tags WHERE message_seq = NEW.seq;
+    INSERT OR IGNORE INTO message_tags(tag, message_seq)
+      SELECT value, NEW.seq FROM json_each(NEW.tags);
+  END
   "#,
 ];
 

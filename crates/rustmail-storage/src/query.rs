@@ -59,7 +59,7 @@ pub(crate) fn push_filter(
   }
   if !filter.tags.is_empty() {
     builder.push(format_args!(
-      " AND EXISTS (SELECT 1 FROM json_each({alias}.tags) WHERE json_each.value IN ("
+      " AND {alias}.seq IN (SELECT message_seq FROM message_tags WHERE tag IN ("
     ));
     let mut tags = builder.separated(", ");
     for tag in &filter.tags {
