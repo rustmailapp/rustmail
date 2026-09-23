@@ -694,18 +694,27 @@ impl App {
     }
   }
 
-  /// Re-resolves the cursor against the mutated list and, when it now rests
-  /// on a different message, drops the old preview and loads the new one.
-  /// Returns whether the selected message changed.
-  async fn restore_selection(&mut self, anchor: SelectionAnchor) -> bool {
+  /// Re-resolves the cursor against the mutated list. Returns whether it now
+  /// rests on a different message.
+  fn reanchor_selection(&mut self, anchor: SelectionAnchor) -> bool {
     let previous = anchor.ids.get(anchor.index);
     self.selected = resolve_selection(&anchor.ids, anchor.index, &self.messages);
     self.sync_list_state();
-    let moved = self.selected_message().map(|m| &m.id) != previous;
-    if moved {
+    self.selected_message().map(|m| &m.id) != previous
+  }
+
+  /// Re-resolves the cursor and, when it moved to a different message, drops
+  /// the old preview and loads the new one. While a list fetch is in flight
+  /// the preview is left for the landing snapshot to settle, since the list
+  /// it would be read against is about to be replaced.
+  async fn restore_selection(&mut self, anchor: SelectionAnchor) {
+    if self.reanchor_selection(anchor) && !self.loading {
       self.retarget_preview().await;
     }
-    moved
+  }
+
+  fn preview_matches_selection(&self) -> bool {
+    self.last_preview_id.as_ref() == self.selected_message().map(|m| &m.id)
   }
 
   async fn retarget_preview(&mut self) {
@@ -777,8 +786,9 @@ impl App {
         }
         self.error = None;
         self.error_ticks = 0;
-        if !self.restore_selection(anchor).await {
-          self.load_preview().await;
+        let moved = self.reanchor_selection(anchor);
+        if moved || !self.preview_matches_selection() {
+          self.retarget_preview().await;
         }
       }
       Err(e) => {
@@ -2249,6 +2259,30 @@ mod tests {
     land_snapshot(&mut app, &["id-50", "id-51"], 120).await;
 
     assert_eq!(selected_id(&app), Some("id-50"));
+  }
+
+  #[tokio::test]
+  async fn deltas_during_an_in_flight_fetch_load_one_preview_once_it_lands() {
+    let mut app = in_flight_fetch(4);
+    app.select_message(1);
+    show_preview_of(&mut app, "id-1");
+    let before = app.last_request_id;
+
+    app.handle_ws_message(&delete_event("id-1")).await;
+    app.handle_ws_message(&new_message_event("live")).await;
+    app.handle_ws_message(&delete_event("id-2")).await;
+    assert_eq!(app.last_request_id, before, "no preview load mid-fetch");
+    assert_eq!(app.pending_preview, None);
+
+    land_snapshot(&mut app, &["id-0", "id-1", "id-2", "id-3"], 4).await;
+
+    assert_eq!(selected_id(&app), Some("id-3"));
+    assert_eq!(app.last_request_id, before + 1);
+    assert_eq!(app.pending_preview, Some(before + 1));
+    assert!(
+      app.preview.is_none(),
+      "deleted mail must not stay on screen"
+    );
   }
 
   #[tokio::test]
