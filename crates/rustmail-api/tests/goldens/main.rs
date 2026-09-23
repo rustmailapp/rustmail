@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use axum::http::{Method, StatusCode, header};
 use rustmail_api::{AppState, WsEvent};
 use serde_json::Value;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::corpus::{Served, corpus};
 use crate::golden::assert_golden;
@@ -37,7 +37,8 @@ const API: &str = "/api/v1";
 const UNKNOWN_ID: &str = "01J0000000000000000000000Z";
 const RELEASE_HOST: &str = "127.0.0.1";
 const RELEASE_PORT: u16 = 2525;
-const TLS_HANDSHAKE_RECORD: u8 = 0x16;
+const RELAY_GREETING: &[u8] = b"220 relay.test ESMTP\r\n";
+const RELAY_EHLO_REPLY: &[u8] = b"250-relay.test\r\n250 STARTTLS\r\n";
 const RELEASE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn next_cursor(body: &[u8]) -> Option<String> {
@@ -634,10 +635,28 @@ async fn release_to_a_relay_that_drops_the_connection(backend: Backend) {
       panic!("port {RELEASE_PORT} is needed for the release golden (the handler only relays to 25, 465, 587 or 2525): {error}")
     });
   let relay = tokio::spawn(async move {
-    let (mut socket, _) = listener.accept().await.unwrap();
-    let mut first = [0u8; 1];
-    socket.read_exact(&mut first).await.unwrap();
-    first[0]
+    let (socket, _) = listener.accept().await.unwrap();
+    let mut socket = BufReader::new(socket);
+    socket.get_mut().write_all(RELAY_GREETING).await.unwrap();
+    let mut verbs = Vec::new();
+    let mut line = String::new();
+    while socket.read_line(&mut line).await.unwrap() > 0 {
+      let verb = line
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+      line.clear();
+      if verb == "EHLO" {
+        socket.get_mut().write_all(RELAY_EHLO_REPLY).await.unwrap();
+      }
+      let upgrading = verb == "STARTTLS";
+      verbs.push(verb);
+      if upgrading {
+        break;
+      }
+    }
+    verbs
   });
 
   let fx = fixture_with(backend, |state| {
@@ -659,13 +678,13 @@ async fn release_to_a_relay_that_drops_the_connection(backend: Backend) {
   .expect("release did not give up on the dropped connection");
   assert_eq!(release.status, StatusCode::BAD_GATEWAY);
 
-  let first_byte = tokio::time::timeout(RELEASE_TIMEOUT, relay)
+  let verbs = tokio::time::timeout(RELEASE_TIMEOUT, relay)
     .await
     .expect("the relay never saw a connection")
     .unwrap();
   t.note(&format!(
-    "relay received a TLS handshake record first: {}",
-    first_byte == TLS_HANDSHAKE_RECORD
+    "relay received in plaintext, before dropping the connection: {}",
+    verbs.join(", ")
   ));
 
   assert_golden("release_relay_dropped", &t.finish());
