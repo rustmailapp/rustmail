@@ -1,23 +1,51 @@
 //! An in-process RustMail API over the stored corpus, and a transcript that
 //! records every exchange with it.
 //!
-//! The repository is an in-memory SQLite database on one permanent
-//! connection, the way `--ephemeral` runs it, and every request goes through
-//! the full [`router`] with its middleware.
+//! [`Backend::Fresh`] stores the corpus in an in-memory SQLite database on one
+//! permanent connection, the way `--ephemeral` runs it.
+//! [`Backend::MigratedFromV0_7_0`] stores it the way rustmail v0.7.0 did, in
+//! a legacy file, migrates the file and serves it the way a file database is
+//! served. Every request goes through the full [`router`] with its middleware.
+
+use std::path::PathBuf;
 
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode, header};
 use rustmail_api::{AppState, WsFrame, router};
-use rustmail_storage::{MessageRepository, MessageSummary, connect_options, initialize_database};
+use rustmail_storage::{
+  MessageRepository, MessageSummary, Preparation, connect_options, initialize_database,
+  prepare_database_file,
+};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 use crate::corpus::{CorpusMessage, corpus};
 use crate::golden::{KnownBlob, Normalizer, render_body};
+use crate::legacy_v0_7_0;
 
 const IN_MEMORY_DB_URL: &str = "sqlite::memory:";
 const WS_CHANNEL_CAPACITY: usize = 256;
+const FILE_DB_READER_CONNECTIONS: u32 = 4;
+const LEGACY_CREATED_AT: &str = "2026-09-23T09:00:00Z";
+
+/// Where the fixture's corpus is stored before it is served.
+#[derive(Debug, Clone, Copy)]
+pub enum Backend {
+  /// Today's ingest, into a fresh in-memory database.
+  Fresh,
+  /// rustmail v0.7.0's ingest, into a legacy file that is then migrated.
+  MigratedFromV0_7_0,
+}
+
+/// Removes a fixture's database directory once the fixture is dropped.
+pub struct TempDir(PathBuf);
+
+impl Drop for TempDir {
+  fn drop(&mut self) {
+    let _ = std::fs::remove_dir_all(&self.0);
+  }
+}
 
 /// A corpus message as stored, with the ids the store minted for it.
 pub struct Stored {
@@ -33,6 +61,7 @@ pub struct Fixture {
   pub repo: MessageRepository,
   pub stored: Vec<Stored>,
   pub normalizer: Normalizer,
+  _dir: Option<TempDir>,
 }
 
 impl Fixture {
@@ -78,13 +107,49 @@ impl Fixture {
   }
 }
 
-/// A router over the stored corpus, with the default state.
-pub async fn fixture() -> Fixture {
-  fixture_with(|state| state).await
+/// A router over the corpus stored through `backend`, with the default state.
+pub async fn fixture(backend: Backend) -> Fixture {
+  fixture_with(backend, |state| state).await
 }
 
-/// A router over the stored corpus, with its state adjusted by `configure`.
-pub async fn fixture_with(configure: impl FnOnce(AppState) -> AppState) -> Fixture {
+/// A router over the corpus stored through `backend`, with its state
+/// adjusted by `configure`.
+pub async fn fixture_with(
+  backend: Backend,
+  configure: impl FnOnce(AppState) -> AppState,
+) -> Fixture {
+  let (repo, stored, dir) = match backend {
+    Backend::Fresh => {
+      let (repo, stored) = store_fresh().await;
+      (repo, stored, None)
+    }
+    Backend::MigratedFromV0_7_0 => {
+      let (repo, stored, dir) = store_legacy_and_migrate().await;
+      (repo, stored, Some(dir))
+    }
+  };
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(WS_CHANNEL_CAPACITY);
+  let state = configure(AppState::new(repo.clone(), ws_tx, None, None));
+
+  let mut normalizer = Normalizer::default();
+  for entry in &stored {
+    normalizer.map(&entry.summary.id, format!("{{msg:{}}}", entry.message.name));
+    for (index, id) in entry.attachment_ids.iter().enumerate() {
+      normalizer.map(id, format!("{{att:{}/{index}}}", entry.message.name));
+    }
+  }
+
+  Fixture {
+    app: router(state.clone()),
+    state,
+    repo,
+    stored,
+    normalizer,
+    _dir: dir,
+  }
+}
+
+async fn store_fresh() -> (MessageRepository, Vec<Stored>) {
   let pool = sqlx::sqlite::SqlitePoolOptions::new()
     .min_connections(1)
     .max_connections(1)
@@ -95,10 +160,7 @@ pub async fn fixture_with(configure: impl FnOnce(AppState) -> AppState) -> Fixtu
     .unwrap();
   initialize_database(&pool).await.unwrap();
   let repo = MessageRepository::new(pool);
-  let (ws_tx, _) = broadcast::channel::<WsFrame>(WS_CHANNEL_CAPACITY);
-  let state = configure(AppState::new(repo.clone(), ws_tx, None, None));
 
-  let mut normalizer = Normalizer::default();
   let mut stored = Vec::new();
   for message in corpus() {
     let summary = repo
@@ -113,24 +175,78 @@ pub async fn fixture_with(configure: impl FnOnce(AppState) -> AppState) -> Fixtu
       .into_iter()
       .map(|attachment| attachment.id)
       .collect();
-    normalizer.map(&summary.id, format!("{{msg:{}}}", message.name));
-    for (index, id) in attachment_ids.iter().enumerate() {
-      normalizer.map(id, format!("{{att:{}/{index}}}", message.name));
-    }
     stored.push(Stored {
       message,
       summary,
       attachment_ids,
     });
   }
+  (repo, stored)
+}
 
-  Fixture {
-    app: router(state.clone()),
-    state,
-    repo,
-    stored,
-    normalizer,
+/// Stores the corpus as rustmail v0.7.0 did, migrates the file, and opens it
+/// as the server opens a file database.
+///
+/// The ids come from the legacy write, attachment ids in the order v0.7.0
+/// wrote them, so a migration that renamed or reordered anything would show
+/// in the snapshots.
+async fn store_legacy_and_migrate() -> (MessageRepository, Vec<Stored>, TempDir) {
+  let dir = std::env::temp_dir().join(format!("rustmail-goldens-{}", ulid::Ulid::new()));
+  std::fs::create_dir_all(&dir).unwrap();
+  let dir = TempDir(dir);
+  let path = dir.0.join("rustmail.db");
+
+  let legacy = legacy_v0_7_0::create_legacy_database(&path).await;
+  let mut stored = Vec::new();
+  for message in corpus() {
+    let written = legacy_v0_7_0::insert_as_v0_7_0(
+      &legacy,
+      &message.sender,
+      &message.recipients,
+      &message.raw,
+      LEGACY_CREATED_AT,
+    )
+    .await
+    .unwrap();
+    apply_legacy_state(&legacy, message, &written.id).await;
+    stored.push(Stored {
+      message,
+      attachment_ids: written.attachment_ids,
+      summary: MessageSummary {
+        id: written.id,
+        sender: written.sender,
+        recipients: written.recipients,
+        subject: written.subject,
+        size: written.size,
+        has_attachments: written.has_attachments,
+        is_read: false,
+        is_starred: false,
+        tags: "[]".to_string(),
+        created_at: written.created_at,
+      },
+    });
   }
+  legacy.close().await;
+
+  let preparation = prepare_database_file(&path, || false).await.unwrap();
+  assert!(
+    matches!(preparation, Preparation::Ready(Some(_))),
+    "the legacy corpus should have been migrated, got {preparation:?}"
+  );
+
+  let url = legacy_v0_7_0::file_url(&path);
+  let writer = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(1)
+    .connect_with(connect_options(&url).unwrap())
+    .await
+    .unwrap();
+  initialize_database(&writer).await.unwrap();
+  let readers = sqlx::sqlite::SqlitePoolOptions::new()
+    .max_connections(FILE_DB_READER_CONNECTIONS)
+    .connect_with(connect_options(&url).unwrap())
+    .await
+    .unwrap();
+  (MessageRepository::with_writer(readers, writer), stored, dir)
 }
 
 async fn apply_state(repo: &MessageRepository, message: &CorpusMessage, id: &str) {
@@ -148,6 +264,23 @@ async fn apply_state(repo: &MessageRepository, message: &CorpusMessage, id: &str
     )
     .await
     .unwrap();
+}
+
+async fn apply_legacy_state(pool: &sqlx::SqlitePool, message: &CorpusMessage, id: &str) {
+  let state = &message.state;
+  let tags: Vec<String> = state.tags.iter().map(ToString::to_string).collect();
+  if !state.read && !state.starred && tags.is_empty() {
+    return;
+  }
+  legacy_v0_7_0::update_as_v0_7_0(
+    pool,
+    id,
+    state.read.then_some(true),
+    state.starred.then_some(true),
+    (!tags.is_empty()).then_some(tags.as_slice()),
+  )
+  .await
+  .unwrap();
 }
 
 /// A request to record: method, URI, headers and body.
