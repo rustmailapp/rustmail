@@ -4,15 +4,15 @@ info:
   title: RustMail API
   version: 0.3.0
   description: >
-    REST and WebSocket API for RustMail — a self-hosted SMTP mail catcher.
+    REST and WebSocket API for RustMail, a self-hosted SMTP mail catcher.
     All IDs are ULIDs (time-sortable). All timestamps are ISO 8601 UTC.
     Base path: /api/v1
 
 
-    Requests a browser made — carrying fetch metadata (`Sec-Fetch-*`), an
-    `Origin`, or a `Mozilla/` user agent — are answered only when addressed to
+    Requests a browser made, carrying fetch metadata (`Sec-Fetch-*`), an
+    `Origin`, or a `Mozilla/` user agent, are answered only when addressed to
     an IP address, to `localhost`, or to a name given to `--allowed-host`;
-    anything else gets `403`. Other clients — CI scripts, `curl`, the TUI —
+    anything else gets `403`. Other clients (CI scripts, `curl`, the TUI)
     are answered on any host.
 
 
@@ -43,7 +43,7 @@ tags:
   - name: Release
     description: Forward a captured message to a real SMTP server
   - name: Assert
-    description: CI/CD assertion endpoints — return 200 on pass, 417 on failure
+    description: CI/CD assertion endpoints; return 200 on pass, 417 on failure
   - name: Authentication
     description: Email authentication header parsing (DKIM, SPF, DMARC, ARC)
   - name: WebSocket
@@ -608,7 +608,7 @@ paths:
         Parses authentication-related headers from the raw message and returns
         structured DKIM, SPF, DMARC, and ARC results. Reads `Authentication-Results`,
         `DKIM-Signature`, `Received-SPF`, and `ARC-Authentication-Results` headers.
-        Does not perform cryptographic validation — it displays what upstream mail
+        Does not perform cryptographic validation; it displays what upstream mail
         servers have already verified.
       tags: [Authentication]
       responses:
@@ -695,7 +695,7 @@ paths:
                 count: 2
                 ok: true
         '417':
-          description: Expectation Failed — assertion did not pass
+          description: Expectation Failed, the assertion did not pass
           content:
             application/json:
               schema:
@@ -855,7 +855,7 @@ components:
       properties:
         id:
           type: string
-          description: ULID — time-sortable unique identifier
+          description: ULID, a time-sortable unique identifier
           example: 01HZ9RQABCDEFGHJKMNPQRSTUV
         sender:
           type: string
