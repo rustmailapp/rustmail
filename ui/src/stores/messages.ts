@@ -836,6 +836,9 @@ async function readTopPage(
  * of the list, after {@link PAGE_SIZE} rows past the last loaded one it met,
  * which is where a deleted tail leaves it, or once more has arrived than the
  * pill keeps, which only a fresh read on the way back to the top can show.
+ * Only the first two pass every loaded row: after the others, a loaded row
+ * below the last one met may lie further down or be gone, so it stays until an
+ * older-page read finds out.
  */
 async function readLoadedWindow(
   view: View,
@@ -867,8 +870,11 @@ async function readLoadedWindow(
       }
     }
     const ended = res.next_cursor === null;
-    const passedAll = ended || metTail || sinceLoaded >= PAGE_SIZE;
-    if (passedAll || (!metAny && read.length > MAX_LIVE_ROWS)) {
+    const passedAll = ended || metTail;
+    const outranLoaded = metAny
+      ? sinceLoaded >= PAGE_SIZE
+      : read.length > MAX_LIVE_ROWS;
+    if (passedAll || outranLoaded) {
       return {
         total: res.total,
         show: () => reconcileWindow(read, passedAll, ended, view),
