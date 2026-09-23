@@ -41,6 +41,7 @@ const {
   UNDO_WINDOW_MS,
   clearFilters,
   clearInbox,
+  clearInboxPrompt,
   connectWebSocket,
   disconnectWebSocket,
   deleteWithUndo,
@@ -2434,5 +2435,34 @@ describe("read notices", () => {
         "Could not mark the message as read.",
       ]),
     );
+  });
+});
+
+describe("clearInboxPrompt", () => {
+  const everything =
+    "Every message in the inbox will be permanently deleted, including those outside the current search and filters.";
+
+  it("counts the inbox when nothing narrows the list", async () => {
+    await seed(range(3));
+
+    expect(clearInboxPrompt().message).toBe(
+      "All 3 messages will be permanently deleted.",
+    );
+  });
+
+  it("does not quote a filtered total for a clear that deletes everything", async () => {
+    await seed(range(100));
+    listMessages.mockResolvedValue(page(range(2), 2));
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(total()).toBe(2));
+
+    expect(clearInboxPrompt().message).toBe(everything);
+  });
+
+  it("does not quote a search total for a clear that deletes everything", async () => {
+    await seed(range(100));
+    setSearch("invoice");
+
+    expect(clearInboxPrompt().message).toBe(everything);
   });
 });
