@@ -1,0 +1,558 @@
+>>> GET /api/v1/messages/{msg:welcome}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:auth_headers}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:folded_headers}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:headers_only}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 166
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_crlf76/0}",
+    "message_id": "{msg:base64_crlf76}",
+    "filename": "report.pdf",
+    "content_type": "application/pdf",
+    "content_id": null,
+    "size": 2009
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 176
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_unwrapped/0}",
+    "message_id": "{msg:base64_unwrapped}",
+    "filename": "oneline.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 1500
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 173
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_lf_only/0}",
+    "message_id": "{msg:base64_lf_only}",
+    "filename": "unix.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 1200
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 175
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_trailing_whitespace/0}",
+    "message_id": "{msg:base64_trailing_whitespace}",
+    "filename": "padded.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 1100
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 174
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_stray_bytes/0}",
+    "message_id": "{msg:base64_stray_bytes}",
+    "filename": "stray.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 1232
+  }
+]
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 174
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:quoted_printable_octet_stream/0}",
+    "message_id": "{msg:quoted_printable_octet_stream}",
+    "filename": "quoted.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 700
+  }
+]
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 343
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:binary_and_8bit/0}",
+    "message_id": "{msg:binary_and_8bit}",
+    "filename": "blob.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 880
+  },
+  {
+    "id": "{att:binary_and_8bit/1}",
+    "message_id": "{msg:binary_and_8bit}",
+    "filename": "eight.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 57
+  }
+]
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 787
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:text_attachments/0}",
+    "message_id": "{msg:text_attachments}",
+    "filename": "data.csv",
+    "content_type": "text/csv",
+    "content_id": null,
+    "size": 33
+  },
+  {
+    "id": "{att:text_attachments/1}",
+    "message_id": "{msg:text_attachments}",
+    "filename": "invite.ics",
+    "content_type": "text/calendar",
+    "content_id": null,
+    "size": 180
+  },
+  {
+    "id": "{att:text_attachments/2}",
+    "message_id": "{msg:text_attachments}",
+    "filename": "page.html",
+    "content_type": "text/html",
+    "content_id": null,
+    "size": 59
+  },
+  {
+    "id": "{att:text_attachments/3}",
+    "message_id": "{msg:text_attachments}",
+    "filename": "latin1.csv",
+    "content_type": "text/csv",
+    "content_id": null,
+    "size": 24
+  },
+  {
+    "id": "{att:text_attachments/4}",
+    "message_id": "{msg:text_attachments}",
+    "filename": "broken.txt",
+    "content_type": "text/plain",
+    "content_id": null,
+    "size": 28
+  }
+]
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 1017
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:nested_related/0}",
+    "message_id": "{msg:nested_related}",
+    "filename": "logo.png",
+    "content_type": "image/png",
+    "content_id": "logo@corpus.test",
+    "size": 908
+  },
+  {
+    "id": "{att:nested_related/1}",
+    "message_id": "{msg:nested_related}",
+    "filename": null,
+    "content_type": "image/png",
+    "content_id": "chart@corpus.test",
+    "size": 708
+  },
+  {
+    "id": "{att:nested_related/2}",
+    "message_id": "{msg:nested_related}",
+    "filename": "logo-dup.gif",
+    "content_type": "image/gif",
+    "content_id": "logo@corpus.test",
+    "size": 306
+  },
+  {
+    "id": "{att:nested_related/3}",
+    "message_id": "{msg:nested_related}",
+    "filename": "spec.pdf",
+    "content_type": "application/pdf",
+    "content_id": "spec@corpus.test",
+    "size": 409
+  },
+  {
+    "id": "{att:nested_related/4}",
+    "message_id": "{msg:nested_related}",
+    "filename": null,
+    "content_type": "image/jpeg",
+    "content_id": "photo@corpus.test",
+    "size": 500
+  },
+  {
+    "id": "{att:nested_related/5}",
+    "message_id": "{msg:nested_related}",
+    "filename": "report.pdf",
+    "content_type": "application/pdf",
+    "content_id": null,
+    "size": 1309
+  }
+]
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 167
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:rfc822_plain/0}",
+    "message_id": "{msg:rfc822_plain}",
+    "filename": "forwarded.eml",
+    "content_type": "message/rfc822",
+    "content_id": null,
+    "size": 184
+  }
+]
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 165
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:rfc822_base64/0}",
+    "message_id": "{msg:rfc822_base64}",
+    "filename": "encoded.eml",
+    "content_type": "message/rfc822",
+    "content_id": null,
+    "size": 181
+  }
+]
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 285
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:digest_without_content_types/0}",
+    "message_id": "{msg:digest_without_content_types}",
+    "filename": null,
+    "content_type": null,
+    "content_id": null,
+    "size": 71
+  },
+  {
+    "id": "{att:digest_without_content_types/1}",
+    "message_id": "{msg:digest_without_content_types}",
+    "filename": null,
+    "content_type": null,
+    "content_id": null,
+    "size": 72
+  }
+]
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 150
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:part_without_content_type/0}",
+    "message_id": "{msg:part_without_content_type}",
+    "filename": "notes.txt",
+    "content_type": null,
+    "content_id": null,
+    "size": 42
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 176
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:base64_malformed/0}",
+    "message_id": "{msg:base64_malformed}",
+    "filename": "malformed.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 50
+  }
+]
+
+>>> GET /api/v1/messages/{msg:large_10mib}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 342
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "id": "{att:large_10mib/0}",
+    "message_id": "{msg:large_10mib}",
+    "filename": "big.bin",
+    "content_type": "application/octet-stream",
+    "content_id": null,
+    "size": 7000000
+  },
+  {
+    "id": "{att:large_10mib/1}",
+    "message_id": "{msg:large_10mib}",
+    "filename": "filler.zip",
+    "content_type": "application/zip",
+    "content_id": null,
+    "size": 650000
+  }
+]
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+

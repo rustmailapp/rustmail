@@ -1,0 +1,291 @@
+>>> DELETE /api/v1/messages/{msg:nested_related}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> DELETE /api/v1/messages/{msg:nested_related}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> DELETE /api/v1/messages/01J0000000000000000000000Z
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/raw
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 2
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[]
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/0}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/inline/logo@corpus.test
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages?limit=3
+<<< 200 OK
+cache-control: no-store
+content-length: 857
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 3,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:large_10mib}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 10469086,
+      "subject": "Ten mebibytes with a seven megabyte attachment",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:base64_malformed}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 541,
+      "subject": "Malformed base64",
+      "tags": []
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": true,
+      "id": "{msg:part_without_content_type}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "files@example.com",
+      "size": 467,
+      "subject": "Attachment with no Content-Type",
+      "tags": []
+    }
+  ],
+  "next_cursor": "{msg:part_without_content_type}",
+  "total": 24
+}
+
+>>> GET /api/v1/messages?q=planning
+<<< 200 OK
+cache-control: no-store
+content-length: 827
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:newsletter_html}",
+      "is_read": false,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "news@example.org",
+      "size": 331,
+      "subject": "Weekly digest: Rust tips",
+      "tags": [
+        "newsletter"
+      ]
+    },
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": []
+    }
+  ],
+  "next_cursor": null,
+  "total": 3
+}
+
+>>> GET /api/v1/messages?tag=urgent
+<<< 200 OK
+cache-control: no-store
+content-length: 323
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:invoice_reminder}",
+      "is_read": false,
+      "is_starred": true,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "billing@example.com",
+      "size": 283,
+      "subject": "Invoice 2026-091 reminder",
+      "tags": [
+        "work",
+        "urgent"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+
+>>> GET /api/v1/messages?before={msg:nested_related}
+<<< 400 Bad Request
+content-length: 131
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "code": "unknown_cursor",
+  "error": "before does not name a stored message; it may have been deleted, so restart from the first page"
+}
+
+>>> GET /api/v1/assert/count?min=0
+<<< 200 OK
+content-length: 22
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "count": 24,
+  "ok": true
+}
+

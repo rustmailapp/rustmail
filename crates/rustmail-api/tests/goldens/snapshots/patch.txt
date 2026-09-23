@@ -1,0 +1,472 @@
+## accepted updates, each followed by a read back
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_read":false}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 477
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_starred":true}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 476
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": true,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":["alpha","beta"]}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 490
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": false,
+  "is_starred": true,
+  "tags": [
+    "alpha",
+    "beta"
+  ],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_read":true,"is_starred":false,"tags":[]}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 476
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 476
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_read":true,"unknown":1}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 476
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":["dup","dup"]}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 487
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [
+    "dup",
+    "dup"
+  ],
+  "created_at": "{timestamp}"
+}
+
+## rejected updates
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":["t0","t1","t2","t3","t4","t5","t6","t7","t8","t9","t10","t11","t12","t13","t14","t15","t16","t17","t18","t19","t20"]}
+<<< 400 Bad Request
+content-length: 34
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Too many tags (max 20)"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
+<<< 400 Bad Request
+content-length: 39
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Tag too long (max 50 chars)"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":[""]}
+<<< 400 Bad Request
+content-length: 68
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Tags must be non-empty and contain no control characters"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":["tab\there"]}
+<<< 400 Bad Request
+content-length: 68
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Tags must be non-empty and contain no control characters"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_read":"yes"}
+<<< 422 Unprocessable Entity
+content-length: 133
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Failed to deserialize the JSON body into the target type: is_read: invalid type: string "yes", expected a boolean at line 1 column 16
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> not json
+<<< 400 Bad Request
+content-length: 75
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Failed to parse the request body as JSON: expected ident at line 1 column 2
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> {"is_read":true}
+<<< 415 Unsupported Media Type
+content-length: 54
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: text/plain; charset=utf-8
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| Expected request with `Content-Type: application/json`
+
+>>> PATCH /api/v1/messages/01J0000000000000000000000Z
+> content-type: application/json
+> {"is_read":true}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 487
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [
+    "dup",
+    "dup"
+  ],
+  "created_at": "{timestamp}"
+}
+
+## filters see the update
+
+>>> GET /api/v1/messages?tag=dup
+<<< 200 OK
+cache-control: no-store
+content-length: 306
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "limit": 50,
+  "messages": [
+    {
+      "created_at": "{timestamp}",
+      "has_attachments": false,
+      "id": "{msg:welcome}",
+      "is_read": true,
+      "is_starred": false,
+      "recipients": [
+        "bob@example.test"
+      ],
+      "sender": "alice@example.com",
+      "size": 273,
+      "subject": "Welcome aboard",
+      "tags": [
+        "dup",
+        "dup"
+      ]
+    }
+  ],
+  "next_cursor": null,
+  "total": 1
+}
+

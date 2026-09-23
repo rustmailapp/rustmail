@@ -1,0 +1,388 @@
+>>> GET /api/v1/messages/{msg:base64_crlf76}/attachments/{att:base64_crlf76/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="report.pdf"
+content-length: 2009
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:base64_crlf76/report.pdf (2009 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/attachments/{att:base64_unwrapped/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="oneline.bin"
+content-length: 1500
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:base64_unwrapped/oneline.bin (1500 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/attachments/{att:base64_lf_only/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="unix.bin"
+content-length: 1200
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:base64_lf_only/unix.bin (1200 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/attachments/{att:base64_trailing_whitespace/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="padded.bin"
+content-length: 1100
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:base64_trailing_whitespace/padded.bin (1100 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/attachments/{att:base64_stray_bytes/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="stray.bin"
+content-length: 1232
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| nLvAq46qST7fDf4hp+IqEHr9sN/aJ3oYdnC7BkPi-jWLyOzhtulDn3axIWgArDhweevVny6ujOR+\r\n
+| iBSDP3QAo1oSUDjF6wHy5gzRv01mD36QXmWYecAdwyqFaXcVklp9E2qHb+5lsG3awbCUYdKBCZ*9\r\n
+| 4xwRcy67D3CSxOfrq6+4T8PS1+uLcMv7N272f/NEuRN5bha9kg6NOEH9K1mziXDyLyHKfv7fJ0Gw\r\n
+| 56ZKIBzK6Wbc1uCwoMP4YKSgQvi5+YbMokn4khTu6ipuvLPXjNAmjHrAt7iKHLkgLlNo45vG9mDv\r\n
+| NfMAAiGqmEv2e7xURosEjh+nYgl2kwqO7oMWRlQzLXg8T/67qtPrx/2Pa5f2aJJQK+SreK8SMnl+\r\n
+| Obtuozm7BOp/iyDLDoE90r+cFQATYXIh5/cF61zrXY6v0SQFV73HCvjVKP8Eb4KAiHuTOyfOEEkt\r\n
+| uyszFl/cWhGn/tCEojU2j3wOgabK1uQ5h3rPsS9bZPzzISz+fBEA6yfmqJUYMU3QzIQUFFUGfrby\r\n
+| vdf6z9+sLwTfBsgLyiDGmvzHb0uXo29ZHAa+SOTlZ4EP855m/mL+fVZpqU0y+NxLt0+mKjs9aoc2\r\n
+| np8H4ptcsTH8jmVEKN53B2CPTtkUHwOFdbF45wGA2ooJtmUX8KwN0UNrHxcsT6m0HuTCXZjHCUbx\r\n
+| cXPyKDHQZhSIWiIEUDGQ8pYe20+mAVjZMMUK6iuv8ifYameRqI09mYxjB100V/oX/NL2VW4PTxkT\r\n
+| GP9lyr6RcjK4jMHCC3e2TNQ0Jbvh0LFHoZel5+5/XQPevFjxoXjhFtB4W5dIJWG2ufU/KqR2dhf7\r\n
+| oZMXx3ApYwskcp2itObxqc82jBIy60zHEUNKuwVbj1kW6772ilA4GMzztTXqJYMnddBNe2j6MH8W\r\n
+| RWNy3viij/jZ9uQsBQRYtVzKDAQWWRaxvxuz2SLYBZd6CeKOAj2IVy4pVMX0uVVI2bM1PaeAOLTx\r\n
+| e8RF7qffH4k6ka332PKKCn79+TIavZxn7glhppswVjcHAj80LaNI4VM1hTzMQRuphmChucpnu9BS\r\n
+| sqJOpB+pmBb022Ns/zp+UJ6Hs0L79fTPMkFNlu/T14wKUPXqh8TBmzCz9CH4ebMT5rgVizHEKJ90\r\n
+| IYriZTXDfq4tgShpgYkNzc+fArtPaRx6G5QN8opLTDrpWbgvqKRoxVsMuOgU7E
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/attachments/{att:quoted_printable_octet_stream/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="quoted.bin"
+content-length: 700
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:quoted_printable_octet_stream/quoted.bin (700 bytes)
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/attachments/{att:binary_and_8bit/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="blob.bin"
+content-length: 880
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:binary_and_8bit/blob.bin (880 bytes)
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/attachments/{att:binary_and_8bit/1}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="eight.bin"
+content-length: 57
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:binary_and_8bit/eight.bin (57 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments/{att:text_attachments/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="data.csv"
+content-length: 33
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:text_attachments/data.csv (33 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments/{att:text_attachments/1}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="invite.ics"
+content-length: 180
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:text_attachments/invite.ics (180 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments/{att:text_attachments/2}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="page.html"
+content-length: 59
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:text_attachments/page.html (59 bytes)
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments/{att:text_attachments/3}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="latin1.csv"
+content-length: 24
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| name,city\r\n
+| René,Genève
+
+>>> GET /api/v1/messages/{msg:text_attachments}/attachments/{att:text_attachments/4}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="broken.txt"
+content-length: 28
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| caf� �� bytes �( end
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="logo.png"
+content-length: 908
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/logo.png (908 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/1}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="attachment"
+content-length: 708
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/chart.png (708 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/2}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="logo-dup.gif"
+content-length: 306
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/logo-dup.gif (306 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/3}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="spec.pdf"
+content-length: 409
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/spec.pdf (409 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/4}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="attachment"
+content-length: 500
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/photo.jpg (500 bytes)
+
+>>> GET /api/v1/messages/{msg:nested_related}/attachments/{att:nested_related/5}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="report.pdf"
+content-length: 1309
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:nested_related/report.pdf (1309 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/attachments/{att:rfc822_plain/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="forwarded.eml"
+content-length: 184
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:rfc822_plain/forwarded.eml (184 bytes)
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/attachments/{att:rfc822_base64/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="encoded.eml"
+content-length: 181
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:rfc822_base64/encoded.eml (181 bytes)
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/attachments/{att:digest_without_content_types/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="attachment"
+content-length: 71
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:digest_without_content_types/digest item one (71 bytes)
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/attachments/{att:digest_without_content_types/1}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="attachment"
+content-length: 72
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:digest_without_content_types/digest item two (72 bytes)
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/attachments/{att:part_without_content_type/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="notes.txt"
+content-length: 42
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:part_without_content_type/notes.txt (42 bytes)
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/attachments/{att:base64_malformed/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="malformed.bin"
+content-length: 50
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-text:
+| SGVsbG8sIG1hbGZvcm1lZA\r\n
+| =QmFz=ZTY0\r\n
+| #@!\r\n
+| IHdvcmxk=
+
+>>> GET /api/v1/messages/{msg:large_10mib}/attachments/{att:large_10mib/0}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="big.bin"
+content-length: 7000000
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:large_10mib/big.bin (7000000 bytes)
+
+>>> GET /api/v1/messages/{msg:large_10mib}/attachments/{att:large_10mib/1}
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-disposition: attachment; filename="filler.zip"
+content-length: 650000
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/octet-stream
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: == payload:large_10mib/filler.zip (650000 bytes)
+
+## lookups that miss
+
+>>> GET /api/v1/messages/{msg:welcome}/attachments/{att:base64_crlf76/0}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/{msg:welcome}/attachments/01J0000000000000000000000Z
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/attachments/{att:base64_crlf76/0}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+

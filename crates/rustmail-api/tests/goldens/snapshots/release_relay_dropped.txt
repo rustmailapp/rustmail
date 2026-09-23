@@ -1,0 +1,17 @@
+>>> POST /api/v1/messages/{msg:welcome}/release
+> content-type: application/json
+> {"host":"127.0.0.1"}
+<<< 502 Bad Gateway
+content-length: 32
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "SMTP delivery failed"
+}
+
+relay received a TLS handshake record first: true

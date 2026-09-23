@@ -1,0 +1,495 @@
+>>> GET /api/v1/messages/{msg:welcome}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:auth_headers}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 595
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [
+    {
+      "status": "pass",
+      "details": "dkim=pass header.d=example.com header.s=sel1"
+    },
+    {
+      "status": "info",
+      "details": "d=example.com s=sel1 a=rsa-sha256"
+    }
+  ],
+  "spf": [
+    {
+      "status": "pass",
+      "details": "spf=pass smtp.mailfrom=sender@example.com"
+    },
+    {
+      "status": "pass",
+      "details": "Pass (mx.example.com: domain of sender@example.com designates 192.0.2.1 as permitted sender)"
+    }
+  ],
+  "dmarc": [
+    {
+      "status": "pass",
+      "details": "dmarc=pass action=none header.from=example.com"
+    }
+  ],
+  "arc": [
+    {
+      "status": "arc:pass",
+      "details": "dkim=pass header.d=example.com"
+    },
+    {
+      "status": "arc:softfail",
+      "details": "spf=softfail smtp.mailfrom=relay@example.net"
+    }
+  ]
+}
+
+>>> GET /api/v1/messages/{msg:folded_headers}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:headers_only}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:text_attachments}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:nested_related}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/{msg:large_10mib}/auth
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 40
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "dkim": [],
+  "spf": [],
+  "dmarc": [],
+  "arc": []
+}
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/auth
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+

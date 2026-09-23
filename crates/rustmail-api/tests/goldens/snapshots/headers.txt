@@ -1,0 +1,1055 @@
+>>> GET /api/v1/messages/{msg:welcome}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 311
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "alice@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Welcome aboard"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<welcome@corpus.rustmail.test>"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain; charset=utf-8"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:newsletter_html}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 365
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "news@example.org"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Weekly digest: Rust tips"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<newsletter_html@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/html; charset=utf-8"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:receipt_alternative}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 383
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "shop@example.net"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Your receipt #4471"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<receipt_alternative@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/alternative; boundary=\"ALT-4471\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:latin1_subject}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 440
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "chef@example.fr"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "=?ISO-8859-1?Q?Caf=E9_cr=E8me?="
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<latin1_subject@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain; charset=iso-8859-1"
+  },
+  {
+    "name": "Content-Transfer-Encoding",
+    "value": "quoted-printable"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:invoice_reminder}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 333
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "billing@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Invoice 2026-091 reminder"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<invoice_reminder@corpus.rustmail.test>"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain; charset=utf-8"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:auth_headers}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 887
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "sender@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Signed and sealed"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<auth_headers@corpus.rustmail.test>"
+  },
+  {
+    "name": "Authentication-Results",
+    "value": "mx.example.com; dkim=pass header.d=example.com header.s=sel1; spf=pass smtp.mailfrom=sender@example.com; dmarc=pass action=none header.from=example.com"
+  },
+  {
+    "name": "ARC-Authentication-Results",
+    "value": "i=1; mx.example.com; dkim=pass header.d=example.com; spf=softfail smtp.mailfrom=relay@example.net"
+  },
+  {
+    "name": "DKIM-Signature",
+    "value": "v=1; a=rsa-sha256; d=example.com; s=sel1; h=from:to:subject; bh=YWJj; b=ZGVm"
+  },
+  {
+    "name": "Received-SPF",
+    "value": "Pass (mx.example.com: domain of sender@example.com designates 192.0.2.1 as permitted sender)"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:folded_headers}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 598
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "relay@example.net"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<folded_headers@corpus.rustmail.test>"
+  },
+  {
+    "name": "Subject",
+    "value": "A subject folded across two lines"
+  },
+  {
+    "name": "Received",
+    "value": "from a.example.net by b.example.net; Wed, 23 Sep 2026 08:59:58 +0000"
+  },
+  {
+    "name": "Received",
+    "value": "from c.example.net by a.example.net; Wed, 23 Sep 2026 08:59:57 +0000"
+  },
+  {
+    "name": "X-Long-Header",
+    "value": "first segment second segment third segment"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:no_subject_no_content_type}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 226
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "quiet@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<no_subject_no_content_type@corpus.rustmail.test>"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:like_wildcards_subject}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 318
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "promo@example.org"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Discount 100% off_now"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<like_wildcards_subject@corpus.rustmail.test>"
+  },
+  {
+    "name": "Content-Type",
+    "value": "text/plain"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:headers_only}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 254
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "empty@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Headers only"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<headers_only@corpus.rustmail.test>"
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_crlf76}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 386
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Base64 wrapped at 76 with CRLF"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_crlf76@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-CRLF76\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_unwrapped}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 383
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Base64 on a single line"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_unwrapped@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-ONELINE\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_lf_only}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 385
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Base64 with LF-only line endings"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_lf_only@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-LF\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 402
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Base64 with trailing whitespace"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_trailing_whitespace@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-TRAILING\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_stray_bytes}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 396
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Base64 with stray non-alphabet bytes"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_stray_bytes@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-STRAY\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 399
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Quoted-printable octet-stream"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<quoted_printable_octet_stream@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"QP-OCTET\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:binary_and_8bit}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 397
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Binary and 8bit transfer encodings"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<binary_and_8bit@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"BIN-8BIT-7f3c9a\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:text_attachments}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 396
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Text attachments in several charsets"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<text_attachments@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"TEXT-ATTACH\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:nested_related}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 387
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Nested related with cid images"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<nested_related@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"MIX-NESTED\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:rfc822_plain}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 381
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Forwarded message inline"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<rfc822_plain@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"RFC822-PLAIN\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:rfc822_base64}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 383
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Forwarded message in base64"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<rfc822_base64@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"RFC822-B64\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:digest_without_content_types}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 407
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Digest whose parts have no Content-Type"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<digest_without_content_types@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/digest; boundary=\"DIGEST\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:part_without_content_type}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 394
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Attachment with no Content-Type"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<part_without_content_type@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"NO-CT\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:base64_malformed}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 372
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Malformed base64"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<base64_malformed@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"B64-BAD\""
+  }
+]
+
+>>> GET /api/v1/messages/{msg:large_10mib}/headers
+<<< 200 OK
+cache-control: private, max-age=31536000, immutable
+content-length: 401
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+[
+  {
+    "name": "From",
+    "value": "files@example.com"
+  },
+  {
+    "name": "To",
+    "value": "bob@example.test"
+  },
+  {
+    "name": "Subject",
+    "value": "Ten mebibytes with a seven megabyte attachment"
+  },
+  {
+    "name": "Date",
+    "value": "Wed, 23 Sep 2026 09:00:00 +0000"
+  },
+  {
+    "name": "Message-ID",
+    "value": "<large_10mib@corpus.rustmail.test>"
+  },
+  {
+    "name": "MIME-Version",
+    "value": "1.0"
+  },
+  {
+    "name": "Content-Type",
+    "value": "multipart/mixed; boundary=\"LARGE-10MIB\""
+  }
+]
+
+>>> GET /api/v1/messages/01J0000000000000000000000Z/headers
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+

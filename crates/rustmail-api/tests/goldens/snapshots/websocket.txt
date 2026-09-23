@@ -1,0 +1,120 @@
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"is_read":false,"is_starred":true,"tags":["ws"]}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {"tags":[""]}
+<<< 400 Bad Request
+content-length: 68
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Tags must be non-empty and contain no control characters"
+}
+
+>>> PATCH /api/v1/messages/01J0000000000000000000000Z
+> content-type: application/json
+> {"is_read":true}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> PATCH /api/v1/messages/{msg:welcome}
+> content-type: application/json
+> {}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> DELETE /api/v1/messages/{msg:welcome}
+<<< 204 No Content
+content-length: 0
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body: (empty)
+
+>>> DELETE /api/v1/messages/{msg:welcome}
+<<< 404 Not Found
+content-length: 30
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "error": "Resource not found"
+}
+
+>>> DELETE /api/v1/messages
+<<< 200 OK
+content-length: 14
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "deleted": 24
+}
+
+## frames received, in order
+
+{"type":"message:new","data":{"id":"{msg:welcome}","sender":"alice@example.com","recipients":["bob@example.test"],"subject":"Welcome aboard","size":273,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:newsletter_html}","sender":"news@example.org","recipients":["bob@example.test"],"subject":"Weekly digest: Rust tips","size":331,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:receipt_alternative}","sender":"shop@example.net","recipients":["carol@example.test","dave@example.test"],"subject":"Your receipt #4471","size":460,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:latin1_subject}","sender":"chef@example.fr","recipients":["bob@example.test"],"subject":"Café crème","size":327,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:invoice_reminder}","sender":"billing@example.com","recipients":["bob@example.test"],"subject":"Invoice 2026-091 reminder","size":283,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:auth_headers}","sender":"sender@example.com","recipients":["bob@example.test"],"subject":"Signed and sealed","size":719,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:folded_headers}","sender":"relay@example.net","recipients":["bob@example.test"],"subject":"A subject folded across two lines","size":461,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:no_subject_no_content_type}","sender":"quiet@example.com","recipients":["bob@example.test"],"subject":null,"size":205,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:like_wildcards_subject}","sender":"promo@example.org","recipients":["Carol@Example.Test"],"subject":"Discount 100% off_now","size":245,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:headers_only}","sender":"empty@example.com","recipients":["bob@example.test"],"subject":"Headers only","size":160,"has_attachments":false,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_crlf76}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Base64 wrapped at 76 with CRLF","size":3252,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_unwrapped}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Base64 on a single line","size":2498,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_lf_only}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Base64 with LF-only line endings","size":2092,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_trailing_whitespace}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Base64 with trailing whitespace","size":2067,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_stray_bytes}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Base64 with stray non-alphabet bytes","size":1759,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:quoted_printable_octet_stream}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Quoted-printable octet-stream","size":2175,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:binary_and_8bit}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Binary and 8bit transfer encodings","size":1605,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:text_attachments}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Text attachments in several charsets","size":1490,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:nested_related}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Nested related with cid images","size":7350,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:rfc822_plain}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Forwarded message inline","size":645,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:rfc822_base64}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Forwarded message in base64","size":748,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:digest_without_content_types}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Digest whose parts have no Content-Type","size":456,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:part_without_content_type}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Attachment with no Content-Type","size":467,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:base64_malformed}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Malformed base64","size":541,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:new","data":{"id":"{msg:large_10mib}","sender":"files@example.com","recipients":["bob@example.test"],"subject":"Ten mebibytes with a seven megabyte attachment","size":10469086,"has_attachments":true,"is_read":false,"is_starred":false,"tags":[],"created_at":"{timestamp}"}}
+{"type":"message:read","data":{"id":"{msg:welcome}","is_read":false}}
+{"type":"message:starred","data":{"id":"{msg:welcome}","is_starred":true}}
+{"type":"message:tags","data":{"id":"{msg:welcome}","tags":["ws"]}}
+{"type":"message:delete","data":{"id":"{msg:welcome}"}}
+{"type":"messages:clear"}
