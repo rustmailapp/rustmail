@@ -4,15 +4,15 @@ info:
   title: RustMail API
   version: 0.3.0
   description: >
-    REST and WebSocket API for RustMail — a self-hosted SMTP mail catcher.
+    REST and WebSocket API for RustMail, a self-hosted SMTP mail catcher.
     All IDs are ULIDs (time-sortable). All timestamps are ISO 8601 UTC.
     Base path: /api/v1
 
 
-    Requests a browser made — carrying fetch metadata (`Sec-Fetch-*`), an
-    `Origin`, or a `Mozilla/` user agent — are answered only when addressed to
+    Requests a browser made, carrying fetch metadata (`Sec-Fetch-*`), an
+    `Origin`, or a `Mozilla/` user agent, are answered only when addressed to
     an IP address, to `localhost`, or to a name given to `--allowed-host`;
-    anything else gets `403`. Other clients — CI scripts, `curl`, the TUI —
+    anything else gets `403`. Other clients (CI scripts, `curl`, the TUI)
     are answered on any host.
 
 
@@ -20,6 +20,14 @@ info:
     answered `503` with the usual `Error` body. Writes are never cut short,
     so a `503` never stands for a change that still lands. The WebSocket is
     exempt.
+
+
+    A path under `/api/` that matches no endpoint is answered `404` with
+    `{"error": "Unknown API endpoint"}`, never with the UI's HTML. Request
+    bodies are read as `application/json`; a body without that content type,
+    or one the JSON extractor cannot map onto the request schema, is
+    rejected before the handler runs with a `text/plain` body (`415`,
+    `400` or `422`) rather than the `Error` object.
 
 servers:
   - url: http://localhost:8025
@@ -35,7 +43,7 @@ tags:
   - name: Release
     description: Forward a captured message to a real SMTP server
   - name: Assert
-    description: CI/CD assertion endpoints — return 200 on pass, 417 on failure
+    description: CI/CD assertion endpoints; return 200 on pass, 417 on failure
   - name: Authentication
     description: Email authentication header parsing (DKIM, SPF, DMARC, ARC)
   - name: WebSocket
@@ -66,17 +74,29 @@ paths:
           in: query
           schema:
             type: boolean
-          description: When `true`, only starred messages. `false` does not filter.
+          description: >
+            When `true`, only starred messages. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: unread
           in: query
           schema:
             type: boolean
-          description: When `true`, only messages not marked as read. `false` does not filter.
+          description: >
+            When `true`, only messages not marked as read. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: has_attachments
           in: query
           schema:
             type: boolean
-          description: When `true`, only messages with at least one attachment. `false` does not filter.
+          description: >
+            When `true`, only messages with at least one attachment. `false` does not filter: it is the
+            same as leaving the parameter out, not its negation. Only the
+            literals `true` and `false` are accepted; anything else, `1`
+            included, is a `400`. If repeated, the last value wins.
         - name: tag
           in: query
           style: form
@@ -92,7 +112,9 @@ paths:
             it carries any of the given tags. More than 20 is a `400`.
       responses:
         '200':
-          description: Paginated list of message summaries
+          description: >
+            Paginated list of message summaries. Sent with
+            `Cache-Control: no-store`.
           content:
             application/json:
               schema:
@@ -101,11 +123,13 @@ paths:
                 messages:
                   - id: 01HZ9RQABCDEFGHJKMNPQRSTUV
                     sender: alice@example.com
-                    recipients: '["bob@example.com"]'
+                    recipients: [bob@example.com]
                     subject: Hello world
                     size: 1024
                     has_attachments: false
                     is_read: false
+                    is_starred: false
+                    tags: []
                     created_at: '2026-03-21T10:00:00Z'
                 total: 1
                 next_cursor: null
@@ -115,7 +139,9 @@ paths:
             `before` names no stored message (it may have been deleted; restart
             from the first page), `before` and `offset` were both given, more
             than 20 `tag` values were given, or `limit`, `offset` or a boolean
-            filter has a malformed value. Only the unknown-cursor case carries
+            filter has a malformed value (`limit must be an integer`,
+            `starred must be true or false`, `Too many tag filters (max 20)`,
+            and so on). Only the unknown-cursor case carries
             `code: unknown_cursor`; tell the cases apart by `code`, not by the
             status or the `error` text.
           content:
@@ -159,7 +185,9 @@ paths:
       tags: [Messages]
       responses:
         '200':
-          description: Full message including parsed body fields
+          description: >
+            Full message including parsed body fields. Sent with
+            `Cache-Control: no-store`.
           content:
             application/json:
               schema:
@@ -167,14 +195,16 @@ paths:
               example:
                 id: 01HZ9RQABCDEFGHJKMNPQRSTUV
                 sender: alice@example.com
-                recipients: '["bob@example.com"]'
+                recipients: [bob@example.com]
                 subject: Hello world
+                text_body: Hello Bob!
+                html_body: '<p>Hello Bob!</p>'
                 size: 1024
                 has_attachments: false
                 is_read: true
+                is_starred: false
+                tags: []
                 created_at: '2026-03-21T10:00:00Z'
-                text_body: Hello Bob!
-                html_body: '<p>Hello Bob!</p>'
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -183,6 +213,13 @@ paths:
     patch:
       operationId: updateMessage
       summary: Update message fields
+      description: >
+        Sets whichever of `is_read`, `is_starred` and `tags` the body names and
+        leaves the others alone. The body must be sent as
+        `Content-Type: application/json`. Unknown fields are ignored, and `{}`
+        is accepted as a no-op. Each field that was set is announced on the
+        WebSocket (`message:read`, `message:starred`, `message:tags`); a
+        rejected update announces nothing.
       tags: [Messages]
       requestBody:
         required: true
@@ -193,14 +230,28 @@ paths:
             example:
               is_read: true
       responses:
-        '200':
-          description: Updated message summary
+        '204':
+          description: Update applied. No body; re-read the message to see its new state.
+        '400':
+          description: >
+            `tags` breaks a limit: more than 20 tags (`Too many tags (max 20)`),
+            a tag longer than 50 bytes (`Tag too long (max 50 chars)`), or an
+            empty tag or one containing a control character (`Tags must be
+            non-empty and contain no control characters`). Answered with the
+            `Error` body, and nothing is changed. A body that is not JSON at all
+            is also a `400`, but as `text/plain` from the JSON extractor.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageSummary'
+                $ref: '#/components/schemas/Error'
+              example:
+                error: Too many tags (max 20)
         '404':
           $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/NotJson'
+        '422':
+          $ref: '#/components/responses/BodyMistyped'
 
     delete:
       operationId: deleteMessage
@@ -236,15 +287,20 @@ paths:
       responses:
         '200':
           description: >
-            Raw RFC 822 message bytes, truncated to `limit` when given.
-            Content-Disposition is `attachment; filename="<id>.eml"`.
+            Raw RFC 822 message bytes, truncated to `limit` when given (a
+            `limit` past the end returns the whole source). Sent with
+            `Content-Type: message/rfc822` and
+            `Cache-Control: private, max-age=31536000, immutable`, and no
+            `Content-Disposition`: use `/export` for a download.
           content:
             message/rfc822:
               schema:
                 type: string
                 format: binary
         '400':
-          description: '`limit` was given but is not a positive number of bytes'
+          description: >
+            `limit` was given but is not a positive whole number of bytes (`0`,
+            negatives, decimals and an empty value included)
           content:
             application/json:
               schema:
@@ -294,29 +350,28 @@ paths:
     get:
       operationId: listAttachments
       summary: List attachments for a message (metadata only)
+      description: >
+        Returns a bare JSON array, in MIME part order. An id that names no
+        stored message is not an error: it answers `200` with `[]`.
       tags: [Attachments]
       responses:
         '200':
-          description: List of attachment metadata
+          description: >
+            Attachment metadata, possibly empty. Sent with
+            `Cache-Control: private, max-age=31536000, immutable`.
           content:
             application/json:
               schema:
-                type: object
-                required: [attachments]
-                properties:
-                  attachments:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Attachment'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Attachment'
               example:
-                attachments:
-                  - id: 01HZ9RQABCDEFGHJKMNPQRFILE
-                    message_id: 01HZ9RQABCDEFGHJKMNPQRSTUV
-                    filename: invoice.pdf
-                    content_type: application/pdf
-                    size: 48321
-        '404':
-          $ref: '#/components/responses/NotFound'
+                - id: 01HZ9RQABCDEFGHJKMNPQRFILE
+                  message_id: 01HZ9RQABCDEFGHJKMNPQRSTUV
+                  filename: invoice.pdf
+                  content_type: application/pdf
+                  content_id: null
+                  size: 48321
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -332,10 +387,16 @@ paths:
       responses:
         '200':
           description: >
-            Attachment file. Content-Type matches the attachment's stored
-            content_type. Content-Disposition is attachment; filename="<name>".
+            Attachment bytes, decoded. Always sent as
+            `Content-Type: application/octet-stream`, whatever the stored
+            `content_type` (read that from the attachment list), with
+            `Content-Disposition: attachment; filename="<name>"`, where every
+            character outside `A-Z a-z 0-9 . _ -` is replaced by `_` and a
+            part with no filename is named `attachment`. Also sent with
+            `Cache-Control: private, max-age=31536000, immutable` and
+            `X-Content-Type-Options: nosniff`, and never compressed.
           content:
-            '*/*':
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -358,15 +419,26 @@ paths:
       operationId: getInlineAttachment
       summary: Get an inline image by Content-ID
       description: >
-        Returns the inline image matching the given Content-ID. Used by the
-        HTML preview to resolve `cid:` references. Only serves image/* types;
-        falls back to application/octet-stream otherwise.
+        Returns the part whose Content-ID matches `cid` exactly
+        (case-sensitive, without angle brackets). Used by the HTML preview to
+        resolve `cid:` references. The stored content type is sent only when
+        it is one of `image/png`, `image/jpeg`, `image/gif`, `image/webp`,
+        `image/avif` or `image/bmp`; any other part is served as
+        `application/octet-stream`.
       tags: [Attachments]
       responses:
         '200':
-          description: Inline image content with appropriate Content-Type and immutable cache headers.
+          description: >
+            Part bytes, decoded. Sent with
+            `Cache-Control: private, max-age=31536000, immutable`,
+            `X-Content-Type-Options: nosniff` and
+            `Content-Security-Policy: default-src 'none'`.
           content:
             'image/*':
+              schema:
+                type: string
+                format: binary
+            application/octet-stream:
               schema:
                 type: string
                 format: binary
@@ -386,18 +458,23 @@ paths:
       parameters:
         - name: format
           in: query
-          required: true
+          required: false
           schema:
             type: string
             enum: [eml, json]
+            default: eml
           description: >
-            `eml` returns the raw RFC 822 bytes as a downloadable file.
-            `json` returns a JSON representation of the full message.
+            `eml` (the default) returns the raw RFC 822 bytes as a downloadable
+            file. `json` returns the same `Message` object as
+            `GET /messages/{id}`, as a download.
       responses:
         '200':
           description: >
-            Exported message. Content-Type is `message/rfc822` for `eml`
-            and `application/json` for `json`.
+            Exported message with
+            `Content-Disposition: attachment; filename="<id>.eml"` or
+            `"<id>.json"`. `eml` is `message/rfc822` with
+            `Cache-Control: private, max-age=31536000, immutable`; `json` is
+            `application/json` with `Cache-Control: no-store`.
           content:
             message/rfc822:
               schema:
@@ -407,7 +484,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Message'
         '400':
-          description: Invalid or missing format parameter
+          description: >
+            `format` is neither `eml` nor `json` (an empty value included).
+            Checked before the message is looked up, so it wins over a `404`.
           content:
             application/json:
               schema:
@@ -424,6 +503,13 @@ paths:
     post:
       operationId: releaseMessage
       summary: Forward a captured message to a real SMTP server
+      description: >
+        Disabled unless the server was started with `--release-host`. The
+        message's raw source is sent unchanged, with the captured envelope
+        (MAIL FROM and RCPT TO), to `host` over implicit TLS: the connection
+        is TLS from its first byte, on whichever port is used, so the relay
+        must accept SMTPS there. Checks run in this order: release enabled,
+        host, configured port, allowed port, message lookup, envelope.
       tags: [Release]
       requestBody:
         required: true
@@ -435,22 +521,81 @@ paths:
               host: smtp.mailgun.org
               port: 587
       responses:
-        '204':
-          description: Message forwarded successfully
+        '200':
+          description: The relay accepted the message
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [released]
+                properties:
+                  released:
+                    type: boolean
+                    const: true
+              example:
+                released: true
         '400':
-          description: Invalid request body
+          description: >
+            `port` is not one of 25, 465, 587 or 2525, or the captured envelope
+            cannot be sent (for example no recipient address parses).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              examples:
+                portNotAllowed:
+                  summary: port outside the allowed SMTP ports
+                  value:
+                    error: Port 1025 is not an allowed SMTP port (25, 465, 587, 2525)
+                invalidEnvelope:
+                  summary: captured envelope cannot be sent
+                  value:
+                    error: 'Invalid envelope: missing destination address, invalid envelope'
+        '403':
+          description: >
+            Release is disabled (no `--release-host`), `host` is not the
+            configured host, or a port was configured and `port` differs from
+            it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                disabled:
+                  summary: release is disabled
+                  value:
+                    error: Email release is disabled. Configure --release-host to enable.
+                wrongHost:
+                  summary: host is not the configured one
+                  value:
+                    error: 'Release only allowed to configured host: smtp.example.com'
+                wrongPort:
+                  summary: port is not the configured one
+                  value:
+                    error: 'Release only allowed on configured port: 2525'
         '404':
           $ref: '#/components/responses/NotFound'
+        '415':
+          $ref: '#/components/responses/NotJson'
+        '422':
+          $ref: '#/components/responses/BodyMistyped'
         '502':
-          description: Downstream SMTP server unreachable or returned an error
+          description: >
+            The TLS client could not be set up for `host`, or the relay could
+            not be reached, refused the message or dropped the connection.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+              examples:
+                deliveryFailed:
+                  summary: relay unreachable, refused, or dropped the connection
+                  value:
+                    error: SMTP delivery failed
+                tlsSetup:
+                  summary: TLS client could not be set up
+                  value:
+                    error: Failed to establish TLS connection to relay host
 
   /api/v1/messages/{id}/auth:
     parameters:
@@ -463,7 +608,7 @@ paths:
         Parses authentication-related headers from the raw message and returns
         structured DKIM, SPF, DMARC, and ARC results. Reads `Authentication-Results`,
         `DKIM-Signature`, `Received-SPF`, and `ARC-Authentication-Results` headers.
-        Does not perform cryptographic validation — it displays what upstream mail
+        Does not perform cryptographic validation; it displays what upstream mail
         servers have already verified.
       tags: [Authentication]
       responses:
@@ -478,16 +623,16 @@ paths:
                   - status: pass
                     details: "dkim=pass header.d=example.com header.s=selector1"
                   - status: info
-                    details: "domain=example.com selector=selector1 algorithm=rsa-sha256"
+                    details: "d=example.com s=selector1 a=rsa-sha256"
                 spf:
                   - status: pass
                     details: "spf=pass smtp.mailfrom=alice@example.com"
                 dmarc:
                   - status: pass
-                    details: "dmarc=pass header.from=example.com"
+                    details: "dmarc=pass action=none header.from=example.com"
                 arc:
-                  - status: pass
-                    details: "arc=pass"
+                  - status: arc:pass
+                    details: "dkim=pass header.d=example.com"
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -501,37 +646,44 @@ paths:
         Returns `200 OK` when the number of messages matching the given filters
         satisfies the `min`/`max` bounds. Returns `417 Expectation Failed`
         otherwise. Designed for use in CI pipelines with `curl -f`.
-        If neither `min` nor `max` is provided, the assertion always passes
-        and the response contains the raw count.
+        `min` defaults to `1` and `max` to no upper bound, so a bare call
+        asserts that at least one message matches; pass `min=0` to only read
+        the count. The filters combine with `AND`.
       tags: [Assert]
       parameters:
         - name: min
           in: query
           schema:
             type: integer
-            minimum: 0
+            default: 1
           description: Minimum number of matching messages (inclusive)
         - name: max
           in: query
           schema:
             type: integer
-            minimum: 0
-          description: Maximum number of matching messages (inclusive)
+            format: int64
+          description: Maximum number of matching messages (inclusive). Unbounded when omitted.
         - name: subject
           in: query
           schema:
             type: string
-          description: Filter by subject substring (case-insensitive)
+          description: >
+            Filter by subject substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
         - name: sender
           in: query
           schema:
             type: string
-          description: Filter by sender address substring (case-insensitive)
+          description: >
+            Filter by sender address substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
         - name: recipient
           in: query
           schema:
             type: string
-          description: Filter by recipient address substring (case-insensitive)
+          description: >
+            Filter by recipient address substring, case-insensitive. `%` and `_` match
+            themselves, not as wildcards.
       responses:
         '200':
           description: Assertion passed
@@ -543,7 +695,7 @@ paths:
                 count: 2
                 ok: true
         '417':
-          description: Expectation Failed — assertion did not pass
+          description: Expectation Failed, the assertion did not pass
           content:
             application/json:
               schema:
@@ -551,6 +703,17 @@ paths:
               example:
                 count: 0
                 ok: false
+                expected_min: 1
+                expected_max: 9223372036854775807
+        '400':
+          description: >
+            `min` or `max` is not an integer. Rejected by the query extractor,
+            so the body is `text/plain`, not the `Error` object.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to deserialize query string: min: invalid digit found in string'
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -560,8 +723,11 @@ paths:
       summary: WebSocket real-time event stream
       description: >
         Upgrade to a WebSocket connection to receive real-time inbox events.
-        The server sends JSON text frames. Clients do not need to send frames
-        (ping/pong is handled at the protocol level).
+        Each event is one JSON text frame of the form
+        `{"type": "<event>", "data": {...}}`; `messages:clear` has no `data`
+        field. Only events that happen after the connection opens are sent:
+        there is no replay, so fetch `GET /api/v1/messages` to build the
+        initial view. Frames the client sends carry no meaning to the server.
 
 
         **Event types:**
@@ -569,22 +735,47 @@ paths:
 
         | type | data |
         |---|---|
-        | `message:new` | `MessageSummary` object |
+        | `message:new` | `MessageSummary` object, `recipients` and `tags` as arrays |
         | `message:delete` | `{ "id": "<ulid>" }` |
         | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
         | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
         | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |
         | `messages:clear` | _(no data field)_ |
+
+
+        One `PATCH` that sets several fields sends one event per field, in the
+        order read, starred, tags.
+
+
+        **Keepalive and idle timeout.** The server pings on connect and every
+        30 seconds. Only frames from the client (a pong, or anything else)
+        count as activity: a client silent for 90 seconds is sent a Close
+        frame and disconnected, however many events are flowing to it.
+        Browsers answer pings on their own; other clients must answer them.
+        A single send that cannot complete within 10 seconds (a client that
+        stopped reading) also closes the connection.
+
+
+        **Slow clients.** Events are fanned out through a bounded buffer. A
+        client that falls far enough behind to lose events is not sent the
+        ones that survive: it is sent a Close frame and disconnected. Its
+        incremental view is already wrong at that point, so on any
+        disconnect a client should reconnect and refetch the message list
+        rather than resume from the events it saw.
       tags: [WebSocket]
       responses:
         '101':
-          description: Switching Protocols — WebSocket handshake successful
+          description: Switching Protocols. The WebSocket handshake succeeded.
         '403':
           description: >
-            Forbidden — the handshake carried an `Origin` header that is
+            Forbidden. The handshake carried an `Origin` header that is
             neither the origin the server is reached at nor one passed to
             `--allowed-origin`. Clients that send no `Origin` at all are
             unaffected.
+        '503':
+          description: >
+            50 WebSocket connections are already open. Retry later; a slot
+            frees when any connection closes. No body.
 
 components:
 
@@ -618,23 +809,22 @@ components:
       in: query
       schema:
         type: integer
-        minimum: 1
-        maximum: 200
         default: 50
       description: >
-        Maximum number of results to return. Values outside 1–200 are clamped
-        into that range; the response's `limit` reports the value applied.
+        Maximum number of results to return. Values outside 1 to 200 (`0`
+        and negatives included) are clamped into that range rather than
+        rejected; the response's `limit` reports the value applied. A value
+        that is not an integer is a `400`.
 
     OffsetParam:
       name: offset
       in: query
       schema:
         type: integer
-        minimum: 0
         default: 0
       description: >
-        Number of results to skip. Kept for compatibility; prefer `before`,
-        which it cannot be combined with.
+        Number of results to skip. A negative value is treated as `0`. Kept
+        for compatibility; prefer `before`, which it cannot be combined with.
 
     BeforeParam:
       name: before
@@ -655,27 +845,31 @@ components:
         - id
         - sender
         - recipients
+        - subject
         - size
         - has_attachments
         - is_read
+        - is_starred
+        - tags
         - created_at
       properties:
         id:
           type: string
-          description: ULID — time-sortable unique identifier
+          description: ULID, a time-sortable unique identifier
           example: 01HZ9RQABCDEFGHJKMNPQRSTUV
         sender:
           type: string
           description: Envelope sender address (MAIL FROM)
           example: alice@example.com
         recipients:
-          type: string
-          description: JSON-encoded array of recipient addresses (RCPT TO)
-          example: '["bob@example.com","carol@example.com"]'
+          type: array
+          items:
+            type: string
+          description: Envelope recipient addresses (RCPT TO), in the order given
+          example: [bob@example.com, carol@example.com]
         subject:
-          type: string
-          nullable: true
-          description: Message subject header value
+          type: [string, 'null']
+          description: Decoded Subject header value; `null` when the message has none
           example: Hello world
         size:
           type: integer
@@ -702,22 +896,23 @@ components:
         created_at:
           type: string
           format: date-time
-          description: Timestamp when the message was received (ISO 8601 UTC)
+          description: >
+            When the message was received, UTC, to the second
+            (`YYYY-MM-DDTHH:MM:SSZ`)
           example: '2026-03-21T10:00:00Z'
 
     Message:
       allOf:
         - $ref: '#/components/schemas/MessageSummary'
         - type: object
+          required: [text_body, html_body]
           properties:
             text_body:
-              type: string
-              nullable: true
-              description: Decoded plain-text body part
+              type: [string, 'null']
+              description: Decoded plain-text body part; `null` when there is none
             html_body:
-              type: string
-              nullable: true
-              description: Decoded HTML body part
+              type: [string, 'null']
+              description: Decoded HTML body part; `null` when there is none
 
     MessageList:
       type: object
@@ -744,7 +939,7 @@ components:
 
     MessageUpdate:
       type: object
-      minProperties: 1
+      description: Every field is optional; an empty object changes nothing.
       properties:
         is_read:
           type: boolean
@@ -757,11 +952,15 @@ components:
           items:
             type: string
           maxItems: 20
-          description: Replace the message's tags (max 20, each max 50 chars)
+          description: >
+            Replaces the message's tags with this list, in this order. At most
+            20; each must be non-empty, at most 50 bytes of UTF-8, and free of
+            control characters. Duplicates are stored as given. `[]` clears
+            the tags.
 
     Attachment:
       type: object
-      required: [id, message_id]
+      required: [id, message_id, filename, content_type, content_id, size]
       properties:
         id:
           type: string
@@ -772,19 +971,22 @@ components:
           description: ULID of the parent message
           example: 01HZ9RQABCDEFGHJKMNPQRSTUV
         filename:
-          type: string
-          nullable: true
-          description: Original filename from the MIME part
+          type: [string, 'null']
+          description: Original filename from the MIME part; `null` when it names none
           example: invoice.pdf
         content_type:
-          type: string
-          nullable: true
-          description: MIME content type of the attachment
+          type: [string, 'null']
+          description: MIME content type the part declares; `null` when it declares none
           example: application/pdf
+        content_id:
+          type: [string, 'null']
+          description: >
+            Content-ID without angle brackets, as used by
+            `/messages/{id}/inline/{cid}`; `null` when the part has none
+          example: logo@example.com
         size:
-          type: integer
-          nullable: true
-          description: Attachment size in bytes
+          type: [integer, 'null']
+          description: Decoded attachment size in bytes
           example: 48321
 
     ReleaseRequest:
@@ -794,18 +996,19 @@ components:
         host:
           type: string
           description: >
-            Hostname of the target SMTP server. Must exactly match the host
-            configured via `--release-host`. Requests to any other host are
-            rejected with 403.
+            Hostname of the target SMTP server. Required. Must exactly match
+            the host configured via `--release-host`; any other host is a
+            `403`.
           example: smtp.mailgun.org
         port:
           type: integer
           enum: [25, 465, 587, 2525]
-          default: 25
+          default: 587
           description: >
-            TCP port of the target SMTP server. Only standard SMTP ports are
-            accepted (25, 465, 587, 2525). If `--release-host` includes a port,
-            this must match exactly or the request is rejected with 403.
+            TCP port of the target SMTP server. Defaults to the configured
+            release port when one is set, otherwise to `587`. When a release
+            port is configured, any other value is a `403`; otherwise a value
+            outside 25, 465, 587 and 2525 is a `400`.
           example: 587
 
     AssertResult:
@@ -820,6 +1023,17 @@ components:
           type: integer
           description: Number of messages that matched the given filters
           example: 2
+        expected_min:
+          type: integer
+          description: The `min` bound applied. Present only on a `417`.
+          example: 1
+        expected_max:
+          type: integer
+          format: int64
+          description: >
+            The `max` bound applied, `9223372036854775807` when none was given.
+            Present only on a `417`.
+          example: 9223372036854775807
 
     MessageHeader:
       type: object
@@ -890,7 +1104,7 @@ components:
         error:
           type: string
           description: Human-readable error message
-          example: message not found
+          example: Resource not found
         code:
           type: string
           enum: [unknown_cursor]
@@ -899,6 +1113,27 @@ components:
             on it. `unknown_cursor`: `before` names no stored message.
 
   responses:
+
+    NotJson:
+      description: >
+        The request lacks `Content-Type: application/json`. Rejected before
+        the handler runs, so the body is `text/plain`, not the `Error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: 'Expected request with `Content-Type: application/json`'
+
+    BodyMistyped:
+      description: >
+        The body is JSON but does not fit the request schema (a missing
+        required field, or a field of the wrong type). Rejected before the
+        handler runs, so the body is `text/plain`, not the `Error` object.
+      content:
+        text/plain:
+          schema:
+            type: string
+          example: 'Failed to deserialize the JSON body into the target type: is_read: invalid type: string "yes", expected a boolean at line 1 column 16'
 
     TimedOut:
       description: The read ran past the 30-second request timeout and was abandoned
@@ -910,10 +1145,10 @@ components:
             error: the request ran past the server's time limit; retry it, or narrow it with limit or filters
 
     NotFound:
-      description: Resource not found
+      description: No stored message (or attachment) has this id
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
           example:
-            error: message not found
+            error: Resource not found
