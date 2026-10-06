@@ -423,9 +423,10 @@ test.describe("unread filter", () => {
     const readBehind = steps - 1;
     await expect(page.locator(optionSelector(1))).toHaveCount(0);
     await expect(page.locator(optionSelector(steps))).toHaveCount(1);
-    expect(
-      Number(await selectedOption(page).getAttribute("aria-setsize")),
-    ).toBe(before - readBehind);
+    await expect(selectedOption(page)).toHaveAttribute(
+      "aria-setsize",
+      String(before - readBehind),
+    );
   });
 
   test("counts the selection it keeps in the matches it shows", async ({
