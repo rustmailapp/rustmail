@@ -82,6 +82,47 @@ describe("linksFrom", () => {
     ]);
   });
 
+  it("keeps a bracketed IPv6 host in the text body", () => {
+    const links = linksFrom(
+      [],
+      "Verify at http://[::1]:3000/verify. Or (https://[2001:db8::1]/x) and [http://[0:0:0:0:0:0:0:1]/y].",
+    );
+
+    expect(
+      links.map(({ href, host, insecure, local }) => ({
+        href,
+        host,
+        insecure,
+        local,
+      })),
+    ).toEqual([
+      {
+        href: "http://[::1]:3000/verify",
+        host: "[::1]:3000",
+        insecure: true,
+        local: true,
+      },
+      {
+        href: "https://[2001:db8::1]/x",
+        host: "[2001:db8::1]",
+        insecure: false,
+        local: false,
+      },
+      {
+        href: "http://[::1]/y",
+        host: "[::1]",
+        insecure: true,
+        local: true,
+      },
+    ]);
+  });
+
+  it("keeps prose brackets out of a text-body URL", () => {
+    expect(
+      hrefs([], "(see http://example.test/a) and [http://example.test]"),
+    ).toEqual(["http://example.test/a", "http://example.test/"]);
+  });
+
   it("counts a link in both bodies by the body that holds it most", () => {
     const [link] = linksFrom(
       [anchor("https://example.com/", "Home"), anchor("https://example.com/")],
