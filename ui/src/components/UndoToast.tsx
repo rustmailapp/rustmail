@@ -22,7 +22,7 @@ export default function UndoToast() {
         </span>
         <button
           onClick={undoDelete}
-          class="text-xs font-medium text-orange-500 hover:text-orange-400 transition cursor-pointer"
+          class="text-xs font-medium text-orange-700 hover:text-orange-800 dark:text-orange-500 dark:hover:text-orange-400 transition cursor-pointer"
         >
           Undo <span class="text-zinc-500 dark:text-zinc-400">(u)</span>
         </button>

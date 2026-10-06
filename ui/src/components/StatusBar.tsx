@@ -133,7 +133,7 @@ export default function StatusBar() {
                     : "Copy the SMTP address"
               }
               title={feedback() === "copied" ? "Copied" : "Copy"}
-              class="rounded p-0.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+              class="rounded p-0.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
             >
               <CopyIcon class="size-3" />
             </button>

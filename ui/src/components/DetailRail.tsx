@@ -150,7 +150,7 @@ export default function DetailRail(props: {
           <button
             onClick={() => props.onToggleHeaders()}
             aria-expanded={props.headersOpen}
-            class="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+            class="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-orange-700 dark:text-orange-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
           >
             {props.headersOpen ? "Hide headers" : "Show headers"}
           </button>
@@ -381,7 +381,7 @@ function LinksSection(props: { message: Message }) {
         <Show when={shown().length < links().length}>
           <button
             onClick={() => setExpanded(true)}
-            class="mt-1.5 -ml-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+            class="mt-1.5 -ml-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-orange-700 dark:text-orange-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
           >
             Show all {links().length}
           </button>
@@ -472,7 +472,7 @@ function LinkRow(props: { link: MessageLink }) {
                 : `Copy the link to ${props.link.host}`
           }
           title={feedback() === "copied" ? "Copied" : "Copy"}
-          class="mt-1 shrink-0 rounded p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+          class="mt-1 shrink-0 rounded p-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
         >
           <CopyIcon class="size-3" />
         </button>

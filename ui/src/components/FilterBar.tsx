@@ -110,7 +110,7 @@ function TagDropdown() {
         onClick={() => setOpen(!open())}
         class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer select-none ${
           filters().tags.length > 0
-            ? "bg-orange-50 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-500/30"
+            ? "bg-orange-50 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-500/30"
             : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-700 dark:hover:text-zinc-300"
         }`}
       >
@@ -303,7 +303,7 @@ export default function FilterBar() {
           label="Starred"
           icon={"\u2605"}
           active={f().starred}
-          activeClass="bg-amber-50 dark:bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-500/30"
+          activeClass="bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/30"
           onClick={() => toggleFilter("starred")}
         />
         <Chip

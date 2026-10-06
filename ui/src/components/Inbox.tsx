@@ -191,7 +191,7 @@ export default function Inbox() {
                 <Show when={hasActiveFilters()}>
                   <button
                     onClick={clearFilters}
-                    class="text-xs mt-2 text-orange-500 hover:text-orange-400 transition cursor-pointer"
+                    class="text-xs mt-2 text-orange-700 hover:text-orange-800 dark:text-orange-500 dark:hover:text-orange-400 transition cursor-pointer"
                   >
                     Clear filters
                   </button>
@@ -308,7 +308,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
             title={msg().is_starred ? "Unstar" : "Star"}
           >
             <StarIcon
-              class={`size-3.5 transition ${msg().is_starred ? "text-amber-400" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"}`}
+              class={`size-3.5 transition ${msg().is_starred ? "text-amber-700 dark:text-amber-400" : "text-zinc-500 hover:text-amber-800 dark:hover:text-amber-400"}`}
               filled={msg().is_starred}
             />
           </button>

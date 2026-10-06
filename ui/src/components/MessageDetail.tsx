@@ -389,8 +389,8 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
             onClick={() => starMessage(props.message.id, !starred())}
             class={ACTION_CLASS}
             classList={{
-              "text-amber-400 hover:text-amber-500": starred(),
-              "text-zinc-500 dark:text-zinc-400 hover:text-amber-400":
+              "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200": starred(),
+              "text-zinc-500 dark:text-zinc-400 hover:text-amber-800 dark:hover:text-amber-400":
                 !starred(),
             }}
             title={starred() ? "Unstar" : "Star"}
@@ -410,7 +410,7 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
               setSelectedId(null);
               deleteWithUndo(props.message.id);
             }}
-            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-600 dark:hover:text-red-400`}
+            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-700 dark:hover:text-red-300`}
             title="Delete"
           >
             <TrashIcon class="size-4" />

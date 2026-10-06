@@ -22,7 +22,7 @@ export default function Notices() {
           <button
             onClick={() => dismissNotice(notice.id)}
             aria-label="Dismiss notice"
-            class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition cursor-pointer"
+            class="text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
           >
             <svg
               class="size-3.5"
