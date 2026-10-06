@@ -108,7 +108,7 @@ export default function StatusBar() {
         when={endpoint()}
         fallback={
           <Show when={info.state === "errored"}>
-            <span class="text-zinc-400 dark:text-zinc-500">SMTP unknown</span>
+            <span class="text-zinc-500 dark:text-zinc-400">SMTP unknown</span>
           </Show>
         }
       >
@@ -153,13 +153,13 @@ export default function StatusBar() {
 
       <Show when={ready()}>
         {(server) => (
-          <span class="text-zinc-400 dark:text-zinc-500">
+          <span class="text-zinc-500 dark:text-zinc-400">
             v{server().version}
           </span>
         )}
       </Show>
 
-      <span class="ml-auto inline-flex items-center gap-3 text-zinc-400 dark:text-zinc-500">
+      <span class="ml-auto inline-flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
         <Show when={!wideLayout()}>
           <Hint keys={["i"]} label="details" />
         </Show>

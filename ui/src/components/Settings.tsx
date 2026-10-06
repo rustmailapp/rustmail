@@ -52,7 +52,7 @@ export default function Settings() {
               class={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 -mb-px transition cursor-pointer ${
                 settingsTab() === tab.value
                   ? "border-orange-500 text-zinc-900 dark:text-zinc-100"
-                  : "border-transparent text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  : "border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
               }`}
             >
               <svg

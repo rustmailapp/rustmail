@@ -169,7 +169,7 @@ export default function Inbox() {
         </div>
       </Show>
       <Show when={!loading() && filteredMessages().length === 0}>
-        <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-500">
+        <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-400">
           <Show
             when={visibleMessages().length === 0 && !search()}
             fallback={
@@ -213,7 +213,7 @@ export default function Inbox() {
               />
             </svg>
             <p class="text-sm">No messages yet</p>
-            <p class="text-xs mt-1 text-zinc-400 dark:text-zinc-600">
+            <p class="text-xs mt-1 text-zinc-500 dark:text-zinc-400">
               Send an email to the SMTP port to get started
             </p>
           </Show>
@@ -256,7 +256,7 @@ export default function Inbox() {
       </div>
 
       <Show when={loadingMore()}>
-        <div class="py-3 text-center text-xs text-zinc-400 dark:text-zinc-600">
+        <div class="py-3 text-center text-xs text-zinc-500 dark:text-zinc-400">
           Loading…
         </div>
       </Show>
@@ -321,14 +321,14 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
               {msg().subject || "(no subject)"}
             </span>
             <span
-              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-400 dark:text-zinc-500"}`}
+              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"}`}
             >
               {formatDate(msg().created_at)}
             </span>
           </div>
           <div class="flex items-center gap-1.5 mt-0.5">
             <span
-              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}`}
+              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"}`}
             >
               {routeLine(msg())}
             </span>
@@ -345,7 +345,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
                   )}
                 </For>
                 <Show when={msg().tags.length > 3}>
-                  <span class="text-[10px] text-zinc-400">
+                  <span class="text-[10px] text-zinc-500 dark:text-zinc-400">
                     +{msg().tags.length - 3}
                   </span>
                 </Show>

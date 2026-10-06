@@ -94,7 +94,7 @@ function Section(props: {
   return (
     <section class="px-4 py-3.5">
       <div class="flex items-center justify-between gap-2 mb-2 min-h-5">
-        <h3 class="text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+        <h3 class="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
           {props.label}
         </h3>
         {props.aside}
@@ -159,7 +159,7 @@ export default function DetailRail(props: {
         <Show
           when={props.headersOpen}
           fallback={
-            <p class="text-xs text-zinc-400 dark:text-zinc-500">
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
               Every header the message carries, as received.
             </p>
           }
@@ -185,23 +185,23 @@ export default function DetailRail(props: {
 function SummaryList(props: { message: Message }) {
   return (
     <dl class="grid grid-cols-[3.25rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
-      <dt class="text-zinc-400 dark:text-zinc-500">From</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400">From</dt>
       <dd class="text-zinc-800 dark:text-zinc-200 break-all">
         {props.message.sender || "(no sender)"}
       </dd>
-      <dt class="text-zinc-400 dark:text-zinc-500">To</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400">To</dt>
       <dd class="text-zinc-800 dark:text-zinc-200 break-all">
         <For each={props.message.recipients}>{(r) => <div>{r}</div>}</For>
       </dd>
-      <dt class="text-zinc-400 dark:text-zinc-500">Date</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400">Date</dt>
       <dd class="text-zinc-800 dark:text-zinc-200">
         {formatDateTime(props.message.created_at)}
       </dd>
-      <dt class="text-zinc-400 dark:text-zinc-500">Size</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400">Size</dt>
       <dd class="text-zinc-800 dark:text-zinc-200">
         {formatSize(props.message.size)}
       </dd>
-      <dt class="text-zinc-400 dark:text-zinc-500 pt-0.5">Tags</dt>
+      <dt class="text-zinc-500 dark:text-zinc-400 pt-0.5">Tags</dt>
       <dd>
         <TagEditor message={props.message} />
       </dd>
@@ -224,7 +224,7 @@ function AuthList(props: { results: AuthResults }) {
     <Show
       when={!isEmpty()}
       fallback={
-        <div class="text-xs text-zinc-400 dark:text-zinc-500">
+        <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <p>No authentication headers found.</p>
           <p class="mt-1">
             DKIM, SPF, and DMARC headers are typically added by receiving mail
@@ -279,7 +279,7 @@ function AttachmentsSection(props: {
       aside={
         <Show when={props.files}>
           {(list) => (
-            <span class="text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
+            <span class="text-[11px] tabular-nums text-zinc-500 dark:text-zinc-400">
               {list().length}
             </span>
           )}
@@ -300,7 +300,7 @@ function AttachmentsSection(props: {
           <Show
             when={list().length > 0}
             fallback={
-              <p class="text-xs text-zinc-400 dark:text-zinc-500">
+              <p class="text-xs text-zinc-500 dark:text-zinc-400">
                 No attachments
               </p>
             }
@@ -320,7 +320,7 @@ function AttachmentsSection(props: {
                       </span>
                       <Show when={att.size}>
                         {(size) => (
-                          <span class="shrink-0 tabular-nums text-zinc-400 dark:text-zinc-500">
+                          <span class="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
                             {formatSize(size())}
                           </span>
                         )}
@@ -364,7 +364,7 @@ function LinksSection(props: { message: Message }) {
     <Section
       label="Links"
       aside={
-        <span class="text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
+        <span class="text-[11px] tabular-nums text-zinc-500 dark:text-zinc-400">
           {links().length}
         </span>
       }
@@ -372,7 +372,7 @@ function LinksSection(props: { message: Message }) {
       <Show
         when={links().length > 0}
         fallback={
-          <p class="text-xs text-zinc-400 dark:text-zinc-500">No links</p>
+          <p class="text-xs text-zinc-500 dark:text-zinc-400">No links</p>
         }
       >
         <ul class="-mx-2 space-y-0.5">
@@ -441,11 +441,11 @@ function LinkRow(props: { link: MessageLink }) {
             <span class="min-w-0 shrink truncate font-mono text-zinc-700 dark:text-zinc-300">
               {props.link.host}
             </span>
-            <span class="min-w-0 flex-1 truncate text-zinc-400 dark:text-zinc-500">
+            <span class="min-w-0 flex-1 truncate text-zinc-500 dark:text-zinc-400">
               {props.link.path}
             </span>
             <Show when={props.link.count > 1}>
-              <span class="shrink-0 tabular-nums text-zinc-400 dark:text-zinc-500">
+              <span class="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
                 ×{props.link.count}
               </span>
             </Show>
@@ -457,7 +457,7 @@ function LinkRow(props: { link: MessageLink }) {
             </Show>
           </span>
           <Show when={props.link.text}>
-            <span class="mt-0.5 block truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+            <span class="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
               {props.link.text}
             </span>
           </Show>
@@ -482,7 +482,7 @@ function LinkRow(props: { link: MessageLink }) {
           <span ref={fullHref} class="font-mono break-all">
             {props.link.href}
           </span>
-          <span class="block text-zinc-400 dark:text-zinc-500">
+          <span class="block text-zinc-500 dark:text-zinc-400">
             {MANUAL_COPY_HINT}
           </span>
         </p>
@@ -568,7 +568,7 @@ function TagEditor(props: { message: MessageSummary }) {
             removeTag(tags()[tags().length - 1]);
           }
         }}
-        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-400 dark:placeholder-zinc-600 outline-none min-w-[80px] flex-1 rounded-md px-1.5 py-0.5 transition focus:bg-zinc-100 dark:focus:bg-zinc-800/60"
+        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none min-w-[80px] flex-1 rounded-md px-1.5 py-0.5 transition focus:bg-zinc-100 dark:focus:bg-zinc-800/60"
       />
     </div>
   );

@@ -225,7 +225,7 @@ export default function MessageDetail() {
               <Show
                 when={selectedId()}
                 fallback={
-                  <p class="p-4 text-xs text-zinc-400 dark:text-zinc-500">
+                  <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
                     Details of the selected message show here.
                   </p>
                 }
@@ -361,7 +361,7 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
           <Show when={sender().name}>
             <span> &lt;{sender().address}&gt;</span>
           </Show>
-          <span class="text-zinc-400 dark:text-zinc-500"> {"→"} </span>
+          <span class="text-zinc-500 dark:text-zinc-400"> {"→"} </span>
           {meta()}
         </p>
       </div>
@@ -443,7 +443,7 @@ function SegmentedSwitch<T extends string>(props: {
             classList={{
               "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 shadow-sm":
                 props.value === option.id,
-              "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
+              "text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
                 props.value !== option.id,
             }}
           >
