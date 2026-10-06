@@ -59,13 +59,13 @@ export default function ConfirmDialog() {
           <div class="flex justify-end gap-2 px-6 py-4">
             <button
               onClick={() => close(false)}
-              class="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+              class="rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
             >
               {state().options.cancelLabel ?? "Cancel"}
             </button>
             <button
               onClick={() => close(true)}
-              class="btn-destructive rounded-lg border px-3 py-1.5 text-xs font-medium transition cursor-pointer"
+              class="btn-destructive rounded-md border px-3 py-1.5 text-xs font-medium transition cursor-pointer"
             >
               {state().options.confirmLabel ?? "Confirm"}
             </button>

@@ -27,6 +27,8 @@ const MAX_SETTLED_FETCHES = 4;
  * while the clock is being wound forward.
  */
 const PAST_UNDO_WINDOW_MS = 6_000;
+/** The focus marker on the selected row, as `shadowGeometry` reports it. */
+const LEFT_MARKER = "2px 0px 0px 0px inset";
 
 function list(page: Page): Locator {
   return page.getByRole("listbox", { name: "Messages" });
@@ -46,6 +48,23 @@ function activeDescription(page: Page): Promise<string> {
     if (!el) return "none";
     return `${el.tagName.toLowerCase()}[${el.getAttribute("role") ?? ""}]`;
   });
+}
+
+/**
+ * The element's box-shadow layers reduced to offsets, blur, spread and inset.
+ *
+ * Colour is left out so the check holds under every palette; a focus ring
+ * shows up as a layer with a spread, which never matches the left marker.
+ */
+async function shadowGeometry(target: Locator): Promise<string[]> {
+  const value = await target.evaluate((el) => getComputedStyle(el).boxShadow);
+  if (value === "none") return [];
+  return value.split(/,(?![^(]*\))/).map((layer) =>
+    [
+      ...(layer.match(/-?[\d.]+px/g) ?? []),
+      ...(layer.includes("inset") ? ["inset"] : []),
+    ].join(" "),
+  );
 }
 
 function activeRole(page: Page): Promise<string> {
@@ -452,6 +471,34 @@ test.describe("global shortcuts", () => {
 
     await page.keyboard.press("k");
     expect(await position(page)).toBe(1);
+  });
+
+  test("j after a click draws no ring, only the row marker", async ({
+    page,
+  }) => {
+    await openInbox(page);
+
+    await page.locator('[role="option"]').nth(3).click();
+    await page.keyboard.press("j");
+
+    await expect
+      .poll(() => shadowGeometry(selectedOption(page)))
+      .toEqual([LEFT_MARKER]);
+    expect(await shadowGeometry(list(page).locator(".."))).toEqual([]);
+  });
+
+  test("j takes focus from a detail tab back to the list", async ({
+    page,
+  }) => {
+    await openInbox(page);
+
+    await page.getByRole("button", { name: "Text", exact: true }).click();
+    await page.keyboard.press("j");
+
+    expect(await activeRole(page)).toBe("listbox");
+    expect(await position(page)).toBe(2);
+    await page.keyboard.press("ArrowDown");
+    expect(await position(page)).toBe(3);
   });
 
   test("d takes the message out of the list before deleting it", async ({

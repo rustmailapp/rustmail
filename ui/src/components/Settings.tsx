@@ -25,7 +25,7 @@ export default function Settings() {
         <h2 class="text-base font-semibold">Settings</h2>
         <button
           onClick={() => setSettingsOpen(false)}
-          class="rounded-lg p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+          class="rounded-md p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
         >
           <svg
             class="size-4"

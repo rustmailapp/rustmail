@@ -627,7 +627,7 @@ function StatusBadge(props: { status: string }) {
 
   return (
     <span
-      class={`inline-block px-2 py-0.5 rounded text-xs font-semibold uppercase ${color()}`}
+      class={`inline-block px-2 py-0.5 rounded-md text-xs font-semibold uppercase ${color()}`}
     >
       {props.status}
     </span>
@@ -651,7 +651,7 @@ function AuthSection(props: { title: string; checks: AuthCheck[] }) {
         <div class="space-y-2">
           <For each={props.checks}>
             {(check) => (
-              <div class="flex items-start gap-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-3 py-2">
+              <div class="flex items-start gap-3 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-3 py-2">
                 <StatusBadge status={check.status} />
                 <span class="text-xs text-zinc-600 dark:text-zinc-400 font-mono break-all leading-relaxed">
                   {check.details}
@@ -785,7 +785,7 @@ function TagEditor(props: { message: MessageSummary }) {
             removeTag(tags()[tags().length - 1]);
           }
         }}
-        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-400 dark:placeholder-zinc-600 outline-none min-w-[80px] flex-1"
+        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-400 dark:placeholder-zinc-600 outline-none min-w-[80px] flex-1 rounded-md px-1.5 py-0.5 transition focus:bg-zinc-100 dark:focus:bg-zinc-800/60"
       />
     </div>
   );

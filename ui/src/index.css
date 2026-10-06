@@ -6,6 +6,27 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
     sans-serif;
   --font-brand: "Sora", var(--font-system);
+  --rm-selection: var(--color-zinc-100);
+}
+
+.dark {
+  --rm-selection: color-mix(in oklch, var(--color-zinc-800) 80%, transparent);
+}
+
+@layer base {
+  :where(button, a[href]):focus-visible {
+    outline: 2px solid
+      color-mix(in oklch, var(--color-orange-500) 55%, transparent);
+    outline-offset: 2px;
+  }
+}
+
+.inbox-row-selected {
+  background: var(--rm-selection);
+}
+
+[role="listbox"]:focus .inbox-row-selected {
+  box-shadow: inset 2px 0 0 var(--color-orange-500);
 }
 
 .font-brand {

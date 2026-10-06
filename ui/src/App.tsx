@@ -33,6 +33,20 @@ import "./stores/theme";
 import "./stores/rusted";
 
 export default function App() {
+  /**
+   * Hands focus to the message list after a j/k move.
+   *
+   * A button clicked earlier would otherwise keep focus and start showing its
+   * keyboard ring, and the arrow keys only move the selection from the list.
+   * The HTML preview keeps focus so its own scrolling still works.
+   */
+  function focusList() {
+    if (document.activeElement?.tagName === "IFRAME") return;
+    document
+      .querySelector<HTMLElement>('[role="listbox"][aria-label="Messages"]')
+      ?.focus({ preventScroll: true });
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (settingsOpen() || confirmOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
@@ -45,10 +59,12 @@ export default function App() {
     switch (e.key) {
       case "j": {
         moveSelection("next");
+        focusList();
         break;
       }
       case "k": {
         moveSelection("prev");
+        focusList();
         break;
       }
       case "d": {
