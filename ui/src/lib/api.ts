@@ -337,6 +337,15 @@ export async function getHeaders(
   );
 }
 
+/** Fetches the running server's version and SMTP port. */
+export async function getInfo(
+  signal?: AbortSignal,
+): Promise<z.infer<typeof schema.serverInfo>> {
+  return fetchJson("GET /info", `${BASE}/info`, schema.serverInfo, {
+    signal,
+  });
+}
+
 /** Fetches a message's raw source, optionally only its first `limitBytes`. */
 export async function getRawMessage(
   id: string,

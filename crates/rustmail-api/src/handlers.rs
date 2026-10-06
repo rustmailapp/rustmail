@@ -499,6 +499,19 @@ pub async fn assert_count(
   }
 }
 
+/// Reports the server's version and SMTP port, as set by
+/// [`AppState::with_server_info`].
+pub async fn get_info(State(state): State<AppState>) -> axum::response::Response {
+  match state.server_info {
+    Some(info) => Json(info.as_ref()).into_response(),
+    None => (
+      StatusCode::NOT_FOUND,
+      Json(serde_json::json!({ "error": "Server info is not configured" })),
+    )
+      .into_response(),
+  }
+}
+
 #[derive(Deserialize)]
 pub struct ExportParams {
   pub format: Option<String>,

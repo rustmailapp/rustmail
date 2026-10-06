@@ -48,6 +48,8 @@ tags:
     description: Email authentication header parsing (DKIM, SPF, DMARC, ARC)
   - name: WebSocket
     description: Real-time event stream
+  - name: Server
+    description: Facts about the running server
 
 paths:
 
@@ -725,6 +727,28 @@ paths:
         '503':
           $ref: '#/components/responses/TimedOut'
 
+  /api/v1/info:
+    get:
+      operationId: getInfo
+      summary: Server version and SMTP port
+      description: >
+        Reports the version of the running binary, the one `rustmail --version`
+        prints, and the port the SMTP listener was configured with. Both are
+        fixed for the life of the process.
+      tags: [Server]
+      responses:
+        '200':
+          description: Server info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Info'
+              example:
+                version: 0.8.1
+                smtp_port: 1025
+        '503':
+          $ref: '#/components/responses/TimedOut'
+
   /api/v1/ws:
     get:
       operationId: websocket
@@ -1042,6 +1066,23 @@ components:
             The `max` bound applied, `9223372036854775807` when none was given.
             Present only on a `417`.
           example: 9223372036854775807
+
+    Info:
+      type: object
+      required: [version, smtp_port]
+      properties:
+        version:
+          type: string
+          description: >
+            Version of the running binary: the release version for a release
+            build, a `git describe` string for a build from source.
+          example: 0.8.1
+        smtp_port:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: Port the SMTP listener was configured with
+          example: 1025
 
     MessageHeader:
       type: object
