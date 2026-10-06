@@ -22,6 +22,12 @@ import {
   toggleDetails,
   wideLayout,
 } from "../stores/layout";
+import {
+  MOBILE_PREVIEW_WIDTH_PX,
+  PREVIEW_WIDTHS,
+  previewWidth,
+  setPreviewWidth,
+} from "../stores/previewWidth";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
@@ -48,11 +54,13 @@ import {
 
 type View = "preview" | "text" | "raw";
 
-const VIEW_LABELS: [View, string][] = [
-  ["preview", "Preview"],
-  ["text", "Text"],
-  ["raw", "Raw"],
+const VIEWS: readonly SwitchOption<View>[] = [
+  { id: "preview", label: "Preview" },
+  { id: "text", label: "Text" },
+  { id: "raw", label: "Raw" },
 ];
+
+type SwitchOption<T extends string> = { id: T; label: string };
 
 /**
  * Raw source fetched for the Raw view.
@@ -154,7 +162,22 @@ export default function MessageDetail() {
               <>
                 <MessageHeader message={msg()} reads={reads} />
                 <div class="flex items-center justify-between gap-3 px-5 pb-3">
-                  <ViewSwitch view={view()} onChange={setView} />
+                  <div class="flex flex-wrap items-center gap-2">
+                    <SegmentedSwitch
+                      label="Message view"
+                      options={VIEWS}
+                      value={view()}
+                      onChange={setView}
+                    />
+                    <Show when={view() === "preview" && msg().html_body}>
+                      <SegmentedSwitch
+                        label="Preview width"
+                        options={PREVIEW_WIDTHS}
+                        value={previewWidth()}
+                        onChange={setPreviewWidth}
+                      />
+                    </Show>
+                  </div>
                   <Show when={!wideLayout() && !detailsDrawerOpen()}>
                     <CompactChecks
                       auth={reads.auth}
@@ -398,27 +421,33 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
   );
 }
 
-function ViewSwitch(props: { view: View; onChange: (view: View) => void }) {
+/** A row of toggle buttons, exactly one of them pressed. */
+function SegmentedSwitch<T extends string>(props: {
+  label: string;
+  options: readonly SwitchOption<T>[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
   return (
     <div
       role="group"
-      aria-label="Message view"
+      aria-label={props.label}
       class="inline-flex rounded-lg bg-zinc-100 dark:bg-zinc-800/70 p-0.5"
     >
-      <For each={VIEW_LABELS}>
-        {([value, label]) => (
+      <For each={props.options}>
+        {(option) => (
           <button
-            onClick={() => props.onChange(value)}
-            aria-pressed={props.view === value}
+            onClick={() => props.onChange(option.id)}
+            aria-pressed={props.value === option.id}
             class="rounded-md px-3 py-1 text-xs font-medium transition cursor-pointer"
             classList={{
               "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 shadow-sm":
-                props.view === value,
+                props.value === option.id,
               "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
-                props.view !== value,
+                props.value !== option.id,
             }}
           >
-            {label}
+            {option.label}
           </button>
         )}
       </For>
@@ -561,6 +590,7 @@ function HtmlPreview(props: {
     if (r === null) return null;
     return cspMeta() + LINK_TARGET_BLANK + rewriteToAbsoluteUrls(r);
   });
+  const mobile = () => previewWidth() === "mobile";
 
   return (
     <Show
@@ -572,12 +602,28 @@ function HtmlPreview(props: {
       }
     >
       {(html) => (
-        <iframe
-          sandbox="allow-popups allow-popups-to-escape-sandbox"
-          srcdoc={html()}
-          class="w-full h-full border-0 bg-white"
-          title="Email HTML preview"
-        />
+        <div
+          class="h-full flex justify-center motion-safe:transition-[padding] motion-safe:duration-200 motion-safe:ease-out"
+          classList={{ "p-4": mobile() }}
+        >
+          <div
+            class="h-full max-w-full shrink-0 overflow-hidden motion-safe:transition-[width] motion-safe:duration-200 motion-safe:ease-out"
+            classList={{
+              "rounded-lg ring-1 ring-zinc-200 dark:ring-zinc-700/70 shadow-sm":
+                mobile(),
+            }}
+            style={{
+              width: mobile() ? `${MOBILE_PREVIEW_WIDTH_PX}px` : "100%",
+            }}
+          >
+            <iframe
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              srcdoc={html()}
+              class="w-full h-full border-0 bg-white"
+              title="Email HTML preview"
+            />
+          </div>
+        </div>
       )}
     </Show>
   );
