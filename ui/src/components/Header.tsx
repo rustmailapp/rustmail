@@ -13,12 +13,14 @@ import { confirm } from "./ConfirmDialog";
 export default function Header() {
   return (
     <header class="flex items-center gap-2.5 px-3 pt-3 pb-2.5">
-      <img
-        src="/logo.webp"
-        alt="RustMail"
-        class="size-8 rounded-md"
+      <button
+        type="button"
+        aria-label="RustMail"
+        class="shrink-0 rounded-md"
         onClick={registerLogoClick}
-      />
+      >
+        <img src="/logo.webp" alt="" class="size-8 rounded-md" />
+      </button>
       <div class="min-w-0 flex items-baseline gap-2">
         <h1 class="font-brand text-lg font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-300 dark:to-white bg-clip-text text-transparent">
           RustMail

@@ -96,3 +96,17 @@ describe("registerLogoClick", () => {
     expect(rustedToast()).toBeNull();
   });
 });
+
+describe("setRusted", () => {
+  it("turns rusted off and remembers it", async () => {
+    const { OXIDIZE_CLICKS, registerLogoClick, rusted, setRusted } =
+      await loadStore();
+    for (let i = 0; i < OXIDIZE_CLICKS; i++) registerLogoClick();
+
+    setRusted(false);
+
+    expect(rusted()).toBe(false);
+    expect(rootClasses.has("rusted")).toBe(false);
+    expect(storage.get(STORAGE_KEY)).toBe("false");
+  });
+});
