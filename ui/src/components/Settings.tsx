@@ -1,6 +1,7 @@
 import { Show, For } from "solid-js";
 import { theme, setTheme } from "../stores/theme";
 import { PALETTES, palette, setPalette } from "../stores/palette";
+import { rusted, setRusted } from "../stores/rusted";
 import {
   settingsOpen,
   setSettingsOpen,
@@ -190,6 +191,22 @@ function AppearanceTab() {
           )}
         </For>
       </div>
+
+      <Show when={rusted()}>
+        <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block">
+          Easter egg
+        </label>
+        <div class="rounded-lg border border-orange-500 bg-orange-500/10 px-3 py-2 text-xs font-medium text-orange-500 flex items-center justify-between gap-2">
+          <span>Rusted · On</span>
+          <button
+            type="button"
+            onClick={() => setRusted(false)}
+            class="rounded-lg border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600 transition cursor-pointer"
+          >
+            Turn off
+          </button>
+        </div>
+      </Show>
     </div>
   );
 }

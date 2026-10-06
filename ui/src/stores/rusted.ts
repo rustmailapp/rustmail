@@ -30,6 +30,7 @@ function applyRusted(on: boolean) {
 
 applyRusted(rusted());
 
+/** Turns rusted on or off and remembers the choice. */
 function setRusted(on: boolean) {
   setRustedSignal(on);
   localStorage.setItem(STORAGE_KEY, String(on));
@@ -65,6 +66,7 @@ function registerLogoClick() {
 export {
   rusted,
   rustedToast,
+  setRusted,
   registerLogoClick,
   OXIDIZE_CLICKS,
   OXIDIZE_WINDOW_MS,
