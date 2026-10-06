@@ -1,8 +1,18 @@
-import { createSignal, For, Show, type JSX } from "solid-js";
+import {
+  createComputed,
+  createMemo,
+  createSignal,
+  For,
+  on,
+  onCleanup,
+  Show,
+  type JSX,
+} from "solid-js";
 import { liveSummary } from "../stores/messages";
 import { notify } from "../stores/notices";
 import * as api from "../lib/api";
 import { formatDateTime, formatSize } from "../lib/format";
+import { extractLinks, type MessageLink } from "../lib/links";
 import type {
   Attachment,
   AuthCheck,
@@ -12,7 +22,7 @@ import type {
   MessageSummary,
 } from "../lib/types";
 import { ReadState, settled, type PaneRead } from "./PaneRead";
-import { PaperclipIcon } from "./icons";
+import { CopyIcon, PaperclipIcon } from "./icons";
 
 /** The selection's reads that the rail shows, owned by the message pane. */
 export interface RailReads {
@@ -126,6 +136,7 @@ export default function DetailRail(props: {
         read={props.reads.attachments}
         files={props.files}
       />
+      <LinksSection message={props.message} />
       <Section
         label="Headers"
         aside={
@@ -316,6 +327,184 @@ function AttachmentsSection(props: {
         )}
       </Show>
     </Section>
+  );
+}
+
+/** How many links show before the reader asks for the rest. */
+const LINKS_PREVIEW = 8;
+/** How long a copy button says it copied before it goes back to "Copy". */
+const COPIED_FEEDBACK_MS = 1500;
+/** How long the hint to copy by hand stays up when the clipboard is out of reach. */
+const MANUAL_COPY_HINT_MS = 4000;
+const MANUAL_COPY_HINT = "Press Cmd/Ctrl+C to copy";
+
+type CopyFeedback = "copied" | "manual";
+
+/**
+ * Writes `text` to the clipboard, reporting whether it landed.
+ *
+ * The async clipboard exists only in secure contexts, so a portal opened over
+ * plain http from another machine on the LAN has none.
+ */
+async function writeClipboard(text: string): Promise<boolean> {
+  if (!navigator.clipboard) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Every link the message points at, flagging the ones that should not ship.
+ *
+ * The rail stays mounted across selections, so "Show all" is undone whenever
+ * the selection moves. The bodies are memoised on their own, so a new message
+ * object with the same bodies keeps the rows and their copy state.
+ */
+function LinksSection(props: { message: Message }) {
+  const html = createMemo(() => props.message.html_body);
+  const text = createMemo(() => props.message.text_body);
+  const links = createMemo(() => extractLinks(html(), text()));
+  const [expanded, setExpanded] = createSignal(false);
+  createComputed(
+    on(
+      () => props.message.id,
+      () => setExpanded(false),
+      { defer: true },
+    ),
+  );
+  const shown = () => (expanded() ? links() : links().slice(0, LINKS_PREVIEW));
+
+  return (
+    <Section
+      label="Links"
+      aside={
+        <span class="text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
+          {links().length}
+        </span>
+      }
+    >
+      <Show
+        when={links().length > 0}
+        fallback={
+          <p class="text-xs text-zinc-400 dark:text-zinc-500">No links</p>
+        }
+      >
+        <ul class="-mx-2 space-y-0.5">
+          <For each={shown()}>{(link) => <LinkRow link={link} />}</For>
+        </ul>
+        <Show when={shown().length < links().length}>
+          <button
+            onClick={() => setExpanded(true)}
+            class="mt-1.5 -ml-1.5 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-orange-600 dark:text-orange-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+          >
+            Show all {links().length}
+          </button>
+        </Show>
+      </Show>
+    </Section>
+  );
+}
+
+function LinkBadge(props: { tone: string; children: JSX.Element }) {
+  return (
+    <span
+      class={`shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide ${props.tone}`}
+    >
+      {props.children}
+    </span>
+  );
+}
+
+const INSECURE_TONE =
+  "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300";
+const LOCAL_TONE =
+  "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
+
+function LinkRow(props: { link: MessageLink }) {
+  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let fullHref: HTMLSpanElement | undefined;
+  onCleanup(() => clearTimeout(feedbackTimer));
+
+  function showFeedback(kind: CopyFeedback, durationMs: number): void {
+    setFeedback(kind);
+    clearTimeout(feedbackTimer);
+    feedbackTimer = setTimeout(() => setFeedback(null), durationMs);
+  }
+
+  async function copy(): Promise<void> {
+    if (await writeClipboard(props.link.href)) {
+      showFeedback("copied", COPIED_FEEDBACK_MS);
+      return;
+    }
+    showFeedback("manual", MANUAL_COPY_HINT_MS);
+    if (fullHref) window.getSelection()?.selectAllChildren(fullHref);
+  }
+
+  return (
+    <li>
+      <div class="flex items-start gap-0.5">
+        <a
+          href={props.link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={props.link.href}
+          class="min-w-0 flex-1 rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+        >
+          <span class="flex items-center gap-1.5 text-[11px]">
+            <span class="min-w-0 shrink truncate font-mono text-zinc-700 dark:text-zinc-300">
+              {props.link.host}
+            </span>
+            <span class="min-w-0 flex-1 truncate text-zinc-400 dark:text-zinc-500">
+              {props.link.path}
+            </span>
+            <Show when={props.link.count > 1}>
+              <span class="shrink-0 tabular-nums text-zinc-400 dark:text-zinc-500">
+                ×{props.link.count}
+              </span>
+            </Show>
+            <Show when={props.link.insecure}>
+              <LinkBadge tone={INSECURE_TONE}>http</LinkBadge>
+            </Show>
+            <Show when={props.link.local}>
+              <LinkBadge tone={LOCAL_TONE}>local</LinkBadge>
+            </Show>
+          </span>
+          <Show when={props.link.text}>
+            <span class="mt-0.5 block truncate text-[11px] text-zinc-400 dark:text-zinc-500">
+              {props.link.text}
+            </span>
+          </Show>
+        </a>
+        <button
+          onClick={copy}
+          aria-label={
+            feedback() === "copied"
+              ? "Copied"
+              : feedback() === "manual"
+                ? MANUAL_COPY_HINT
+                : `Copy the link to ${props.link.host}`
+          }
+          title={feedback() === "copied" ? "Copied" : "Copy"}
+          class="mt-1 shrink-0 rounded p-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+        >
+          <CopyIcon class="size-3" />
+        </button>
+      </div>
+      <Show when={feedback() === "manual"}>
+        <p class="px-2 pb-1 text-[11px] text-zinc-600 dark:text-zinc-300">
+          <span ref={fullHref} class="font-mono break-all">
+            {props.link.href}
+          </span>
+          <span class="block text-zinc-400 dark:text-zinc-500">
+            {MANUAL_COPY_HINT}
+          </span>
+        </p>
+      </Show>
+    </li>
   );
 }
 
