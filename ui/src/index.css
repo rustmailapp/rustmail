@@ -38,26 +38,283 @@
   transition: none !important;
 }
 
-.mesh-glow {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 320px;
-  background: radial-gradient(
+.app-shell {
+  background-image: var(--rm-glow);
+  background-size: 100% 320px;
+  background-repeat: no-repeat;
+}
+
+.palette-glow {
+  background-image: var(--rm-glow);
+}
+
+[data-palette="classic"] {
+  --color-zinc-50: --theme(--color-zinc-50 inline);
+  --color-zinc-100: --theme(--color-zinc-100 inline);
+  --color-zinc-200: --theme(--color-zinc-200 inline);
+  --color-zinc-300: --theme(--color-zinc-300 inline);
+  --color-zinc-400: --theme(--color-zinc-400 inline);
+  --color-zinc-500: --theme(--color-zinc-500 inline);
+  --color-zinc-600: --theme(--color-zinc-600 inline);
+  --color-zinc-700: --theme(--color-zinc-700 inline);
+  --color-zinc-800: --theme(--color-zinc-800 inline);
+  --color-zinc-900: --theme(--color-zinc-900 inline);
+  --color-zinc-950: --theme(--color-zinc-950 inline);
+  --color-orange-50: --theme(--color-orange-50 inline);
+  --color-orange-100: --theme(--color-orange-100 inline);
+  --color-orange-200: --theme(--color-orange-200 inline);
+  --color-orange-300: --theme(--color-orange-300 inline);
+  --color-orange-400: --theme(--color-orange-400 inline);
+  --color-orange-500: --theme(--color-orange-500 inline);
+  --color-orange-600: --theme(--color-orange-600 inline);
+  --color-orange-700: --theme(--color-orange-700 inline);
+  --color-orange-800: --theme(--color-orange-800 inline);
+  --color-orange-900: --theme(--color-orange-900 inline);
+  --color-orange-950: --theme(--color-orange-950 inline);
+}
+
+[data-palette="classic"]:not(.dark, .dark *) {
+  --rm-glow: radial-gradient(
     ellipse 50% 100% at 0% 0%,
     rgba(234, 88, 12, 0.08) 0%,
     transparent 100%
   );
-  pointer-events: none;
-  z-index: -1;
 }
 
-:is(.dark) .mesh-glow {
-  background: radial-gradient(
+.dark[data-palette="classic"],
+.dark [data-palette="classic"] {
+  --rm-glow: radial-gradient(
     ellipse 50% 100% at 0% 0%,
     rgba(234, 88, 12, 0.06) 0%,
     transparent 100%
+  );
+}
+
+[data-palette="rustmail"] {
+  --color-zinc-50: oklch(0.985 0.0016 250);
+  --color-zinc-100: oklch(0.967 0.0032 250);
+  --color-zinc-200: oklch(0.92 0.0064 250);
+  --color-zinc-300: oklch(0.871 0.0096 250);
+  --color-zinc-400: oklch(0.705 0.0144 250);
+  --color-zinc-500: oklch(0.552 0.0176 250);
+  --color-zinc-600: oklch(0.442 0.0192 250);
+  --color-zinc-700: oklch(0.37 0.0192 250);
+  --color-zinc-800: oklch(0.274 0.0192 250);
+  --color-zinc-900: oklch(0.21 0.0176 250);
+  --color-zinc-950: oklch(0.141 0.016 250);
+  --color-orange-50: oklch(0.98 0.016 70);
+  --color-orange-100: oklch(0.955 0.04 68);
+  --color-orange-200: oklch(0.905 0.085 62);
+  --color-orange-300: oklch(0.84 0.13 58);
+  --color-orange-400: oklch(0.76 0.17 52);
+  --color-orange-500: oklch(0.69 0.2 44);
+  --color-orange-600: oklch(0.62 0.2 38);
+  --color-orange-700: oklch(0.53 0.18 34);
+  --color-orange-800: oklch(0.45 0.15 32);
+  --color-orange-900: oklch(0.39 0.12 32);
+  --color-orange-950: oklch(0.27 0.09 32);
+}
+
+[data-palette="rustmail"]:not(.dark, .dark *) {
+  --rm-glow:
+    radial-gradient(
+      ellipse 55% 100% at 0% 0%,
+      color-mix(in oklab, var(--color-orange-500) 14%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 40% 80% at 30% 0%,
+      color-mix(in oklab, oklch(0.6 0.18 30) 6%, transparent),
+      transparent
+    );
+  --rm-selection: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-orange-500) 12%, transparent),
+    color-mix(in oklab, var(--color-orange-500) 4%, transparent)
+  );
+}
+
+.dark[data-palette="rustmail"],
+.dark [data-palette="rustmail"] {
+  --rm-glow:
+    radial-gradient(
+      ellipse 55% 100% at 0% 0%,
+      color-mix(in oklab, var(--color-orange-500) 12%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 40% 80% at 30% 0%,
+      color-mix(in oklab, oklch(0.6 0.18 30) 6%, transparent),
+      transparent
+    );
+  --rm-selection: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--color-orange-500) 16%, transparent),
+    color-mix(in oklab, var(--color-orange-500) 6%, transparent)
+  );
+}
+
+[data-palette="ember"] {
+  --color-zinc-50: oklch(0.985 0.0026 265);
+  --color-zinc-100: oklch(0.967 0.0052 265);
+  --color-zinc-200: oklch(0.92 0.0104 265);
+  --color-zinc-300: oklch(0.871 0.0156 265);
+  --color-zinc-400: oklch(0.705 0.0234 265);
+  --color-zinc-500: oklch(0.552 0.0286 265);
+  --color-zinc-600: oklch(0.442 0.0312 265);
+  --color-zinc-700: oklch(0.37 0.0312 265);
+  --color-zinc-800: oklch(0.274 0.0312 265);
+  --color-zinc-900: oklch(0.21 0.0286 265);
+  --color-zinc-950: oklch(0.141 0.026 265);
+  --color-orange-50: --theme(--color-orange-50 inline);
+  --color-orange-100: --theme(--color-orange-100 inline);
+  --color-orange-200: --theme(--color-orange-200 inline);
+  --color-orange-300: --theme(--color-orange-300 inline);
+  --color-orange-400: --theme(--color-orange-400 inline);
+  --color-orange-500: --theme(--color-orange-500 inline);
+  --color-orange-600: --theme(--color-orange-600 inline);
+  --color-orange-700: --theme(--color-orange-700 inline);
+  --color-orange-800: --theme(--color-orange-800 inline);
+  --color-orange-900: --theme(--color-orange-900 inline);
+  --color-orange-950: --theme(--color-orange-950 inline);
+}
+
+[data-palette="ember"]:not(.dark, .dark *) {
+  --rm-glow: radial-gradient(
+    ellipse 55% 100% at 0% 0%,
+    color-mix(in oklab, var(--color-orange-500) 12%, transparent),
+    transparent
+  );
+  --rm-selection: color-mix(in oklab, var(--color-orange-500) 10%, transparent);
+}
+
+.dark[data-palette="ember"],
+.dark [data-palette="ember"] {
+  --rm-glow: radial-gradient(
+    ellipse 55% 100% at 0% 0%,
+    color-mix(in oklab, var(--color-orange-500) 10%, transparent),
+    transparent
+  );
+  --rm-selection: color-mix(in oklab, var(--color-orange-500) 14%, transparent);
+}
+
+[data-palette="copper"] {
+  --color-zinc-50: oklch(0.985 0.0024 210);
+  --color-zinc-100: oklch(0.967 0.0048 210);
+  --color-zinc-200: oklch(0.92 0.0096 210);
+  --color-zinc-300: oklch(0.871 0.0144 210);
+  --color-zinc-400: oklch(0.705 0.0216 210);
+  --color-zinc-500: oklch(0.552 0.0264 210);
+  --color-zinc-600: oklch(0.442 0.0288 210);
+  --color-zinc-700: oklch(0.37 0.0288 210);
+  --color-zinc-800: oklch(0.274 0.0288 210);
+  --color-zinc-900: oklch(0.21 0.0264 210);
+  --color-zinc-950: oklch(0.141 0.024 210);
+  --color-orange-50: --theme(--color-orange-50 inline);
+  --color-orange-100: --theme(--color-orange-100 inline);
+  --color-orange-200: --theme(--color-orange-200 inline);
+  --color-orange-300: --theme(--color-orange-300 inline);
+  --color-orange-400: --theme(--color-orange-400 inline);
+  --color-orange-500: --theme(--color-orange-500 inline);
+  --color-orange-600: --theme(--color-orange-600 inline);
+  --color-orange-700: --theme(--color-orange-700 inline);
+  --color-orange-800: --theme(--color-orange-800 inline);
+  --color-orange-900: --theme(--color-orange-900 inline);
+  --color-orange-950: --theme(--color-orange-950 inline);
+}
+
+[data-palette="copper"]:not(.dark, .dark *) {
+  --rm-glow:
+    radial-gradient(
+      ellipse 50% 100% at 0% 0%,
+      color-mix(in oklab, var(--color-orange-500) 10%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 50% 100% at 100% 0%,
+      color-mix(in oklab, oklch(0.65 0.1 190) 10%, transparent),
+      transparent
+    );
+  --rm-selection: color-mix(in oklab, var(--color-orange-500) 10%, transparent);
+}
+
+.dark[data-palette="copper"],
+.dark [data-palette="copper"] {
+  --rm-glow:
+    radial-gradient(
+      ellipse 50% 100% at 0% 0%,
+      color-mix(in oklab, var(--color-orange-500) 10%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 50% 100% at 100% 0%,
+      color-mix(in oklab, oklch(0.65 0.1 190) 10%, transparent),
+      transparent
+    );
+  --rm-selection: color-mix(in oklab, var(--color-orange-500) 14%, transparent);
+}
+
+[data-palette="dawn"] {
+  --color-zinc-50: oklch(0.985 0.0022 330);
+  --color-zinc-100: oklch(0.967 0.0044 330);
+  --color-zinc-200: oklch(0.92 0.0088 330);
+  --color-zinc-300: oklch(0.871 0.0132 330);
+  --color-zinc-400: oklch(0.705 0.0198 330);
+  --color-zinc-500: oklch(0.552 0.0242 330);
+  --color-zinc-600: oklch(0.442 0.0264 330);
+  --color-zinc-700: oklch(0.37 0.0264 330);
+  --color-zinc-800: oklch(0.274 0.0264 330);
+  --color-zinc-900: oklch(0.21 0.0242 330);
+  --color-zinc-950: oklch(0.141 0.022 330);
+  --color-orange-50: --theme(--color-orange-50 inline);
+  --color-orange-100: --theme(--color-orange-100 inline);
+  --color-orange-200: --theme(--color-orange-200 inline);
+  --color-orange-300: --theme(--color-orange-300 inline);
+  --color-orange-400: oklch(75% 0.183 43.934);
+  --color-orange-500: oklch(70.5% 0.213 35.604);
+  --color-orange-600: oklch(64.6% 0.222 29.116);
+  --color-orange-700: oklch(55.3% 0.195 26.402);
+  --color-orange-800: oklch(47% 0.157 25.304);
+  --color-orange-900: oklch(40.8% 0.123 26.172);
+  --color-orange-950: oklch(26.6% 0.079 24.259);
+}
+
+[data-palette="dawn"]:not(.dark, .dark *) {
+  --rm-glow:
+    radial-gradient(
+      ellipse 55% 100% at 0% 0%,
+      color-mix(in oklab, oklch(0.78 0.14 65) 14%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 40% 80% at 35% 0%,
+      color-mix(in oklab, oklch(0.65 0.2 0) 8%, transparent),
+      transparent
+    );
+  --rm-selection: linear-gradient(
+    90deg,
+    color-mix(in oklab, oklch(0.78 0.14 65) 12%, transparent),
+    color-mix(in oklab, oklch(0.65 0.2 0) 7%, transparent)
+  );
+}
+
+.dark[data-palette="dawn"],
+.dark [data-palette="dawn"] {
+  --rm-glow:
+    radial-gradient(
+      ellipse 55% 100% at 0% 0%,
+      color-mix(in oklab, oklch(0.78 0.14 65) 14%, transparent),
+      transparent
+    ),
+    radial-gradient(
+      ellipse 40% 80% at 35% 0%,
+      color-mix(in oklab, oklch(0.65 0.2 0) 8%, transparent),
+      transparent
+    );
+  --rm-selection: linear-gradient(
+    90deg,
+    color-mix(in oklab, oklch(0.78 0.14 65) 16%, transparent),
+    color-mix(in oklab, oklch(0.65 0.2 0) 9%, transparent)
   );
 }
 
@@ -145,11 +402,7 @@
 .rusted .app-shell {
   position: relative;
   z-index: 1;
-  background-color: transparent;
-}
-
-.rusted .mesh-glow {
-  display: none;
+  background: transparent;
 }
 
 .rusted::after {

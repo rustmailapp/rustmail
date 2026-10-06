@@ -6,13 +6,19 @@ import {
   visibleMessages,
 } from "../stores/messages";
 import { toggleSettings } from "../stores/settings";
+import { registerLogoClick } from "../stores/rusted";
 import { confirm } from "./ConfirmDialog";
 
 export default function Header() {
   return (
     <header class="flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-800 px-4 py-3">
       <div class="flex items-center gap-2">
-        <img src="/logo.webp" alt="RustMail" class="size-12 rounded-md" />
+        <img
+          src="/logo.webp"
+          alt="RustMail"
+          class="size-12 rounded-md"
+          onClick={registerLogoClick}
+        />
         <h1 class="font-brand text-xl font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-300 dark:to-white bg-clip-text text-transparent">
           RustMail
         </h1>
