@@ -1,4 +1,5 @@
-import { createSignal } from "solid-js";
+import { createEffect, createRoot, createSignal, on } from "solid-js";
+import { selectedId } from "./messages";
 
 /**
  * The viewport width from which the details rail gets a column of its own.
@@ -8,14 +9,25 @@ import { createSignal } from "solid-js";
  */
 const WIDE_LAYOUT_QUERY = "(min-width: 1300px)";
 
-const wideQuery = window.matchMedia(WIDE_LAYOUT_QUERY);
-const [wideLayout, setWideLayout] = createSignal(wideQuery.matches);
+const wideQuery =
+  typeof window !== "undefined" && typeof window.matchMedia === "function"
+    ? window.matchMedia(WIDE_LAYOUT_QUERY)
+    : null;
+const [wideLayout, setWideLayout] = createSignal(wideQuery?.matches ?? false);
 const [drawerOpen, setDrawerOpen] = createSignal(false);
 
-wideQuery.addEventListener("change", (event) => {
+wideQuery?.addEventListener("change", (event) => {
   setWideLayout(event.matches);
   if (event.matches) setDrawerOpen(false);
 });
+
+createRoot(() =>
+  createEffect(
+    on(selectedId, (id) => {
+      if (id === null) setDrawerOpen(false);
+    }),
+  ),
+);
 
 /** Whether the details drawer is over the message body right now. */
 function detailsDrawerOpen(): boolean {

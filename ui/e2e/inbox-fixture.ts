@@ -95,6 +95,10 @@ export interface ApiCalls {
   listed: string[];
   /** The path of every headers read, in order. */
   headers: string[];
+  /** The path of every authentication results read, in order. */
+  auth: string[];
+  /** The path of every attachments read, in order. */
+  attachments: string[];
 }
 
 /** Handle on the fake backend: what the UI wrote, and a way to push events. */
@@ -132,6 +136,8 @@ export async function mockInbox(
     fetched: [],
     listed: [],
     headers: [],
+    auth: [],
+    attachments: [],
   };
   let socket: WebSocketRoute | undefined;
 
@@ -212,9 +218,11 @@ export async function mockInbox(
       return route.fulfill({ json: SERVER_INFO });
     }
     if (/^\/messages\/[^/]+\/attachments$/.test(path)) {
+      calls.attachments.push(path);
       return route.fulfill({ json: [] });
     }
     if (/^\/messages\/[^/]+\/auth$/.test(path)) {
+      calls.auth.push(path);
       return route.fulfill({ json: NO_AUTH_RESULTS });
     }
     const headers = /^\/messages\/([^/]+)\/headers$/.exec(path);

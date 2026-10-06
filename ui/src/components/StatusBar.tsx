@@ -13,12 +13,34 @@ import {
   visibleMessages,
 } from "../stores/messages";
 import { wideLayout } from "../stores/layout";
-import { notify } from "../stores/notices";
 import * as api from "../lib/api";
 import { CopyIcon } from "./icons";
 
 /** How long the copy button says it copied before it goes back to "Copy". */
 const COPIED_FEEDBACK_MS = 1500;
+/** How long the hint to copy by hand stays up when the clipboard is out of reach. */
+const MANUAL_COPY_HINT_MS = 4000;
+
+const ENDPOINT_TITLE =
+  "The SMTP port this server listens on. Docker or proxy port mappings can expose a different one.";
+
+type CopyFeedback = "copied" | "manual";
+
+/**
+ * Writes `text` to the clipboard, reporting whether it landed.
+ *
+ * The async clipboard exists only in secure contexts, so a portal opened over
+ * plain http from another machine on the LAN has none.
+ */
+async function writeClipboard(text: string): Promise<boolean> {
+  if (!navigator.clipboard) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function Key(props: { children: JSX.Element }) {
   return (
@@ -56,21 +78,33 @@ export default function StatusBar() {
   const unread = createMemo(
     () => visibleMessages().filter((m) => !m.is_read).length,
   );
+  let seenLive = false;
+  const connection = createMemo(() => {
+    if (socketLive()) {
+      seenLive = true;
+      return "Live";
+    }
+    return seenLive ? "Reconnecting" : "Connecting";
+  });
 
-  const [copied, setCopied] = createSignal(false);
-  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
-  onCleanup(() => clearTimeout(copiedTimer));
+  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
+  let endpointText: HTMLSpanElement | undefined;
+  onCleanup(() => clearTimeout(feedbackTimer));
+
+  function showFeedback(kind: CopyFeedback, durationMs: number): void {
+    setFeedback(kind);
+    clearTimeout(feedbackTimer);
+    feedbackTimer = setTimeout(() => setFeedback(null), durationMs);
+  }
 
   async function copy(text: string): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      notify("Could not copy the SMTP address.");
+    if (await writeClipboard(text)) {
+      showFeedback("copied", COPIED_FEEDBACK_MS);
       return;
     }
-    setCopied(true);
-    clearTimeout(copiedTimer);
-    copiedTimer = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
+    if (endpointText) window.getSelection()?.selectAllChildren(endpointText);
+    showFeedback("manual", MANUAL_COPY_HINT_MS);
   }
 
   return (
@@ -83,7 +117,7 @@ export default function StatusBar() {
             "bg-amber-500 animate-pulse": !socketLive(),
           }}
         />
-        {socketLive() ? "Live" : "Reconnecting"}
+        {connection()}
       </span>
 
       <Show
@@ -96,18 +130,34 @@ export default function StatusBar() {
       >
         {(address) => (
           <span class="inline-flex items-center gap-1">
-            <span>SMTP</span>
-            <span class="font-mono text-zinc-700 dark:text-zinc-200">
-              {address()}
+            <span title={ENDPOINT_TITLE}>
+              SMTP{" "}
+              <span
+                ref={endpointText}
+                class="font-mono text-zinc-700 dark:text-zinc-200"
+              >
+                {address()}
+              </span>
             </span>
             <button
               onClick={() => copy(address())}
-              aria-label={copied() ? "Copied" : "Copy the SMTP address"}
-              title={copied() ? "Copied" : "Copy"}
+              aria-label={
+                feedback() === "copied"
+                  ? "Copied"
+                  : feedback() === "manual"
+                    ? "Press Cmd/Ctrl+C to copy"
+                    : "Copy the SMTP address"
+              }
+              title={feedback() === "copied" ? "Copied" : "Copy"}
               class="rounded p-0.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
             >
               <CopyIcon class="size-3" />
             </button>
+            <Show when={feedback() === "manual"}>
+              <span class="text-zinc-600 dark:text-zinc-300">
+                Press Cmd/Ctrl+C to copy
+              </span>
+            </Show>
           </span>
         )}
       </Show>

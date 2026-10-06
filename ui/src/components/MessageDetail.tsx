@@ -2,6 +2,8 @@ import {
   createSignal,
   createMemo,
   For,
+  onCleanup,
+  onMount,
   Show,
   Switch,
   Match,
@@ -14,11 +16,16 @@ import {
   setSelectedId,
   starMessage,
 } from "../stores/messages";
-import { detailsDrawerOpen, toggleDetails, wideLayout } from "../stores/layout";
+import {
+  closeDetails,
+  detailsDrawerOpen,
+  toggleDetails,
+  wideLayout,
+} from "../stores/layout";
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
-import type { Message } from "../lib/types";
+import type { AuthResults, Message } from "../lib/types";
 import {
   createPaneRead,
   failed,
@@ -66,6 +73,7 @@ const SELECTION_SETTLE_MS = 120;
 
 const DETAILS_ID = "message-details";
 const HUE_TURN = 360;
+const MESSAGE_LIST_SELECTOR = '[role="listbox"][aria-label="Messages"]';
 
 /** A sender split into the name to show and the address behind it. */
 function parseSender(sender: string): { name: string | null; address: string } {
@@ -125,6 +133,10 @@ export default function MessageDetail() {
   );
 
   const loaded = () => (selectedId() ? settled(message) : undefined);
+  const files = createMemo(() => {
+    const list = settled(reads.attachments);
+    return list === undefined ? undefined : downloadable(list);
+  });
   const toggleHeaders = () => setHeadersOpen((open) => !open);
 
   return (
@@ -144,11 +156,17 @@ export default function MessageDetail() {
                 <div class="flex items-center justify-between gap-3 px-5 pb-3">
                   <ViewSwitch view={view()} onChange={setView} />
                   <Show when={!wideLayout() && !detailsDrawerOpen()}>
-                    <CompactChecks reads={reads} />
+                    <CompactChecks
+                      auth={reads.auth}
+                      attachmentCount={files()?.length ?? 0}
+                    />
                   </Show>
                 </div>
                 <div class="relative flex-1 min-h-0 flex flex-col border-t border-zinc-100 dark:border-zinc-800/70">
-                  <div class="flex-1 min-h-0 overflow-auto max-w-4xl mx-auto w-full">
+                  <div
+                    class="flex-1 min-h-0 overflow-auto max-w-4xl mx-auto w-full"
+                    inert={detailsDrawerOpen() || undefined}
+                  >
                     <MessageBody
                       view={view()}
                       message={msg()}
@@ -156,18 +174,15 @@ export default function MessageDetail() {
                     />
                   </div>
                   <Show when={detailsDrawerOpen()}>
-                    <aside
-                      id={DETAILS_ID}
-                      aria-label="Message details"
-                      class="details-drawer absolute inset-y-0 right-0 z-10 w-80 max-w-full overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 animate-fade-in"
-                    >
+                    <DetailsDrawer>
                       <DetailRail
                         message={msg()}
                         reads={reads}
+                        files={files()}
                         headersOpen={headersOpen()}
                         onToggleHeaders={toggleHeaders}
                       />
-                    </aside>
+                    </DetailsDrawer>
                   </Show>
                 </div>
               </>
@@ -184,17 +199,23 @@ export default function MessageDetail() {
           <Show
             when={loaded()}
             fallback={
-              <p class="p-4 text-xs text-zinc-400 dark:text-zinc-500">
-                <Show when={!selectedId()}>
-                  Details of the selected message show here.
-                </Show>
-              </p>
+              <Show
+                when={selectedId()}
+                fallback={
+                  <p class="p-4 text-xs text-zinc-400 dark:text-zinc-500">
+                    Details of the selected message show here.
+                  </p>
+                }
+              >
+                <ReadState read={message} label="the message details" />
+              </Show>
             }
           >
             {(msg) => (
               <DetailRail
                 message={msg()}
                 reads={reads}
+                files={files()}
                 headersOpen={headersOpen()}
                 onToggleHeaders={toggleHeaders}
               />
@@ -203,6 +224,58 @@ export default function MessageDetail() {
         </aside>
       </Show>
     </>
+  );
+}
+
+/**
+ * The details rail as a drawer over the message body.
+ *
+ * Opening it moves focus inside, so the keyboard lands where the content is;
+ * closing hands focus back to what opened it, or to the message list when the
+ * opener is gone. Focus is only taken back when it was in the drawer, so a
+ * drawer that closes because the selection cleared does not pull focus out of
+ * the search box. Escape is caught here rather than at the document, since the
+ * page shortcut skips text fields and would leave the tag input stuck open.
+ */
+function DetailsDrawer(props: { children: JSX.Element }) {
+  let drawer!: HTMLElement;
+  let opener: HTMLElement | null = null;
+
+  onMount(() => {
+    const active = document.activeElement;
+    opener =
+      active instanceof HTMLElement && active !== document.body ? active : null;
+    drawer.focus({ preventScroll: true });
+  });
+
+  onCleanup(() => {
+    const active = document.activeElement;
+    const focusWasInside =
+      active === null || active === document.body || drawer.contains(active);
+    if (!focusWasInside) return;
+    const target = opener?.isConnected
+      ? opener
+      : document.querySelector<HTMLElement>(MESSAGE_LIST_SELECTOR);
+    target?.focus({ preventScroll: true });
+  });
+
+  function closeOnEscape(event: KeyboardEvent): void {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    closeDetails();
+  }
+
+  return (
+    <aside
+      ref={drawer}
+      id={DETAILS_ID}
+      aria-label="Message details"
+      tabIndex={-1}
+      on:keydown={closeOnEscape}
+      class="details-drawer absolute inset-y-0 right-0 z-10 w-80 max-w-full overflow-y-auto border-l border-zinc-200 dark:border-zinc-800 outline-none animate-fade-in"
+    >
+      {props.children}
+    </aside>
   );
 }
 
@@ -354,15 +427,13 @@ function ViewSwitch(props: { view: View; onChange: (view: View) => void }) {
 }
 
 /** The SPF and DKIM verdicts and the attachment count, while the rail is away. */
-function CompactChecks(props: { reads: RailReads }) {
-  const attachmentCount = () => {
-    const list = settled(props.reads.attachments);
-    return list === undefined ? 0 : downloadable(list).length;
-  };
-
+function CompactChecks(props: {
+  auth: PaneRead<AuthResults>;
+  attachmentCount: number;
+}) {
   return (
     <div class="flex items-center gap-1.5 min-w-0">
-      <Show when={settled(props.reads.auth)}>
+      <Show when={settled(props.auth)}>
         {(results) => (
           <>
             <StatusBadge
@@ -376,13 +447,13 @@ function CompactChecks(props: { reads: RailReads }) {
           </>
         )}
       </Show>
-      <Show when={attachmentCount() > 0}>
+      <Show when={props.attachmentCount > 0}>
         <span
           class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] tabular-nums text-zinc-500 dark:text-zinc-400"
-          title={`${attachmentCount()} ${attachmentCount() === 1 ? "attachment" : "attachments"}`}
+          title={`${props.attachmentCount} ${props.attachmentCount === 1 ? "attachment" : "attachments"}`}
         >
           <PaperclipIcon class="size-3.5" />
-          {attachmentCount()}
+          {props.attachmentCount}
         </span>
       </Show>
     </div>

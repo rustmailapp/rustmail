@@ -42,6 +42,14 @@ test.use({ viewport: WIDE_VIEWPORT });
 
 type PaneRead = (typeof RESOURCES)[number];
 
+function messagePane(page: Page) {
+  return page.getByRole("region", { name: "Message" });
+}
+
+function detailsRail(page: Page) {
+  return page.getByRole("complementary", { name: "Message details" });
+}
+
 /** Matches the GET the pane issues for one kind of read, of any message. */
 function readPattern(suffix: string): RegExp {
   return new RegExp(`/api/v1/messages/[^/]+${suffix}(?:\\?.*)?$`);
@@ -270,10 +278,12 @@ test("offers a reload, not a retry, when the response drifted", async ({
   await openFirstMessage(page);
 
   await expect(
-    page.getByText("This page does not match the server it is talking to."),
+    messagePane(page).getByText(
+      "This page does not match the server it is talking to.",
+    ),
   ).toBeVisible();
   await expect(
-    page.getByText(
+    messagePane(page).getByText(
       "GET /messages/{id} returned an unexpected shape: size should be number",
     ),
   ).toBeVisible();
@@ -281,7 +291,10 @@ test("offers a reload, not a retry, when the response drifted", async ({
     page.getByRole("button", { name: "Retry loading this message" }),
   ).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: "Reload the page" }),
+    messagePane(page).getByRole("button", { name: "Reload the page" }),
+  ).toBeVisible();
+  await expect(
+    detailsRail(page).getByRole("button", { name: "Reload the page" }),
   ).toBeVisible();
 });
 
@@ -292,7 +305,9 @@ test("the reload button actually reloads", async ({ page }) => {
     return route.fulfill({ json: driftedMessage() });
   });
   await openFirstMessage(page);
-  const reload = page.getByRole("button", { name: "Reload the page" });
+  const reload = messagePane(page).getByRole("button", {
+    name: "Reload the page",
+  });
   await expect(reload).toBeVisible();
 
   const navigated = page.waitForEvent("framenavigated");
@@ -310,6 +325,11 @@ test("still offers a retry when the read merely failed", async ({ page }) => {
 
   await expect(
     page.getByRole("button", { name: "Retry loading this message" }),
+  ).toBeVisible();
+  await expect(
+    detailsRail(page).getByRole("button", {
+      name: "Retry loading the message details",
+    }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Reload the page" }),

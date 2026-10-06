@@ -50,9 +50,12 @@ const NEUTRAL_STATUS_COLOR =
 
 /** A check result, coloured by how it went; `label` names the check. */
 export function StatusBadge(props: { status: string; label?: string }) {
-  const color = () =>
-    STATUS_COLORS[props.status.toLowerCase().replace(/^arc:/, "")] ??
-    NEUTRAL_STATUS_COLOR;
+  const color = () => {
+    const key = props.status.toLowerCase().replace(/^arc:/, "");
+    return Object.hasOwn(STATUS_COLORS, key)
+      ? STATUS_COLORS[key]
+      : NEUTRAL_STATUS_COLOR;
+  };
 
   return (
     <span
@@ -86,10 +89,16 @@ function Section(props: {
 
 const RAIL_READ_FRAME = "py-1";
 
-/** Everything about the selected message that is not its body. */
+/**
+ * Everything about the selected message that is not its body.
+ *
+ * `files` is the downloadable attachments, or `undefined` until the read
+ * settles; the pane works it out once so its own count cannot disagree.
+ */
 export default function DetailRail(props: {
   message: Message;
   reads: RailReads;
+  files: Attachment[] | undefined;
   headersOpen: boolean;
   onToggleHeaders: () => void;
 }) {
@@ -115,6 +124,7 @@ export default function DetailRail(props: {
       <AttachmentsSection
         message={props.message}
         read={props.reads.attachments}
+        files={props.files}
       />
       <Section
         label="Headers"
@@ -243,17 +253,13 @@ function AuthList(props: { results: AuthResults }) {
 function AttachmentsSection(props: {
   message: Message;
   read: PaneRead<Attachment[]>;
+  files: Attachment[] | undefined;
 }) {
-  const files = () => {
-    const list = settled(props.read);
-    return list === undefined ? undefined : downloadable(list);
-  };
-
   return (
     <Section
       label="Attachments"
       aside={
-        <Show when={files()}>
+        <Show when={props.files}>
           {(list) => (
             <span class="text-[11px] tabular-nums text-zinc-400 dark:text-zinc-500">
               {list().length}
@@ -263,7 +269,7 @@ function AttachmentsSection(props: {
       }
     >
       <Show
-        when={files()}
+        when={props.files}
         fallback={
           <ReadState
             read={props.read}
