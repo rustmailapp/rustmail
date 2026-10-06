@@ -336,6 +336,31 @@ async fn interrupted_after_first_rename(db: &Path) -> PathBuf {
   kept
 }
 
+/// Leaves a valid write-ahead log beside `db` that no connection has open, as
+/// a process stopped before its last checkpoint leaves it, with `db` itself as
+/// it was, and returns the log's path.
+async fn orphan_wal(db: &Path) -> PathBuf {
+  let db_bytes = std::fs::read(db).unwrap();
+  let wal = sidecar(db, WAL_SUFFIX);
+  let mut conn = SqliteConnection::connect_with(&existing_file(db))
+    .await
+    .unwrap();
+  sqlx::query("PRAGMA wal_autocheckpoint = 0")
+    .execute(&mut conn)
+    .await
+    .unwrap();
+  sqlx::query("CREATE TABLE only_in_the_wal (id INTEGER)")
+    .execute(&mut conn)
+    .await
+    .unwrap();
+  let wal_bytes = std::fs::read(&wal).unwrap();
+  conn.close().await.unwrap();
+  assert!(!wal_bytes.is_empty());
+  std::fs::write(db, db_bytes).unwrap();
+  std::fs::write(&wal, wal_bytes).unwrap();
+  wal
+}
+
 /// Asserts a refused resume left the database missing and the backup and
 /// kept files as they were.
 fn assert_resume_untouched(db: &Path, backup_bytes: &[u8], kept: &[(PathBuf, Vec<u8>)]) {
@@ -473,4 +498,28 @@ async fn an_interrupted_restore_is_refused_while_the_database_has_a_journal_besi
     "got {error:?}"
   );
   assert_resume_untouched(&db, &backup_bytes, &kept_contents);
+}
+
+#[tokio::test]
+async fn an_interrupted_restore_is_refused_while_the_kept_file_has_a_wal_beside_it() {
+  let (_dir, db) = scratch();
+  let kept = interrupted_after_first_rename(&db).await;
+  let wal = orphan_wal(&kept).await;
+  let backup_bytes = std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  let kept_contents = vec![
+    (kept.clone(), std::fs::read(&kept).unwrap()),
+    (wal.clone(), std::fs::read(&wal).unwrap()),
+  ];
+
+  let error = restore_backup(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      &error,
+      StorageError::RestoreRefused(RestoreRefusal::FileInUse { file, .. }) if *file == wal
+    ),
+    "got {error:?}"
+  );
+  assert_resume_untouched(&db, &backup_bytes, &kept_contents);
+  assert!(!sidecar(&kept, SHM_SUFFIX).exists());
 }

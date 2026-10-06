@@ -416,10 +416,23 @@ fn existing_file(path: &Path) -> SqliteConnectOptions {
 }
 
 async fn inspect_db(path: &Path) -> Result<DbState, StorageError> {
+  inspect_db_with(path, existing_file(path)).await
+}
+
+/// Like [`inspect_db`], with the file opened as immutable, so SQLite neither
+/// writes to it nor creates a `-wal` or `-shm` beside it.
+async fn inspect_db_immutable(path: &Path) -> Result<DbState, StorageError> {
+  inspect_db_with(path, existing_file(path).immutable(true)).await
+}
+
+async fn inspect_db_with(
+  path: &Path,
+  options: SqliteConnectOptions,
+) -> Result<DbState, StorageError> {
   if !exists(path).await? {
     return Ok(DbState::Absent);
   }
-  let mut conn = SqliteConnection::connect_with(&existing_file(path)).await?;
+  let mut conn = SqliteConnection::connect_with(&options).await?;
   let schema = probe(&mut conn).await;
   conn.close().await?;
   Ok(match schema? {

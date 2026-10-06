@@ -8,7 +8,7 @@ use tracing::info;
 
 use super::{
   DbState, JOURNAL_SUFFIX, Paths, SHM_SUFFIX, WAL_SUFFIX, acquire_lock, blocking, existing_file,
-  exists, inspect_db, io_error, rename, sidecar, sync_parent,
+  exists, inspect_db, inspect_db_immutable, io_error, rename, sidecar, sync_parent,
 };
 use crate::error::{RestoreRefusal, StorageError};
 use crate::schema::{FileSchema, probe};
@@ -53,7 +53,8 @@ pub struct RestoreReport {
 /// A restore that stopped between those two renames is finished instead:
 /// when `path` is missing, the backup passes the same checks, nothing has
 /// `path` or the backup open, and the newest `<path>.schema1-<UTC timestamp>`
-/// beside them is a schema-1 database, the backup is moved to `path` and the
+/// beside them has no `-wal`, `-shm` or `-journal` and reads, without being
+/// written, as a schema-1 database, the backup is moved to `path` and the
 /// directory is synced. Every kept file is left as it is.
 ///
 /// # Errors
@@ -154,8 +155,10 @@ async fn put_backup_in_place(
 }
 
 /// The schema-1 database an interrupted restore moved away: the newest
-/// `<db>.schema1-<UTC timestamp>` beside the missing database, which must be a
-/// schema-1 database. Older ones are kept files of earlier restores.
+/// `<db>.schema1-<UTC timestamp>` beside the missing database. It must have no
+/// `-wal`, `-shm` or `-journal` and read as a schema-1 database, and is opened
+/// as immutable so the check never writes it. Older ones are kept files of
+/// earlier restores.
 async fn interrupted_kept_file(paths: &Paths) -> Result<PathBuf, StorageError> {
   let refuse = |reason: String| -> StorageError {
     RestoreRefusal::NotAnInterruptedRestore {
@@ -171,7 +174,8 @@ async fn interrupted_kept_file(paths: &Paths) -> Result<PathBuf, StorageError> {
       sidecar(&paths.db, KEPT_SUFFIX).display()
     )));
   };
-  match inspect_db(&kept_as).await {
+  refuse_side_files(&paths.db, &kept_as).await?;
+  match inspect_db_immutable(&kept_as).await {
     Ok(DbState::Current) => Ok(kept_as),
     Ok(state) => Err(refuse(format!(
       "{} is {}, not schema 1",
