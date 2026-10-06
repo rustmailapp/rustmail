@@ -9,6 +9,7 @@
   --rm-selection: var(--color-zinc-100);
   --rm-canvas: var(--color-zinc-100);
   --rm-panel: var(--color-white);
+  --rm-panel-alpha: 90%;
   --rm-panel-shadow:
     0 0 0 1px color-mix(in oklab, var(--color-zinc-300) 40%, transparent),
     0 1px 2px color-mix(in oklab, var(--color-zinc-950) 4%, transparent),
@@ -23,6 +24,7 @@
     var(--color-zinc-900) 70%,
     var(--color-zinc-950)
   );
+  --rm-panel-alpha: 88%;
   --rm-panel-shadow:
     0 0 0 1px color-mix(in oklab, var(--color-white) 5%, transparent),
     0 8px 28px -12px color-mix(in oklab, black 60%, transparent);
@@ -61,7 +63,11 @@
 }
 
 .app-panel {
-  background-color: var(--rm-panel);
+  background-color: color-mix(
+    in oklab,
+    var(--rm-panel) var(--rm-panel-alpha),
+    transparent
+  );
   border-radius: var(--radius-xl);
   box-shadow: var(--rm-panel-shadow);
 }
