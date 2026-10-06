@@ -3,6 +3,7 @@ import {
   ApiError,
   BULK_REQUEST_TIMEOUT_MS,
   deleteAllMessages,
+  getInfo,
   getMessage,
   listMessages,
   REQUEST_TIMEOUT_MS,
@@ -358,6 +359,32 @@ describe("list reads", () => {
     await expect(listMessages({ limit: 100 })).rejects.toMatchObject({
       status: 502,
       code: null,
+    });
+  });
+});
+
+describe("server info", () => {
+  it("returns the version and SMTP port the server reports", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ version: "0.8.1", smtp_port: 1025 }),
+    );
+
+    await expect(getInfo()).resolves.toEqual({
+      version: "0.8.1",
+      smtp_port: 1025,
+    });
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/info");
+  });
+
+  it("rejects a drifted body, naming the route", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ version: "0.8.1", smtp_port: "1025" }),
+    );
+
+    await expect(getInfo()).rejects.toMatchObject({
+      name: "ResponseShapeError",
+      message:
+        "GET /info returned an unexpected shape: smtp_port should be number",
     });
   });
 });

@@ -2528,3 +2528,51 @@ async fn sigterm_drains_and_checkpoints_before_exit() {
 async fn ctrl_c_drains_and_checkpoints_before_exit() {
   stop_after_one_delivery("INT").await;
 }
+
+/// Asks the OS for a free port and releases it for the child to bind.
+async fn unused_port() -> u16 {
+  let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+  listener.local_addr().unwrap().port()
+}
+
+#[tokio::test]
+async fn info_reports_the_build_version_and_configured_smtp_port() {
+  let smtp_port = unused_port().await;
+  let http_port = unused_port().await;
+  let mut guard = ChildGuard::new(
+    rustmail_command()
+      .args([
+        "serve",
+        "--ephemeral",
+        "--bind",
+        "127.0.0.1",
+        "--smtp-port",
+        &smtp_port.to_string(),
+        "--http-port",
+        &http_port.to_string(),
+        "--log-level",
+        CHILD_LOG_FILTER,
+      ])
+      .spawn()
+      .expect("failed to spawn"),
+  );
+  guard.smtp_addr().await;
+
+  let url = format!("http://127.0.0.1:{http_port}/api/v1/info");
+  let client = reqwest::Client::new();
+  let response = tokio::time::timeout(LISTEN_REPORT_TIMEOUT, async {
+    loop {
+      match client.get(&url).send().await {
+        Ok(response) => return response,
+        Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
+      }
+    }
+  })
+  .await
+  .expect("rustmail did not answer HTTP in time");
+
+  assert_eq!(response.status(), 200);
+  let info: serde_json::Value = response.json().await.unwrap();
+  assert_eq!(info["version"], env!("RUSTMAIL_BUILD_VERSION"));
+  assert_eq!(info["smtp_port"], smtp_port);
+}

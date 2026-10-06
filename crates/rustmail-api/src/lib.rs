@@ -44,7 +44,7 @@ mod ws;
 
 pub use host::{Hostname, HostnameError};
 pub use origin::{Origin, OriginError};
-pub use state::{AppState, WsEvent, WsFrame, WsFrameError};
+pub use state::{AppState, ServerInfo, WsEvent, WsFrame, WsFrameError};
 
 use axum::Router;
 use axum::extract::{Request, State};
@@ -95,6 +95,7 @@ pub fn router(state: AppState) -> Router {
     .route("/messages/{id}/export", get(handlers::export_message))
     .route("/messages/{id}/release", post(handlers::release_message))
     .route("/assert/count", get(handlers::assert_count))
+    .route("/info", get(handlers::get_info))
     .layer(axum::middleware::from_fn_with_state(
       state.clone(),
       time_out_reads,
@@ -231,5 +232,17 @@ mod tests {
     drop(only_connection);
 
     assert_eq!(response.await.unwrap().status(), StatusCode::OK);
+  }
+
+  #[tokio::test]
+  async fn info_is_404_until_the_server_info_is_set() {
+    let pool = single_connection_pool().await;
+
+    let response = short_timeout_router(&pool)
+      .oneshot(request(Method::GET, "/api/v1/info"))
+      .await
+      .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
   }
 }

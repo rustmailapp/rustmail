@@ -77,6 +77,15 @@ impl WsFrame {
   }
 }
 
+/// What the server reports about itself on `GET /api/v1/info`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ServerInfo {
+  /// Version of the running RustMail binary.
+  pub version: String,
+  /// Port the SMTP listener was configured with.
+  pub smtp_port: u16,
+}
+
 /// Shared application state passed to all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -94,6 +103,8 @@ pub struct AppState {
   pub allowed_origins: Arc<[Origin]>,
   /// Host names RustMail answers a browser on, besides addresses and `localhost`.
   pub allowed_hosts: Arc<[Hostname]>,
+  /// What `GET /api/v1/info` reports; the route answers `404` without it.
+  pub server_info: Option<Arc<ServerInfo>>,
   pub(crate) ws_timings: WsTimings,
   pub(crate) api_timeout: Duration,
 }
@@ -114,6 +125,7 @@ impl AppState {
       ws_semaphore: Arc::new(Semaphore::new(MAX_WS_CONNECTIONS)),
       allowed_origins: Arc::from([]),
       allowed_hosts: Arc::from([]),
+      server_info: None,
       ws_timings: WsTimings::default(),
       api_timeout: API_REQUEST_TIMEOUT,
     }
@@ -136,6 +148,12 @@ impl AppState {
   /// name — which is exactly what a DNS rebinding attack has to supply.
   pub fn with_allowed_hosts(mut self, hosts: Vec<Hostname>) -> Self {
     self.allowed_hosts = Arc::from(hosts);
+    self
+  }
+
+  /// Sets what `GET /api/v1/info` reports about the running server.
+  pub fn with_server_info(mut self, info: ServerInfo) -> Self {
+    self.server_info = Some(Arc::new(info));
     self
   }
 

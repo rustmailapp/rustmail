@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{info, warn};
 
-use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame};
+use rustmail_api::{AppState, Hostname, Origin, ServerInfo, WsEvent, WsFrame};
 use rustmail_smtp::{
   Delivery, DeliveryAck, ReceivedMessage, STORE_ACK_TIMEOUT, SmtpServer, SmtpServerConfig,
   TlsConfig,
@@ -1081,7 +1081,11 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
 
   let state = AppState::new(repo.clone(), ws_tx, release_host, release_port)
     .with_allowed_origins(allowed_origins.clone())
-    .with_allowed_hosts(allowed_hosts.clone());
+    .with_allowed_hosts(allowed_hosts.clone())
+    .with_server_info(ServerInfo {
+      version: env!("RUSTMAIL_BUILD_VERSION").to_owned(),
+      smtp_port: args.smtp_port,
+    });
 
   let smtp_config = SmtpServerConfig {
     host: bind_addr,

@@ -64,6 +64,11 @@ export const authResults = z.object({
   arc: z.array(authCheck),
 });
 
+export const serverInfo = z.object({
+  version: z.string(),
+  smtp_port: z.number(),
+});
+
 /** The part of an error body a client acts on: its machine-readable `code`. */
 export const errorCode = z.object({ code: z.string() });
 
