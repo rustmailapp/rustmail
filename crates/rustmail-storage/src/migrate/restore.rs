@@ -52,9 +52,9 @@ pub struct RestoreReport {
 ///
 /// A restore that stopped between those two renames is finished instead:
 /// when `path` is missing, the backup passes the same checks, nothing has
-/// `path` or the backup open, and exactly one `<path>.schema1-<UTC timestamp>`
-/// sits beside them and is a schema-1 database, the backup is moved to `path`
-/// and the directory is synced. That kept file is left as it is.
+/// `path` or the backup open, and the newest `<path>.schema1-<UTC timestamp>`
+/// beside them is a schema-1 database, the backup is moved to `path` and the
+/// directory is synced. Every kept file is left as it is.
 ///
 /// # Errors
 ///
@@ -153,9 +153,9 @@ async fn put_backup_in_place(
   })
 }
 
-/// The schema-1 database an interrupted restore moved away: the only
+/// The schema-1 database an interrupted restore moved away: the newest
 /// `<db>.schema1-<UTC timestamp>` beside the missing database, which must be a
-/// schema-1 database.
+/// schema-1 database. Older ones are kept files of earlier restores.
 async fn interrupted_kept_file(paths: &Paths) -> Result<PathBuf, StorageError> {
   let refuse = |reason: String| -> StorageError {
     RestoreRefusal::NotAnInterruptedRestore {
@@ -165,22 +165,11 @@ async fn interrupted_kept_file(paths: &Paths) -> Result<PathBuf, StorageError> {
     }
     .into()
   };
-  let mut kept = kept_files(&paths.db).await?;
-  let kept_as = match kept.len() {
-    0 => {
-      return Err(refuse(format!(
-        "no {}<UTC timestamp> file sits beside it",
-        sidecar(&paths.db, KEPT_SUFFIX).display()
-      )));
-    }
-    1 => kept.remove(0),
-    count => {
-      let names: Vec<String> = kept.iter().map(|file| file.display().to_string()).collect();
-      return Err(refuse(format!(
-        "{count} files could be the schema-1 database it moved away ({})",
-        names.join(", ")
-      )));
-    }
+  let Some(kept_as) = kept_files(&paths.db).await?.pop() else {
+    return Err(refuse(format!(
+      "no {}<UTC timestamp> file sits beside it",
+      sidecar(&paths.db, KEPT_SUFFIX).display()
+    )));
   };
   match inspect_db(&kept_as).await {
     Ok(DbState::Current) => Ok(kept_as),
@@ -196,7 +185,7 @@ async fn interrupted_kept_file(paths: &Paths) -> Result<PathBuf, StorageError> {
   }
 }
 
-/// The files named `<db>.schema1-<UTC timestamp>` beside `db`, sorted.
+/// The files named `<db>.schema1-<UTC timestamp>` beside `db`, oldest first.
 async fn kept_files(db: &Path) -> Result<Vec<PathBuf>, StorageError> {
   let parent = db.parent().unwrap_or(Path::new("")).to_path_buf();
   let listed = if parent.as_os_str().is_empty() {
