@@ -91,6 +91,8 @@ Older binaries cannot read the new layout. Restore the backup **with the new bin
 
 `restore-backup` takes the same lock as the upgrade, so it refuses to run while another RustMail holds it, and it refuses while another process still has the database open. It renames the current database to `rustmail.db.schema1-<timestamp>` (it never deletes it) and moves `rustmail.db.schema0.bak` back to `rustmail.db`.
 
+If `restore-backup` is stopped between those two moves, `rustmail.db` is missing; run `restore-backup` again and it finishes the restore, after the same checks. It takes the newest `rustmail.db.schema1-<timestamp>` as the file it moved away and leaves every kept file as it is. It refuses instead when the files do not show that state, for example when no `rustmail.db.schema1-<timestamp>` sits beside the backup or the newest one is not a schema-1 database, and its message says which file to move by hand.
+
 ::: warning Mail received after the upgrade is not restored
 The backup holds the mailbox as it was when you upgraded. Mail received after that, and any changes such as deletions or read flags, exist only in the schema-1 file (`rustmail.db.schema1-<timestamp>`). Starting the new version again on the restored file upgrades it again.
 :::
