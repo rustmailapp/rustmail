@@ -29,7 +29,8 @@ export interface RawAnchor {
  * click to a script, the file system or an external protocol handler.
  */
 const LISTED_SCHEMES = new Set(["http", "https", "mailto", "tel"]);
-const TEXT_URL = /\bhttps?:\/\/[^\s<>"'`[\]{}]+/gi;
+const TEXT_URL =
+  /\bhttps?:\/\/(?:\[[\da-f:.]+\]|[^\s<>"'`[\]{}])[^\s<>"'`[\]{}]*/gi;
 const TRAILING_PUNCTUATION = /[.,;:!?]$/;
 const LOOPBACK_V4 = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 const LOCAL_HOSTS = new Set(["localhost", "[::1]"]);
