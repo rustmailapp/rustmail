@@ -345,6 +345,25 @@ pub enum RestoreRefusal {
     /// The name that is taken.
     kept: PathBuf,
   },
+  /// The database is missing beside its backup, but the files beside them do
+  /// not show a restore that stopped between its two renames.
+  #[error(
+    "{} is missing and its backup {} exists, but {reason}, so restore-backup cannot tell \
+     that it stopped between its two renames; nothing was changed. If {} holds the mail you \
+     want, move it to {} by hand.",
+    .database.display(),
+    .backup.display(),
+    .backup.display(),
+    .database.display()
+  )]
+  NotAnInterruptedRestore {
+    /// The missing database.
+    database: PathBuf,
+    /// The backup, `<db>.schema0.bak`.
+    backup: PathBuf,
+    /// What the files beside them show instead.
+    reason: String,
+  },
 }
 
 /// SQLite primary result code for `SQLITE_BUSY`.

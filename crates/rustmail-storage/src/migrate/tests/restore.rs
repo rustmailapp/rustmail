@@ -308,3 +308,164 @@ async fn a_restore_is_refused_beside_a_stray_migration_copy() {
   );
   assert_untouched(&db, &db_contents, &backup_bytes).await;
 }
+
+const INTERRUPTED_KEPT_SUFFIX: &str = ".schema1-20260101T000000Z";
+const OTHER_KEPT_SUFFIX: &str = ".schema1-20250101T000000Z";
+
+/// Copies the database's write-ahead log into it and closes it, as a restore
+/// does before its first rename.
+async fn checkpoint(db: &Path) {
+  let pool = legacy::open_plain(db).await;
+  sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+    .execute(&pool)
+    .await
+    .unwrap();
+  pool.close().await;
+  assert_no_sidecars(db);
+}
+
+/// Migrates a legacy database and moves the schema-1 file to a kept name by
+/// hand, as a restore that stopped after its first rename leaves it, and
+/// returns the kept path.
+async fn interrupted_after_first_rename(db: &Path) -> PathBuf {
+  migrated_with_new_mail(db, 2).await;
+  checkpoint(db).await;
+  let kept = sidecar(db, INTERRUPTED_KEPT_SUFFIX);
+  std::fs::rename(db, &kept).unwrap();
+  kept
+}
+
+/// Asserts a refused resume left the database missing and the backup and
+/// kept files as they were.
+fn assert_resume_untouched(db: &Path, backup_bytes: &[u8], kept: &[(PathBuf, Vec<u8>)]) {
+  assert!(!db.exists());
+  assert_eq!(
+    std::fs::read(sidecar(db, BACKUP_SUFFIX)).unwrap(),
+    backup_bytes
+  );
+  for (path, bytes) in kept {
+    assert_eq!(&std::fs::read(path).unwrap(), bytes);
+  }
+}
+
+#[tokio::test]
+async fn a_restore_interrupted_between_its_renames_is_finished() {
+  let (_dir, db) = scratch();
+  let kept = interrupted_after_first_rename(&db).await;
+  let backup = sidecar(&db, BACKUP_SUFFIX);
+  let legacy_bytes = std::fs::read(&backup).unwrap();
+  let kept_bytes = std::fs::read(&kept).unwrap();
+  let before = legacy_snapshot(&backup).await;
+
+  let report = restore_backup(&db).await.unwrap();
+
+  assert_eq!(
+    report,
+    RestoreReport {
+      database: db.clone(),
+      restored_from: backup.clone(),
+      kept_as: kept.clone(),
+    }
+  );
+  assert_eq!(std::fs::read(&db).unwrap(), legacy_bytes);
+  assert!(!backup.exists());
+  assert_eq!(std::fs::read(&kept).unwrap(), kept_bytes);
+  assert_eq!(kept_files(&db), vec![kept.clone()]);
+  assert_eq!(scalar(&db, "PRAGMA user_version").await, 0);
+  let pool = legacy::open_plain(&db).await;
+  legacy::initialize_as_v0_7_0(&pool).await.unwrap();
+  pool.close().await;
+  assert_eq!(legacy_snapshot(&db).await, before);
+  assert_no_sidecars(&db);
+  assert_no_sidecars(&kept);
+}
+
+#[tokio::test]
+async fn an_interrupted_restore_with_two_kept_files_is_refused() {
+  let (_dir, db) = scratch();
+  let kept = interrupted_after_first_rename(&db).await;
+  let other = sidecar(&db, OTHER_KEPT_SUFFIX);
+  std::fs::copy(&kept, &other).unwrap();
+  let backup_bytes = std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  let kept_contents = vec![
+    (kept.clone(), std::fs::read(&kept).unwrap()),
+    (other.clone(), std::fs::read(&other).unwrap()),
+  ];
+
+  let error = restore_backup(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      &error,
+      StorageError::RestoreRefused(RestoreRefusal::NotAnInterruptedRestore { database, .. })
+        if *database == db
+    ),
+    "got {error:?}"
+  );
+  let message = error.to_string();
+  assert!(message.contains(&kept.display().to_string()), "{message}");
+  assert!(message.contains(&other.display().to_string()), "{message}");
+  assert_resume_untouched(&db, &backup_bytes, &kept_contents);
+}
+
+#[tokio::test]
+async fn an_interrupted_restore_whose_kept_file_is_not_schema_1_is_refused() {
+  let (_dir, db) = scratch();
+  let kept = interrupted_after_first_rename(&db).await;
+  std::fs::copy(sidecar(&db, BACKUP_SUFFIX), &kept).unwrap();
+  let backup_bytes = std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  let kept_contents = vec![(kept.clone(), std::fs::read(&kept).unwrap())];
+
+  let error = restore_backup(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      &error,
+      StorageError::RestoreRefused(RestoreRefusal::NotAnInterruptedRestore { reason, .. })
+        if reason.contains("schema 0")
+    ),
+    "got {error:?}"
+  );
+  assert_resume_untouched(&db, &backup_bytes, &kept_contents);
+}
+
+#[tokio::test]
+async fn a_missing_database_without_a_kept_file_is_refused() {
+  let (_dir, db) = scratch();
+  migrated_with_new_mail(&db, 2).await;
+  checkpoint(&db).await;
+  std::fs::remove_file(&db).unwrap();
+  let backup_bytes = std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap();
+
+  let error = restore_backup(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      &error,
+      StorageError::RestoreRefused(RestoreRefusal::NotAnInterruptedRestore { .. })
+    ),
+    "got {error:?}"
+  );
+  assert_resume_untouched(&db, &backup_bytes, &[]);
+}
+
+#[tokio::test]
+async fn an_interrupted_restore_is_refused_while_the_database_has_a_journal_beside_it() {
+  let (_dir, db) = scratch();
+  let kept = interrupted_after_first_rename(&db).await;
+  let journal = sidecar(&db, JOURNAL_SUFFIX);
+  std::fs::write(&journal, b"hot").unwrap();
+  let backup_bytes = std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  let kept_contents = vec![(kept.clone(), std::fs::read(&kept).unwrap())];
+
+  let error = restore_backup(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      &error,
+      StorageError::RestoreRefused(RestoreRefusal::FileInUse { file, .. }) if *file == journal
+    ),
+    "got {error:?}"
+  );
+  assert_resume_untouched(&db, &backup_bytes, &kept_contents);
+}
