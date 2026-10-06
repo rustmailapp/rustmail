@@ -29,6 +29,8 @@ const MAX_SETTLED_FETCHES = 4;
 const PAST_UNDO_WINDOW_MS = 6_000;
 /** The focus marker on the selected row, as `shadowGeometry` reports it. */
 const LEFT_MARKER = "2px 0px 0px 0px inset";
+/** The list area's fallback focus outline as width, style and offset. */
+const FALLBACK_OUTLINE = "2px solid -2px";
 
 function list(page: Page): Locator {
   return page.getByRole("listbox", { name: "Messages" });
@@ -65,6 +67,22 @@ async function shadowGeometry(target: Locator): Promise<string[]> {
       ...(layer.includes("inset") ? ["inset"] : []),
     ].join(" "),
   );
+}
+
+/**
+ * The outline drawn around the list area, or `none` when there is none.
+ *
+ * It is the focus cue of last resort, for when no selected row is rendered to
+ * carry the left marker.
+ */
+function listOutline(page: Page): Promise<string> {
+  return list(page)
+    .locator("..")
+    .evaluate((el) => {
+      const style = getComputedStyle(el);
+      if (style.outlineStyle === "none") return "none";
+      return `${style.outlineWidth} ${style.outlineStyle} ${style.outlineOffset}`;
+    });
 }
 
 function activeRole(page: Page): Promise<string> {
@@ -340,6 +358,46 @@ test.describe("inbox keyboard navigation", () => {
       Number(await selectedOption(page).getAttribute("aria-setsize")),
     ).toBeLessThanOrEqual(TOTAL_MESSAGES);
     expect(await position(page)).toBe(DEEP_TARGET_POSITION);
+  });
+});
+
+test.describe("list focus cue", () => {
+  test("outlines the list once Escape clears the selection", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await page.keyboard.press("Escape");
+
+    await expect(selectedOption(page)).toHaveCount(0);
+    await expect.poll(() => listOutline(page)).toBe(FALLBACK_OUTLINE);
+    await expect(page.locator(".inbox-row-selected")).toHaveCount(0);
+  });
+
+  test("outlines the list once the selected row scrolls away", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await page.mouse.move(200, 400);
+    await page.mouse.wheel(0, 6000);
+    await expect.poll(() => selectedOption(page).count()).toBe(0);
+
+    await expect.poll(() => listOutline(page)).toBe(FALLBACK_OUTLINE);
+  });
+
+  test("leaves only the row marker while the selected row is rendered", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await tabToList(page);
+
+    await expect
+      .poll(() => shadowGeometry(selectedOption(page)))
+      .toEqual([LEFT_MARKER]);
+    expect(await listOutline(page)).toBe("none");
   });
 });
 
