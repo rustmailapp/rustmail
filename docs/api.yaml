@@ -274,7 +274,7 @@ paths:
       summary: Download raw RFC 822 message source
       description: >
         Returns the whole source by default. Pass `limit` to read only the
-        first N bytes, which is what the UI's Raw tab does so that opening a
+        first N bytes, which is what the UI's Raw view does so that opening a
         multi-megabyte message neither transfers nor renders all of it.
       tags: [Messages]
       parameters:
