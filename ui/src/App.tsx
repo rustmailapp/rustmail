@@ -10,6 +10,7 @@ import ConfirmDialog, {
 } from "./components/ConfirmDialog";
 import UndoToast from "./components/UndoToast";
 import Notices from "./components/Notices";
+import StatusBar from "./components/StatusBar";
 import {
   connectWebSocket,
   disconnectWebSocket,
@@ -29,6 +30,11 @@ import {
   clearFilters,
 } from "./stores/messages";
 import { settingsOpen } from "./stores/settings";
+import {
+  closeDetails,
+  detailsDrawerOpen,
+  toggleDetails,
+} from "./stores/layout";
 import "./stores/theme";
 import "./stores/palette";
 import { rustedToast } from "./stores/rusted";
@@ -112,8 +118,14 @@ export default function App() {
           ?.focus();
         break;
       }
+      case "i": {
+        if (selectedId()) toggleDetails();
+        break;
+      }
       case "Escape": {
-        if (hasActiveFilters()) {
+        if (detailsDrawerOpen() && selectedId()) {
+          closeDetails();
+        } else if (hasActiveFilters()) {
           clearFilters();
         } else {
           setSelectedId(null);
@@ -142,20 +154,22 @@ export default function App() {
   });
 
   return (
-    <div class="app-shell flex flex-col h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <Header />
-      <div class="flex flex-1 overflow-hidden">
-        <div class="w-96 flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 overflow-hidden flex flex-col">
+    <div class="app-shell flex flex-col h-screen gap-2.5 p-2.5 text-zinc-900 dark:text-zinc-100">
+      <div class="flex flex-1 min-h-0 gap-2.5">
+        <aside
+          aria-label="Inbox"
+          class="app-panel w-90 flex-shrink-0 overflow-hidden flex flex-col"
+        >
+          <Header />
           <FilterBar />
           <Inbox />
-        </div>
-        <div class="flex-1 overflow-hidden">
-          <MessageDetail />
-        </div>
+        </aside>
+        <MessageDetail />
       </div>
+      <StatusBar />
       <Settings />
       <ConfirmDialog />
-      <div class="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
+      <div class="pointer-events-none fixed bottom-14 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
         <Notices />
         <UndoToast />
         <div role="status" class="contents">

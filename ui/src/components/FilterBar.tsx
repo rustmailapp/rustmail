@@ -273,18 +273,32 @@ export default function FilterBar() {
   }
 
   return (
-    <div class="flex-shrink-0 border-b border-zinc-200 dark:border-zinc-800/50">
-      <div class="px-3 pt-2.5 pb-2">
+    <div class="flex-shrink-0">
+      <label class="relative block mx-3 mb-2">
+        <svg
+          class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          stroke-width="2"
+          aria-hidden="true"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
+          />
+        </svg>
         <input
           type="text"
           placeholder="Search emails..."
           value={search()}
           onInput={(e) => onSearchInput(e.currentTarget.value)}
-          class="w-full rounded-md border border-zinc-300 dark:border-zinc-800 bg-zinc-100 dark:bg-zinc-900 px-3 py-1.5 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-500 outline-none focus:border-zinc-400 dark:focus:border-zinc-600 transition"
+          class="w-full rounded-md border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-950/40 pl-8 pr-3 py-1.5 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 outline-none focus:border-zinc-400 dark:focus:border-zinc-500 transition"
         />
-      </div>
+      </label>
 
-      <div class="flex flex-wrap items-center gap-1.5 px-3 pb-2">
+      <div class="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
         <Chip
           label="Starred"
           icon={"\u2605"}

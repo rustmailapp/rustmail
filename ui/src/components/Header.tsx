@@ -9,31 +9,31 @@ import { toggleSettings } from "../stores/settings";
 import { registerLogoClick } from "../stores/rusted";
 import { confirm } from "./ConfirmDialog";
 
+/** The inbox panel's title row: brand, message count and inbox-wide actions. */
 export default function Header() {
   return (
-    <header class="flex items-center gap-3 border-b border-zinc-200 dark:border-zinc-800 px-4 py-3">
-      <div class="flex items-center gap-2">
-        <img
-          src="/logo.webp"
-          alt="RustMail"
-          class="size-12 rounded-md"
-          onClick={registerLogoClick}
-        />
-        <h1 class="font-brand text-xl font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-300 dark:to-white bg-clip-text text-transparent">
+    <header class="flex items-center gap-2.5 px-3 pt-3 pb-2.5">
+      <img
+        src="/logo.webp"
+        alt="RustMail"
+        class="size-8 rounded-md"
+        onClick={registerLogoClick}
+      />
+      <div class="min-w-0 flex items-baseline gap-2">
+        <h1 class="font-brand text-lg font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-300 dark:to-white bg-clip-text text-transparent">
           RustMail
         </h1>
+        <span class="text-xs tabular-nums text-zinc-500 dark:text-zinc-500 truncate">
+          {total()} {total() === 1 ? "message" : "messages"}
+        </span>
       </div>
 
       <div class="flex-1" />
 
-      <div class="flex items-center gap-3">
-        <span class="text-xs text-zinc-500 dark:text-zinc-500">
-          {total()} {total() === 1 ? "message" : "messages"}
-        </span>
-
+      <div class="flex items-center gap-1.5">
         <button
           onClick={toggleSettings}
-          class="rounded-md border border-zinc-300 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 transition cursor-pointer"
+          class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-800 dark:hover:text-zinc-200 transition cursor-pointer"
           title="Settings"
         >
           <svg
@@ -62,7 +62,7 @@ export default function Header() {
               const ok = await confirm(clearInboxPrompt());
               if (ok) await clearInbox();
             }}
-            class="btn-destructive rounded-md border px-2.5 py-1 text-xs font-medium transition cursor-pointer"
+            class="btn-destructive rounded-md border px-2 py-0.5 text-xs font-medium transition cursor-pointer"
           >
             Clear all
           </button>

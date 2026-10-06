@@ -27,7 +27,8 @@ import {
   heldRefresh,
   setLiveHeld,
 } from "../stores/messages";
-import { formatDate, formatSize } from "../lib/format";
+import { formatDate } from "../lib/format";
+import { PaperclipIcon, StarIcon } from "./icons";
 import type { MessageSummary } from "../lib/types";
 
 /**
@@ -36,7 +37,7 @@ import type { MessageSummary } from "../lib/types";
  * Rows are measured once rendered, so this only has to be close enough to size
  * the scrollbar before anything is on screen.
  */
-const ROW_ESTIMATE_PX = 85;
+const ROW_ESTIMATE_PX = 56;
 const OVERSCAN_ROWS = 8;
 /** Distance from the end of the loaded list that starts the next page. */
 const LOAD_MORE_ROW_THRESHOLD = 10;
@@ -155,7 +156,7 @@ export default function Inbox() {
     <div
       ref={scroller}
       onScroll={followScroll}
-      class="flex flex-col overflow-y-auto h-full"
+      class="flex-1 min-h-0 flex flex-col overflow-y-auto pb-2"
     >
       <Show when={heldArrivals() > 0 || heldRefresh()}>
         <div class="sticky top-0 z-10 h-0 flex justify-center">
@@ -242,7 +243,7 @@ export default function Inbox() {
               <div
                 role="presentation"
                 ref={row}
-                class="absolute top-0 left-0 w-full"
+                class="absolute top-0 left-0 w-full px-2 pb-0.5"
                 style={{ transform: `translateY(${item.start}px)` }}
               >
                 <Show when={msg()}>
@@ -263,9 +264,19 @@ export default function Inbox() {
   );
 }
 
+/** The envelope line under a row's subject: who sent it, and to whom. */
+function routeLine(msg: MessageSummary): string {
+  const sender = msg.sender || "(no sender)";
+  const [first, ...rest] = msg.recipients;
+  if (first === undefined) return sender;
+  const more = rest.length > 0 ? ` +${rest.length}` : "";
+  return `${sender} \u2192 ${first}${more}`;
+}
+
 function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
   const msg = props.msg;
   const isSelected = () => selectedId() === msg().id;
+  const emphasised = () => isSelected() || !msg().is_read;
 
   return (
     <div
@@ -276,16 +287,16 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
       aria-setsize={listSize()}
       data-id={msg().id}
       onClick={() => selectMessage(msg())}
-      class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
+      class={`w-full text-left rounded-lg px-2.5 py-2 transition cursor-pointer ${
         isSelected()
           ? "inbox-row-selected"
-          : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
+          : "hover:bg-zinc-100/80 dark:hover:bg-zinc-800/50"
       }`}
     >
-      <div class="flex items-start gap-3">
-        <div class="flex-shrink-0 mt-0.5 flex flex-col items-center gap-1">
+      <div class="flex items-start gap-2.5">
+        <div class="flex-shrink-0 flex flex-col items-center gap-1 pt-0.5">
           <div
-            class={`size-2 rounded-full mt-1.5 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
+            class={`size-2 rounded-full mt-1 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
           />
           <button
             tabIndex={-1}
@@ -296,63 +307,39 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
             class="cursor-pointer"
             title={msg().is_starred ? "Unstar" : "Star"}
           >
-            <svg
-              class={`size-3.5 transition ${msg().is_starred ? "text-amber-400 fill-amber-400" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"}`}
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="2"
-              fill={msg().is_starred ? "currentColor" : "none"}
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.562 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"
-              />
-            </svg>
+            <StarIcon
+              class={`size-3.5 transition ${msg().is_starred ? "text-amber-400" : "text-zinc-300 dark:text-zinc-600 hover:text-amber-400"}`}
+              filled={msg().is_starred}
+            />
           </button>
         </div>
         <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between gap-2">
+          <div class="flex items-baseline justify-between gap-2">
             <span
-              class={`text-sm truncate ${msg().is_read && !isSelected() ? "text-zinc-400 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100 font-medium"}`}
-            >
-              {msg().sender || "(no sender)"}
-            </span>
-            <span class="text-xs text-zinc-500 dark:text-zinc-600 flex-shrink-0">
-              {formatDate(msg().created_at)} · {formatSize(msg().size)}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 mt-0.5">
-            <span
-              class={`text-sm truncate ${msg().is_read && !isSelected() ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-700 dark:text-zinc-200"}`}
+              class={`text-sm truncate ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               {msg().subject || "(no subject)"}
             </span>
-            <Show when={msg().has_attachments}>
-              <svg
-                class="size-3.5 flex-shrink-0 text-zinc-500 dark:text-zinc-500"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                stroke-width="2"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13"
-                />
-              </svg>
-            </Show>
+            <span
+              class={`text-[11px] tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-400 dark:text-zinc-500"}`}
+            >
+              {formatDate(msg().created_at)}
+            </span>
           </div>
           <div class="flex items-center gap-1.5 mt-0.5">
-            <p class="text-xs text-zinc-500 dark:text-zinc-600 truncate">
-              To: {msg().recipients.join(", ")}
-            </p>
+            <span
+              class={`text-xs truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}`}
+            >
+              {routeLine(msg())}
+            </span>
+            <Show when={msg().has_attachments}>
+              <PaperclipIcon class="size-3 flex-shrink-0 text-zinc-400 dark:text-zinc-500" />
+            </Show>
             <Show when={msg().tags.length > 0}>
-              <div class="flex gap-1 flex-shrink-0">
+              <div class="ml-auto flex gap-1 flex-shrink-0">
                 <For each={msg().tags.slice(0, 3)}>
                   {(tag) => (
-                    <span class="inline-block px-1.5 py-0 rounded-md text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                    <span class="inline-block px-1.5 rounded-md text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
                       {tag}
                     </span>
                   )}

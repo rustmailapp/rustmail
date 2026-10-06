@@ -2,6 +2,8 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 import { mockInbox } from "./inbox-fixture";
 import { REQUEST_TIMEOUT_MS } from "../src/lib/api";
 
+/** Wide enough for the details rail to sit beside the message, not in a drawer. */
+const WIDE_VIEWPORT = { width: 1440, height: 900 };
 const SETTLED_MS = 150;
 const BEFORE_SETTLED_MS = 20;
 const SELECTED_OPTION = '[role="option"][aria-selected="true"]';
@@ -10,7 +12,7 @@ const RAW_BODY = "Subject: Next message\r\n\r\nBody";
 const MESSAGE_READ = {
   name: "message",
   suffix: "",
-  tab: null,
+  opener: null,
   label: "this message",
 } as const;
 const RESOURCES = [
@@ -18,18 +20,25 @@ const RESOURCES = [
   {
     name: "attachments",
     suffix: "/attachments",
-    tab: null,
+    opener: null,
     label: "attachments",
   },
-  { name: "headers", suffix: "/headers", tab: "Headers", label: "headers" },
+  {
+    name: "headers",
+    suffix: "/headers",
+    opener: "Show headers",
+    label: "headers",
+  },
   {
     name: "auth",
     suffix: "/auth",
-    tab: "Auth",
+    opener: null,
     label: "authentication results",
   },
-  { name: "raw", suffix: "/raw", tab: "Raw", label: "the raw source" },
+  { name: "raw", suffix: "/raw", opener: "Raw", label: "the raw source" },
 ] as const;
+
+test.use({ viewport: WIDE_VIEWPORT });
 
 type PaneRead = (typeof RESOURCES)[number];
 
@@ -41,8 +50,8 @@ function readPattern(suffix: string): RegExp {
 /**
  * Answers a read the way a healthy backend would.
  *
- * The inbox fixture serves only the endpoints the list needs, so the reads
- * that sit behind the pane's tabs are filled in here.
+ * A test that routes one of these reads itself takes it away from the inbox
+ * fixture, so the answers a healthy backend would give are filled in here.
  */
 function answer(read: PaneRead, route: Route): Promise<void> {
   switch (read.name) {
@@ -120,9 +129,9 @@ for (const resource of RESOURCES) {
     });
 
     await openFirstMessage(page);
-    if (resource.tab) {
+    if (resource.opener) {
       await page
-        .getByRole("button", { name: resource.tab, exact: true })
+        .getByRole("button", { name: resource.opener, exact: true })
         .click();
     }
     await expect.poll(() => pending).toBe(true);
@@ -171,9 +180,9 @@ for (const resource of RESOURCES) {
     const notice = page.getByText(`Could not load ${resource.label}.`);
 
     await openFirstMessage(page);
-    if (resource.tab) {
+    if (resource.opener) {
       await page
-        .getByRole("button", { name: resource.tab, exact: true })
+        .getByRole("button", { name: resource.opener, exact: true })
         .click();
     }
     await expect(notice).toBeHidden();

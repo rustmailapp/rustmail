@@ -16,6 +16,9 @@ export const MAX_TAG_FILTERS = 20;
 /** Mirrors the clamp the real handler applies to `limit`. */
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 200;
+/** What the fake server says about itself on `GET /info`. */
+export const SERVER_INFO = { version: "0.0.0-test", smtp_port: 2525 };
+const NO_AUTH_RESULTS = { dkim: [], spf: [], dmarc: [], arc: [] };
 
 function clampLimit(limit: number): number {
   return Math.min(Math.max(limit, MIN_LIMIT), MAX_LIMIT);
@@ -90,6 +93,8 @@ export interface ApiCalls {
   fetched: string[];
   /** The query string of every list read, in order. */
   listed: string[];
+  /** The path of every headers read, in order. */
+  headers: string[];
 }
 
 /** Handle on the fake backend: what the UI wrote, and a way to push events. */
@@ -121,7 +126,13 @@ export async function mockInbox(
     ...summary(i),
     ...shape(i),
   }));
-  const calls: ApiCalls = { deleted: [], patched: [], fetched: [], listed: [] };
+  const calls: ApiCalls = {
+    deleted: [],
+    patched: [],
+    fetched: [],
+    listed: [],
+    headers: [],
+  };
   let socket: WebSocketRoute | undefined;
 
   await page.routeWebSocket(WS, (ws) => {
@@ -197,8 +208,26 @@ export async function mockInbox(
         },
       });
     }
+    if (path === "/info") {
+      return route.fulfill({ json: SERVER_INFO });
+    }
     if (/^\/messages\/[^/]+\/attachments$/.test(path)) {
       return route.fulfill({ json: [] });
+    }
+    if (/^\/messages\/[^/]+\/auth$/.test(path)) {
+      return route.fulfill({ json: NO_AUTH_RESULTS });
+    }
+    const headers = /^\/messages\/([^/]+)\/headers$/.exec(path);
+    if (headers) {
+      calls.headers.push(path);
+      const found = all.find((m) => m.id === headers[1]);
+      if (!found) return route.fulfill({ status: NOT_FOUND, json: {} });
+      return route.fulfill({
+        json: [
+          { name: "From", value: found.sender },
+          { name: "Subject", value: found.subject },
+        ],
+      });
     }
     const single = /^\/messages\/([^/]+)$/.exec(path);
     if (single) {

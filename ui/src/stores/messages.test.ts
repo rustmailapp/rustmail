@@ -66,6 +66,7 @@ const {
   heldArrivals,
   heldRefresh,
   setLiveHeld,
+  socketLive,
   total,
   undoDelete,
   undoableId,
@@ -1809,6 +1810,17 @@ describe("loading while the socket will not open", () => {
 
     expect(synced).toHaveBeenCalledOnce();
     expect(synced).toHaveLastReturnedWith(2);
+  });
+
+  it("says whether the live connection is open", () => {
+    connectWebSocket();
+    expect(socketLive()).toBe(false);
+
+    openSocket();
+    expect(socketLive()).toBe(true);
+
+    closeSocket();
+    expect(socketLive()).toBe(false);
   });
 });
 
