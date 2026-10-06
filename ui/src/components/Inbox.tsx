@@ -316,19 +316,19 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
         <div class="flex-1 min-w-0">
           <div class="flex items-baseline justify-between gap-2">
             <span
-              class={`text-sm truncate ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
+              class={`text-sm leading-5 truncate ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
             >
               {msg().subject || "(no subject)"}
             </span>
             <span
-              class={`text-[11px] tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-400 dark:text-zinc-500"}`}
+              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-400 dark:text-zinc-500"}`}
             >
               {formatDate(msg().created_at)}
             </span>
           </div>
           <div class="flex items-center gap-1.5 mt-0.5">
             <span
-              class={`text-xs truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}`}
+              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-500"}`}
             >
               {routeLine(msg())}
             </span>
