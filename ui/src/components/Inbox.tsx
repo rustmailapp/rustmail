@@ -155,7 +155,7 @@ export default function Inbox() {
     <div
       ref={scroller}
       onScroll={followScroll}
-      class="flex flex-col overflow-y-auto h-full has-[[role=listbox]:focus-visible]:ring-2 has-[[role=listbox]:focus-visible]:ring-inset has-[[role=listbox]:focus-visible]:ring-orange-500/60"
+      class="flex flex-col overflow-y-auto h-full"
     >
       <Show when={heldArrivals() > 0 || heldRefresh()}>
         <div class="sticky top-0 z-10 h-0 flex justify-center">
@@ -278,7 +278,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
       onClick={() => selectMessage(msg())}
       class={`w-full text-left px-4 py-3 border-b border-zinc-100 dark:border-zinc-800/50 transition cursor-pointer ${
         isSelected()
-          ? "bg-zinc-100 dark:bg-zinc-800/80 group-focus-visible:ring-2 group-focus-visible:ring-inset group-focus-visible:ring-orange-500"
+          ? "inbox-row-selected"
           : "hover:bg-zinc-50 dark:hover:bg-zinc-900"
       }`}
     >
@@ -314,7 +314,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
         <div class="flex-1 min-w-0">
           <div class="flex items-center justify-between gap-2">
             <span
-              class={`text-sm truncate ${msg().is_read ? "text-zinc-400 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100 font-medium"}`}
+              class={`text-sm truncate ${msg().is_read && !isSelected() ? "text-zinc-400 dark:text-zinc-400" : "text-zinc-900 dark:text-zinc-100 font-medium"}`}
             >
               {msg().sender || "(no sender)"}
             </span>
@@ -324,7 +324,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
           </div>
           <div class="flex items-center gap-1.5 mt-0.5">
             <span
-              class={`text-sm truncate ${msg().is_read ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-700 dark:text-zinc-200"}`}
+              class={`text-sm truncate ${msg().is_read && !isSelected() ? "text-zinc-500 dark:text-zinc-500" : "text-zinc-700 dark:text-zinc-200"}`}
             >
               {msg().subject || "(no subject)"}
             </span>
@@ -352,7 +352,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
               <div class="flex gap-1 flex-shrink-0">
                 <For each={msg().tags.slice(0, 3)}>
                   {(tag) => (
-                    <span class="inline-block px-1.5 py-0 rounded text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                    <span class="inline-block px-1.5 py-0 rounded-md text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
                       {tag}
                     </span>
                   )}
