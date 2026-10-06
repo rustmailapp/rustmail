@@ -828,8 +828,15 @@ async function fetchMessages(): Promise<void> {
   await readFirstPage();
 }
 
-/** A list read that has landed: the count it read, and how to show it. */
-type LandedRead = { total: number; show: () => void };
+/**
+ * A list read that has landed: the count it read, the ids of the rows it
+ * returned, and how to show it.
+ */
+type LandedRead = {
+  total: number;
+  ids: ReadonlySet<string>;
+  show: () => void;
+};
 
 async function readTopPage(
   view: View,
@@ -841,6 +848,7 @@ async function readTopPage(
   );
   return {
     total: res.total,
+    ids: new Set(res.messages.map((m) => m.id)),
     show: () => {
       replaceRows(res.messages);
       dropHeldArrivals();
@@ -854,9 +862,12 @@ async function readTopPage(
  *
  * This is the read while live mail is held: the reader is scrolled into these
  * rows, so replacing them with the first page would move the list under them.
- * Rows above the first loaded one are arrivals and wait behind the pill. A
- * loaded row the read meets takes the server's copy, and one it passes without
- * meeting is gone from the view. The read stops at the loaded tail, at the end
+ * Rows above the first loaded one are arrivals and wait behind the pill. From
+ * the first loaded row the read meets to the last, the server's rows replace
+ * the loaded ones: a loaded row the read meets takes the server's copy, one it
+ * passes without meeting is gone from the view, and a row between them that
+ * was never loaded, such as one starred elsewhere under the starred filter,
+ * joins the list where it falls. The read stops at the loaded tail, at the end
  * of the list, after {@link PAGE_SIZE} rows past the last loaded one it met,
  * which is where a deleted tail leaves it, or once more has arrived than the
  * pill keeps, which only a fresh read on the way back to the top can show.
@@ -901,6 +912,7 @@ async function readLoadedWindow(
     if (passedAll || outranLoaded) {
       return {
         total: res.total,
+        ids: new Set(read.map((m) => m.id)),
         show: () => reconcileWindow(read, passedAll, ended, view),
       };
     }
@@ -918,21 +930,14 @@ function reconcileWindow(
   ended: boolean,
   view: View,
 ): void {
-  const server = new Map(read.map((m) => [m.id, m]));
   const loaded = messages();
   const firstLoaded = read.findIndex((m) => positions.has(m.id));
+  const lastLoaded = read.findLastIndex((m) => positions.has(m.id));
   const arrivals = firstLoaded < 0 ? read : read.slice(0, firstLoaded);
-  let passedUpTo = passedAll ? loaded.length - 1 : -1;
-  if (!passedAll) {
-    loaded.forEach((m, i) => {
-      if (server.has(m.id)) passedUpTo = i;
-    });
-  }
-  const kept = loaded.flatMap((m, i) => {
-    const fresh = server.get(m.id);
-    if (fresh !== undefined) return [fresh];
-    return i <= passedUpTo ? [] : [m];
-  });
+  const met = firstLoaded < 0 ? [] : read.slice(firstLoaded, lastLoaded + 1);
+  const lastMet = lastLoaded < 0 ? -1 : indexOfRow(read[lastLoaded].id);
+  const unmet = passedAll ? [] : loaded.slice(lastMet + 1);
+  const kept = [...met, ...unmet];
   const last = kept.at(-1) ?? arrivals.at(-1);
   const lastRead =
     last === undefined ? -1 : read.findIndex((m) => m.id === last.id);
@@ -972,7 +977,7 @@ async function readFirstPage(): Promise<boolean> {
         landed.show();
         setStoredTotal(landed.total);
         searchStale = false;
-        applyEvents(eventsDuringRead ?? []);
+        replayEvents(eventsDuringRead ?? [], landed.ids);
       });
       if (raced) void refreshTotal();
       return true;
@@ -1239,6 +1244,27 @@ function applyEvents(events: readonly WsEvent[]): void {
     applyEvent(event);
   }
   admitArrivals(arrivals);
+}
+
+/**
+ * Applies the events that arrived while a list read was in flight over the
+ * list it returned.
+ *
+ * Arrivals are announced in the order they commit, so every arrival up to the
+ * last one among the rows the read returned, `read`, was already in the read,
+ * and counted in its total even when it sits past the rows it returned; only
+ * the arrivals after it are new.
+ */
+function replayEvents(
+  events: readonly ReplayableEvent[],
+  read: ReadonlySet<string>,
+): void {
+  const lastInRead = events.findLastIndex(
+    (event) => event.type === "message:new" && read.has(event.data.id),
+  );
+  applyEvents(
+    events.filter((event, i) => i > lastInRead || event.type !== "message:new"),
+  );
 }
 
 function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {

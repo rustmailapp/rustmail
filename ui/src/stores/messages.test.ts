@@ -1411,6 +1411,21 @@ describe("arrivals while the reader is scrolled away", () => {
     expect(filteredMessages().map((m) => m.is_starred)).toEqual([false, true]);
   });
 
+  it("lets in a match a held resync finds between loaded rows", async () => {
+    const starred = (n: number) => message(n, { is_starred: true });
+    serve([starred(0), starred(2), starred(4)]);
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    setLiveHeld(true);
+    serve([starred(0), starred(1), starred(2), starred(4)]);
+
+    await resync();
+
+    expect(ids()).toEqual(["id-0", "id-1", "id-2", "id-4"]);
+    expect(heldArrivals()).toBe(0);
+    expect(total()).toBe(4);
+  });
+
   it("reconciles loaded rows past the first page on a held resync", async () => {
     const rows = range(PAGE_SIZE + 50);
     serve(rows);
@@ -1489,6 +1504,25 @@ describe("arrivals while the reader is scrolled away", () => {
     await resync();
 
     expect(ids()).toEqual(["id-0", "id-1"]);
+  });
+
+  it("counts arrivals a held resync finds past what it holds once", async () => {
+    setLiveHeld(true);
+    const arrivals = Array.from({ length: MAX_LIVE_ROWS + 1 }, (_, i) =>
+      message(1000 + i),
+    );
+    const rows = [...arrivals.toReversed(), ...range(2)];
+    serve(rows);
+
+    openSocket();
+    for (const m of arrivals) {
+      receive(JSON.stringify({ type: "message:new", data: m }));
+    }
+    nextFrame();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+
+    expect(heldArrivals()).toBe(arrivals.length);
+    expect(total()).toBe(rows.length);
   });
 
   it("puts the held arrivals on top once the reader is back there", () => {
@@ -1700,6 +1734,29 @@ describe("resync when the socket opens", () => {
       "id-1",
     ]);
     expect(total()).toBe(3);
+  });
+
+  it("counts an arrival the read holds past its first page once", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+    const arrivals = Array.from({ length: PAGE_SIZE + 1 }, (_, i) =>
+      message(1000 + i),
+    );
+
+    for (const m of arrivals) {
+      receive(JSON.stringify({ type: "message:new", data: m }));
+    }
+    nextFrame();
+    const newest = arrivals.slice(1).toReversed();
+    read.resolve({ messages: newest, total: arrivals.length });
+
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    expect(filteredMessages().map((m) => m.id)).toEqual(
+      newest.map((m) => m.id),
+    );
+    expect(total()).toBe(arrivals.length);
   });
 
   it("keeps a flag change made while the read is in flight", async () => {
