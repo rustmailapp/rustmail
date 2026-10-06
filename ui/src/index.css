@@ -46,6 +46,15 @@
   box-shadow: inset 2px 0 0 var(--color-orange-500);
 }
 
+.inbox-list:has(> [role="listbox"]:focus-visible):not(
+    :has(.inbox-row-selected)
+  ) {
+  outline: 2px solid
+    color-mix(in oklch, var(--color-orange-500) 40%, transparent);
+  outline-offset: -2px;
+  border-radius: var(--radius-lg);
+}
+
 .font-brand {
   font-family: var(--font-brand);
 }
