@@ -14,33 +14,17 @@ import {
 } from "../stores/messages";
 import { wideLayout } from "../stores/layout";
 import * as api from "../lib/api";
+import {
+  COPIED_FEEDBACK_MS,
+  MANUAL_COPY_HINT,
+  MANUAL_COPY_HINT_MS,
+  writeClipboard,
+  type CopyFeedback,
+} from "../lib/clipboard";
 import { CopyIcon } from "./icons";
-
-/** How long the copy button says it copied before it goes back to "Copy". */
-const COPIED_FEEDBACK_MS = 1500;
-/** How long the hint to copy by hand stays up when the clipboard is out of reach. */
-const MANUAL_COPY_HINT_MS = 4000;
 
 const ENDPOINT_TITLE =
   "The SMTP port this server listens on. Docker or proxy port mappings can expose a different one.";
-
-type CopyFeedback = "copied" | "manual";
-
-/**
- * Writes `text` to the clipboard, reporting whether it landed.
- *
- * The async clipboard exists only in secure contexts, so a portal opened over
- * plain http from another machine on the LAN has none.
- */
-async function writeClipboard(text: string): Promise<boolean> {
-  if (!navigator.clipboard) return false;
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function Key(props: { children: JSX.Element }) {
   return (
@@ -145,7 +129,7 @@ export default function StatusBar() {
                 feedback() === "copied"
                   ? "Copied"
                   : feedback() === "manual"
-                    ? "Press Cmd/Ctrl+C to copy"
+                    ? MANUAL_COPY_HINT
                     : "Copy the SMTP address"
               }
               title={feedback() === "copied" ? "Copied" : "Copy"}
@@ -155,7 +139,7 @@ export default function StatusBar() {
             </button>
             <Show when={feedback() === "manual"}>
               <span class="text-zinc-600 dark:text-zinc-300">
-                Press Cmd/Ctrl+C to copy
+                {MANUAL_COPY_HINT}
               </span>
             </Show>
           </span>

@@ -12,6 +12,13 @@ import { liveSummary } from "../stores/messages";
 import { notify } from "../stores/notices";
 import * as api from "../lib/api";
 import { formatDateTime, formatSize } from "../lib/format";
+import {
+  COPIED_FEEDBACK_MS,
+  MANUAL_COPY_HINT,
+  MANUAL_COPY_HINT_MS,
+  writeClipboard,
+  type CopyFeedback,
+} from "../lib/clipboard";
 import { extractLinks, type MessageLink } from "../lib/links";
 import type {
   Attachment,
@@ -332,30 +339,6 @@ function AttachmentsSection(props: {
 
 /** How many links show before the reader asks for the rest. */
 const LINKS_PREVIEW = 8;
-/** How long a copy button says it copied before it goes back to "Copy". */
-const COPIED_FEEDBACK_MS = 1500;
-/** How long the hint to copy by hand stays up when the clipboard is out of reach. */
-const MANUAL_COPY_HINT_MS = 4000;
-const MANUAL_COPY_HINT = "Press Cmd/Ctrl+C to copy";
-
-type CopyFeedback = "copied" | "manual";
-
-/**
- * Writes `text` to the clipboard, reporting whether it landed.
- *
- * The async clipboard exists only in secure contexts, so a portal opened over
- * plain http from another machine on the LAN has none.
- */
-async function writeClipboard(text: string): Promise<boolean> {
-  if (!navigator.clipboard) return false;
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Every link the message points at, flagging the ones that should not ship.
  *
