@@ -1090,6 +1090,8 @@ const MAX_RECONNECT_DELAY = 30000;
 let reconnectDelay = RECONNECT_BASE_DELAY;
 let currentWs: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+/** Whether the live connection is open, so the UI can say it is reconnecting. */
+const [socketLive, setSocketLive] = createSignal(false);
 
 /**
  * How long the first socket may take to open before the list is read over
@@ -1378,6 +1380,7 @@ function openSocket(): WebSocket {
 
   ws.onopen = () => {
     opened = true;
+    setSocketLive(true);
     stopHttpFallback();
     reconnectDelay = RECONNECT_BASE_DELAY;
     syncList();
@@ -1395,6 +1398,7 @@ function openSocket(): WebSocket {
 
   ws.onclose = () => {
     currentWs = null;
+    setSocketLive(false);
     if (!opened) loadOverHttp();
     const jitter = reconnectDelay * (0.5 + Math.random() * 0.5);
     reconnectTimer = setTimeout(openSocket, jitter);
@@ -1414,6 +1418,7 @@ function closeSocket(): void {
     currentWs.close();
     currentWs = null;
   }
+  setSocketLive(false);
 }
 
 function disconnectWebSocket(): void {
@@ -1482,4 +1487,5 @@ export {
   fetchMessages,
   connectWebSocket,
   disconnectWebSocket,
+  socketLive,
 };

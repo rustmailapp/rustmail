@@ -15,7 +15,8 @@ These work anywhere in the UI.
 | `D` | Delete all messages |
 | `s` | Star or unstar the selected message |
 | `/` | Focus search bar |
-| `Esc` | Clear active filters, or close the message detail panel |
+| `i` | Open or close the message details drawer (windows under 1300px wide) |
+| `Esc` | Close the details drawer first; otherwise clear active filters, or close the message detail panel |
 
 `d` leaves the message out of the list straight away, but waits a few seconds
 before deleting it, so `u`, or the **Undo** button on the notice that appears,
@@ -51,4 +52,6 @@ make no such exception.
 
 Shortcuts are active when no input field is focused, and are ignored when a
 modifier key is held, so browser chords such as `Cmd`/`Ctrl`+`D` keep their
-normal behaviour.
+normal behaviour. The one exception is `Esc` inside the details drawer: it
+closes the drawer even from the tag input, and focus goes back to whatever
+opened it.

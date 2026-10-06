@@ -7,10 +7,27 @@
     sans-serif;
   --font-brand: "Sora", var(--font-system);
   --rm-selection: var(--color-zinc-100);
+  --rm-canvas: var(--color-zinc-100);
+  --rm-panel: var(--color-white);
+  --rm-panel-alpha: 90%;
+  --rm-panel-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-zinc-300) 40%, transparent),
+    0 1px 2px color-mix(in oklab, var(--color-zinc-950) 4%, transparent),
+    0 8px 24px -12px color-mix(in oklab, var(--color-zinc-950) 16%, transparent);
 }
 
 .dark {
   --rm-selection: color-mix(in oklch, var(--color-zinc-800) 80%, transparent);
+  --rm-canvas: var(--color-zinc-950);
+  --rm-panel: color-mix(
+    in oklab,
+    var(--color-zinc-900) 70%,
+    var(--color-zinc-950)
+  );
+  --rm-panel-alpha: 88%;
+  --rm-panel-shadow:
+    0 0 0 1px color-mix(in oklab, var(--color-white) 5%, transparent),
+    0 8px 28px -12px color-mix(in oklab, black 60%, transparent);
 }
 
 @layer base {
@@ -39,9 +56,36 @@
 }
 
 .app-shell {
+  background-color: var(--rm-canvas);
   background-image: var(--rm-glow);
   background-size: 100% 320px;
   background-repeat: no-repeat;
+}
+
+.app-panel {
+  background-color: color-mix(
+    in oklab,
+    var(--rm-panel) var(--rm-panel-alpha),
+    transparent
+  );
+  border-radius: var(--radius-xl);
+  box-shadow: var(--rm-panel-shadow);
+}
+
+.details-drawer {
+  background-color: var(--rm-panel);
+  box-shadow: -16px 0 32px -20px
+    color-mix(in oklab, var(--color-zinc-950) 35%, transparent);
+}
+
+.sender-avatar {
+  background-color: oklch(0.9 0.06 var(--avatar-hue));
+  color: oklch(0.42 0.12 var(--avatar-hue));
+}
+
+.dark .sender-avatar {
+  background-color: oklch(0.36 0.08 var(--avatar-hue));
+  color: oklch(0.92 0.06 var(--avatar-hue));
 }
 
 .palette-glow {

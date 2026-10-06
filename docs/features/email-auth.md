@@ -1,10 +1,12 @@
 # Email Authentication Results
 
-RustMail parses email authentication headers and displays them in a dedicated **Auth** tab in the message detail view. No other local mail catcher offers this.
+RustMail parses email authentication headers and displays them in the **Authentication** section of the message details rail. No other local mail catcher offers this.
+
+On a window 1300px wide or more, the details rail sits beside the message. Below that it becomes a drawer over the message body, opened with the **Details** button or `i`; while the drawer is closed, compact SPF and DKIM badges next to the Preview / Text / Raw switch show the first verdict of each.
 
 ## What It Shows
 
-The Auth tab extracts and displays results from four header types:
+The Authentication section extracts and displays results from four header types:
 
 | Header | Standard | What It Tells You |
 |--------|----------|-------------------|
@@ -63,4 +65,4 @@ RustMail does **not** perform cryptographic DKIM verification or DNS-based SPF/D
 - Checking SPF alignment in staging environments
 - Inspecting ARC chains on forwarded messages
 
-If no authentication headers are present (common for locally-generated test emails), the Auth tab shows an empty state.
+If no authentication headers are present (common for locally-generated test emails), the Authentication section says so instead.
