@@ -287,7 +287,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
       aria-setsize={listSize()}
       data-id={msg().id}
       onClick={() => selectMessage(msg())}
-      class={`w-full text-left rounded-lg px-2.5 py-2 transition cursor-pointer ${
+      class={`group/row w-full text-left rounded-lg px-2.5 py-2 transition cursor-pointer ${
         isSelected()
           ? "inbox-row-selected"
           : "hover:bg-zinc-100/80 dark:hover:bg-zinc-800/50"
@@ -321,14 +321,14 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
               {msg().subject || "(no subject)"}
             </span>
             <span
-              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"}`}
+              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
             >
               {formatDate(msg().created_at)}
             </span>
           </div>
           <div class="flex items-center gap-1.5 mt-0.5">
             <span
-              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"}`}
+              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
             >
               {routeLine(msg())}
             </span>
@@ -345,7 +345,7 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
                   )}
                 </For>
                 <Show when={msg().tags.length > 3}>
-                  <span class="text-[10px] text-zinc-500 dark:text-zinc-400">
+                  <span class="text-[10px] text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400">
                     +{msg().tags.length - 3}
                   </span>
                 </Show>

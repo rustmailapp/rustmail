@@ -312,7 +312,7 @@ function AttachmentsSection(props: {
                     <a
                       href={api.attachmentUrl(props.message.id, att.id)}
                       download={att.filename || "attachment"}
-                      class="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+                      class="group/attachment flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
                     >
                       <PaperclipIcon class="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500" />
                       <span class="min-w-0 flex-1 truncate">
@@ -320,7 +320,7 @@ function AttachmentsSection(props: {
                       </span>
                       <Show when={att.size}>
                         {(size) => (
-                          <span class="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
+                          <span class="shrink-0 tabular-nums text-zinc-500 group-hover/attachment:text-zinc-600 dark:text-zinc-400 dark:group-hover/attachment:text-zinc-400">
                             {formatSize(size())}
                           </span>
                         )}
@@ -435,17 +435,17 @@ function LinkRow(props: { link: MessageLink }) {
           target="_blank"
           rel="noopener noreferrer"
           title={props.link.href}
-          class="min-w-0 flex-1 rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
+          class="group/link min-w-0 flex-1 rounded-md px-2 py-1.5 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"
         >
           <span class="flex items-center gap-1.5 text-[11px]">
             <span class="min-w-0 shrink truncate font-mono text-zinc-700 dark:text-zinc-300">
               {props.link.host}
             </span>
-            <span class="min-w-0 flex-1 truncate text-zinc-500 dark:text-zinc-400">
+            <span class="min-w-0 flex-1 truncate text-zinc-500 group-hover/link:text-zinc-600 dark:text-zinc-400 dark:group-hover/link:text-zinc-400">
               {props.link.path}
             </span>
             <Show when={props.link.count > 1}>
-              <span class="shrink-0 tabular-nums text-zinc-500 dark:text-zinc-400">
+              <span class="shrink-0 tabular-nums text-zinc-500 group-hover/link:text-zinc-600 dark:text-zinc-400 dark:group-hover/link:text-zinc-400">
                 ×{props.link.count}
               </span>
             </Show>
@@ -457,7 +457,7 @@ function LinkRow(props: { link: MessageLink }) {
             </Show>
           </span>
           <Show when={props.link.text}>
-            <span class="mt-0.5 block truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+            <span class="mt-0.5 block truncate text-[11px] text-zinc-500 group-hover/link:text-zinc-600 dark:text-zinc-400 dark:group-hover/link:text-zinc-400">
               {props.link.text}
             </span>
           </Show>
@@ -568,7 +568,7 @@ function TagEditor(props: { message: MessageSummary }) {
             removeTag(tags()[tags().length - 1]);
           }
         }}
-        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none min-w-[80px] flex-1 rounded-md px-1.5 py-0.5 transition focus:bg-zinc-100 dark:focus:bg-zinc-800/60"
+        class="bg-transparent text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-500 focus:placeholder-zinc-600 dark:placeholder-zinc-400 dark:focus:placeholder-zinc-400 outline-none min-w-[80px] flex-1 rounded-md px-1.5 py-0.5 transition focus:bg-zinc-100 dark:focus:bg-zinc-800/60"
       />
     </div>
   );
