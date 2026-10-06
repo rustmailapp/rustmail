@@ -788,9 +788,7 @@ impl App {
         self.messages = resp.messages;
         self.total = resp.total;
         self.view_stale = pending.overflowed;
-        for delta in pending.events {
-          self.replay_delta(delta);
-        }
+        self.replay_deltas(pending.events);
         self.error = None;
         self.error_ticks = 0;
         let moved = self.reanchor_selection(anchor);
@@ -1122,6 +1120,25 @@ impl App {
 
   fn message_mut(&mut self, id: &str) -> Option<&mut MessageSummary> {
     self.messages.iter_mut().find(|m| m.id == id)
+  }
+
+  /// Re-applies the deltas recorded during an in-flight fetch, in order, onto
+  /// the snapshot that fetch returned.
+  ///
+  /// Arrivals are announced in the order they commit, so every arrival up to
+  /// the last one the page lists is already in the snapshot, counted in its
+  /// total even when it sits past the page; only the arrivals after it are new.
+  fn replay_deltas(&mut self, deltas: Vec<WsEvent>) {
+    let listed_through = deltas.iter().rposition(
+      |delta| matches!(delta, WsEvent::MessageNew(summary) if self.is_listed(&summary.id)),
+    );
+    for (index, delta) in deltas.into_iter().enumerate() {
+      let in_snapshot = listed_through.is_some_and(|last| index <= last);
+      if in_snapshot && matches!(delta, WsEvent::MessageNew(_)) {
+        continue;
+      }
+      self.replay_delta(delta);
+    }
   }
 
   /// Re-applies a delta recorded during an in-flight fetch onto the snapshot
@@ -1862,6 +1879,21 @@ mod tests {
     assert_eq!(app.messages.iter().filter(|m| m.id == "live").count(), 1);
     assert_eq!(app.messages.len(), 4);
     assert_eq!(app.total, 4);
+  }
+
+  #[tokio::test]
+  async fn arrival_the_snapshot_holds_past_its_page_is_not_counted_again() {
+    let mut app = in_flight_fetch(0);
+    app.page_size = 2;
+
+    for id in ["live-0", "live-1", "live-2"] {
+      app.handle_ws_message(&new_message_event(id)).await;
+    }
+    land_snapshot(&mut app, &["live-2", "live-1"], 3).await;
+
+    let ids: Vec<&str> = app.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["live-2", "live-1"]);
+    assert_eq!(app.total, 3);
   }
 
   #[tokio::test]
