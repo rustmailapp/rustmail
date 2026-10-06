@@ -1,4 +1,4 @@
-import { onMount, onCleanup } from "solid-js";
+import { onMount, onCleanup, Show } from "solid-js";
 import Header from "./components/Header";
 import FilterBar from "./components/FilterBar";
 import Inbox from "./components/Inbox";
@@ -30,7 +30,8 @@ import {
 } from "./stores/messages";
 import { settingsOpen } from "./stores/settings";
 import "./stores/theme";
-import "./stores/rusted";
+import "./stores/palette";
+import { rustedToast } from "./stores/rusted";
 
 export default function App() {
   function handleKeydown(e: KeyboardEvent) {
@@ -126,7 +127,6 @@ export default function App() {
 
   return (
     <div class="app-shell flex flex-col h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
-      <div class="mesh-glow" />
       <Header />
       <div class="flex flex-1 overflow-hidden">
         <div class="w-96 flex-shrink-0 border-r border-zinc-200 dark:border-zinc-800 overflow-hidden flex flex-col">
@@ -142,6 +142,15 @@ export default function App() {
       <div class="pointer-events-none fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
         <Notices />
         <UndoToast />
+        <div role="status" class="contents">
+          <Show when={rustedToast()}>
+            {(text) => (
+              <div class="rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-2.5 shadow-lg animate-fade-in text-xs text-zinc-600 dark:text-zinc-300">
+                {text()}
+              </div>
+            )}
+          </Show>
+        </div>
       </div>
     </div>
   );

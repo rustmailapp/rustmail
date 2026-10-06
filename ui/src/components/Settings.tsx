@@ -1,6 +1,6 @@
 import { Show, For } from "solid-js";
 import { theme, setTheme } from "../stores/theme";
-import { rusted, setRusted } from "../stores/rusted";
+import { PALETTES, palette, setPalette } from "../stores/palette";
 import {
   settingsOpen,
   setSettingsOpen,
@@ -160,22 +160,36 @@ function AppearanceTab() {
         </button>
       </div>
 
-      <button
-        onClick={() => setRusted(!rusted())}
-        class={`mt-6 w-full rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-between gap-2 ${
-          rusted()
-            ? "border-orange-500 bg-orange-500/10 text-orange-500"
-            : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
-        }`}
-      >
-        <span>Rusted</span>
-        <span class="text-[10px] uppercase tracking-wide opacity-70">
-          {rusted() ? "On" : "Off"}
-        </span>
-      </button>
-      <p class="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
-        Let the app oxidize.
-      </p>
+      <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block">
+        Palette
+      </label>
+      <div class="grid grid-cols-3 gap-2">
+        <For each={PALETTES}>
+          {(option) => (
+            <button
+              onClick={() => setPalette(option.id)}
+              aria-pressed={palette() === option.id}
+              class={`rounded-lg border p-2 text-xs font-medium transition cursor-pointer flex flex-col gap-2 ${
+                palette() === option.id
+                  ? "border-orange-500 bg-orange-500/10 text-orange-500"
+                  : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
+              }`}
+            >
+              <span
+                data-palette={option.id}
+                aria-hidden="true"
+                class="flex h-5 w-full overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-700"
+              >
+                <span class="flex-1 bg-zinc-950" />
+                <span class="flex-1 bg-zinc-800" />
+                <span class="flex-1 bg-orange-500" />
+                <span class="palette-glow flex-1 bg-white dark:bg-zinc-950" />
+              </span>
+              {option.label}
+            </button>
+          )}
+        </For>
+      </div>
     </div>
   );
 }
