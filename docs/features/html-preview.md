@@ -2,9 +2,13 @@
 
 The message detail panel renders the email's HTML body so you see it the way a real client would.
 
+## Desktop and mobile width
+
+When the **Preview** view shows an HTML body, a **Desktop** / **Mobile** switch sits next to it. **Desktop** fills the message pane; **Mobile** renders the email in a 375px wide frame, the width of a phone, so you can check how a responsive template collapses. The choice is kept in the browser and applies to every message.
+
 ## Rendering model
 
-The HTML body is rendered inside a **sandboxed iframe** (`sandbox=""`) with a strict `Content-Security-Policy`. This lets RustMail display untrusted email markup without executing any of it:
+The HTML body is rendered inside a **sandboxed iframe** (`sandbox="allow-popups allow-popups-to-escape-sandbox"`) with a strict `Content-Security-Policy`. This lets RustMail display untrusted email markup without executing any of it:
 
 | Resource | Policy | Effect |
 |----------|--------|--------|
@@ -14,7 +18,7 @@ The HTML body is rendered inside a **sandboxed iframe** (`sandbox=""`) with a st
 | Fonts / objects / frames | `'none'` | No remote fonts, plugins, or nested frames |
 | Forms | `form-action 'none'` | Form submissions are blocked |
 
-Because the iframe has no `allow-scripts` or `allow-same-origin`, email content runs in an opaque origin: it cannot read RustMail's cookies, storage, or DOM, and cannot navigate the parent page.
+Because the iframe has no `allow-scripts` or `allow-same-origin`, email content runs in an opaque origin: it cannot read RustMail's cookies, storage, or DOM, and cannot navigate the parent page. Links in the email open in a new tab.
 
 ## Remote images
 
