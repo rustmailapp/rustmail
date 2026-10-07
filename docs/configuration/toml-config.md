@@ -24,6 +24,7 @@ webhook_url = "https://hooks.example.com/email"
 release_host = "smtp.example.com:587"
 allowed_origins = ["https://mail.example.com"]
 allowed_hosts = ["mail.example.com"]
+ws_buffer = 4096
 ```
 
 Configure both `smtp_tls_cert` and `smtp_tls_key` to enable optional SMTP `STARTTLS` on the existing SMTP listener. Setting only one of the two fails startup.

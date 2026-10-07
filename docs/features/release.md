@@ -49,7 +49,7 @@ Release is locked down to prevent misuse:
 2. **Host allowlist**: the `host` in the request body must exactly match the configured `--release-host` host. Mismatches return `403`.
 3. **Port allowlist**: only standard SMTP ports are accepted: `25`, `465`, `587`, `2525`. Other ports return `400`.
 4. **Port pinning**: if `--release-host` includes a port (e.g., `smtp.example.com:587`), the request must use that exact port. Mismatches return `403`.
-5. **TLS required**: connections use `lettre::relay()` with certificate verification. TLS failures return `502`.
+5. **TLS required**: port `465` uses implicit TLS; ports `25`, `587` and `2525` must upgrade with `STARTTLS`, and the message is not sent if the relay cannot. Certificates are verified. TLS failures return `502`.
 
 ## Errors
 

@@ -33,7 +33,7 @@ The action has two modes:
 | `mode` | `start` | Set to `start` (or omit, it's the default) |
 | `smtp-port` | `1025` | SMTP port to listen on |
 | `http-port` | `8025` | HTTP/API port |
-| `version` | `latest` | RustMail version (e.g., `v0.1.0`) |
+| `version` | `latest` | RustMail version (e.g., `v0.8.1`) |
 
 ### Assert Mode
 
@@ -117,7 +117,7 @@ By default the action downloads the latest RustMail release. Pin to a specific v
 ```yaml
 - uses: rustmailapp/rustmail-action@v1
   with:
-    version: v0.2.1  # pin to a release tag
+    version: v0.8.1  # pin to a release tag
 ```
 
 Check [GitHub Releases](https://github.com/rustmailapp/rustmail/releases) for available versions.

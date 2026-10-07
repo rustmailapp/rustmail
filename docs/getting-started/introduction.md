@@ -14,7 +14,7 @@ Most alternatives are either unmaintained (MailHog), minimal (MailCrab), or clou
 - **Search that works**: FTS5 across subject, body, sender, and recipients.
 - **Real-time UI**: WebSocket push, dark mode, keyboard shortcuts. Feels like a proper email client.
 - **CI-first**: REST assertion endpoints, a CLI assert mode, and a GitHub Action.
-- **Zero runtime deps**: one binary, frontend baked in. Also ships as a ~8 MB Docker image.
+- **Zero runtime deps**: one binary, frontend baked in. Also ships as a ~10 MB Docker image.
 
 ## How It Works
 
@@ -24,7 +24,7 @@ SMTP Client (your app)
     ▼
 rustmail-smtp  ─── tokio TCP listener, ESMTP handshake
     │
-    ▼  broadcast channel
+    ▼  mpsc channel
 rustmail-storage  ─── sqlx + SQLite + FTS5
     │
     ▼  event broadcast

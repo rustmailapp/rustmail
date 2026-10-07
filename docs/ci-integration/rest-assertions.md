@@ -12,8 +12,8 @@ GET /api/v1/assert/count
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `min` | integer | Minimum number of matching messages (inclusive) |
-| `max` | integer | Maximum number of matching messages (inclusive) |
+| `min` | integer | Minimum number of matching messages (inclusive). Defaults to `1`. |
+| `max` | integer | Maximum number of matching messages (inclusive). No upper limit when omitted. |
 | `subject` | string | Filter by subject substring (case-insensitive) |
 | `sender` | string | Filter by sender address substring |
 | `recipient` | string | Filter by recipient address substring |
@@ -41,7 +41,7 @@ curl -f "localhost:8025/api/v1/assert/count?min=1&recipient=admin@example.com"
 { "ok": true, "count": 2 }
 
 // 417 Expectation Failed: assertion failed
-{ "ok": false, "count": 0, "expected_min": 1, "expected_max": null }
+{ "ok": false, "count": 0, "expected_min": 1, "expected_max": 9223372036854775807 }
 ```
 
 ## In a CI Script
