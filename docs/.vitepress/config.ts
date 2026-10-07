@@ -90,7 +90,7 @@ export default defineConfig({
     "A self-hosted SMTP mail catcher built in Rust — capture, inspect, and test outbound email",
   head: [
     ["link", { rel: "icon", type: "image/png", href: "/favicon.png" }],
-    ["meta", { name: "theme-color", content: "#f97316" }],
+    ["meta", { name: "theme-color", content: "#e6653c" }],
     ["meta", { property: "og:title", content: "RustMail" }],
     [
       "meta",

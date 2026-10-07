@@ -1,23 +1,34 @@
 :root {
-  --vp-c-brand-1: #f97316;
-  --vp-c-brand-2: #fb923c;
-  --vp-c-brand-3: #fdba74;
-  --vp-c-brand-soft: rgba(249, 115, 22, 0.14);
+  --vp-c-brand-1: #ad3923;
+  --vp-c-brand-2: #8c2f1f;
+  --vp-c-brand-3: #e6653c;
+  --vp-c-brand-soft: rgba(230, 101, 60, 0.14);
 
-  --vp-button-brand-bg: var(--vp-c-brand-1);
-  --vp-button-brand-hover-bg: var(--vp-c-brand-2);
-  --vp-button-brand-active-bg: var(--vp-c-brand-1);
+  --vp-c-bg: #fbfaf8;
+  --vp-c-bg-alt: #f6f3ef;
+  --vp-c-bg-elv: #ffffff;
+  --vp-c-bg-soft: #f6f3ef;
+  --vp-c-divider: #e9e2dd;
+  --vp-c-gutter: #e9e2dd;
+  --vp-c-gray-1: #dbd1cb;
+  --vp-c-gray-2: #e2dad4;
+  --vp-c-gray-3: #e9e2dd;
+  --vp-c-gray-soft: rgba(172, 156, 148, 0.14);
+
+  --vp-button-brand-bg: #ad3923;
+  --vp-button-brand-hover-bg: #8c2f1f;
+  --vp-button-brand-active-bg: #ad3923;
 
   --vp-home-hero-name-color: transparent;
   --vp-home-hero-name-background: -webkit-linear-gradient(
     120deg,
-    #f97316 30%,
-    #ffffff
+    #ad3923 30%,
+    #e6653c
   );
   --vp-home-hero-image-background-image: linear-gradient(
     -45deg,
-    #4a2510 50%,
-    #5c3a1e 50%
+    #e6653c 50%,
+    #efb062 50%
   );
   --vp-home-hero-image-filter: blur(44px);
 }
@@ -35,14 +46,31 @@
 }
 
 .dark {
-  --vp-c-brand-1: #fb923c;
-  --vp-c-brand-2: #f97316;
-  --vp-c-brand-3: #ea580c;
+  --vp-c-brand-1: #f8875a;
+  --vp-c-brand-2: #ffac84;
+  --vp-c-brand-3: #e6653c;
+  --vp-c-brand-soft: rgba(230, 101, 60, 0.16);
 
-  --vp-c-bg: #141210;
-  --vp-c-bg-alt: #1a1714;
-  --vp-c-bg-elv: #1f1c18;
-  --vp-c-bg-soft: #1f1c18;
+  --vp-c-bg: #0f0806;
+  --vp-c-bg-alt: #1f1612;
+  --vp-c-bg-elv: #1f1612;
+  --vp-c-bg-soft: #1f1612;
+  --vp-c-divider: #30241f;
+  --vp-c-gray-1: #604f47;
+  --vp-c-gray-2: #4b3c35;
+  --vp-c-gray-3: #30241f;
+  --vp-c-gray-soft: rgba(128, 110, 101, 0.16);
+
+  --vp-home-hero-name-background: -webkit-linear-gradient(
+    120deg,
+    #f8875a 30%,
+    #ffac84
+  );
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    #8c2f1f 50%,
+    #ad3923 50%
+  );
 }
 
 .VPHero .VPImage {
