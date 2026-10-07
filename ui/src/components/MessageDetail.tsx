@@ -225,7 +225,7 @@ export default function MessageDetail() {
               <Show
                 when={selectedId()}
                 fallback={
-                  <p class="p-4 text-xs text-zinc-400 dark:text-zinc-500">
+                  <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
                     Details of the selected message show here.
                   </p>
                 }
@@ -361,7 +361,7 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
           <Show when={sender().name}>
             <span> &lt;{sender().address}&gt;</span>
           </Show>
-          <span class="text-zinc-400 dark:text-zinc-500"> {"→"} </span>
+          <span class="text-zinc-500 dark:text-zinc-400"> {"→"} </span>
           {meta()}
         </p>
       </div>
@@ -389,8 +389,8 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
             onClick={() => starMessage(props.message.id, !starred())}
             class={ACTION_CLASS}
             classList={{
-              "text-amber-400 hover:text-amber-500": starred(),
-              "text-zinc-500 dark:text-zinc-400 hover:text-amber-400":
+              "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200": starred(),
+              "text-zinc-500 dark:text-zinc-400 hover:text-amber-800 dark:hover:text-amber-400":
                 !starred(),
             }}
             title={starred() ? "Unstar" : "Star"}
@@ -410,7 +410,7 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
               setSelectedId(null);
               deleteWithUndo(props.message.id);
             }}
-            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-600 dark:hover:text-red-400`}
+            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-700 dark:hover:text-red-300`}
             title="Delete"
           >
             <TrashIcon class="size-4" />
@@ -443,7 +443,7 @@ function SegmentedSwitch<T extends string>(props: {
             classList={{
               "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 shadow-sm":
                 props.value === option.id,
-              "text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
+              "text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
                 props.value !== option.id,
             }}
           >

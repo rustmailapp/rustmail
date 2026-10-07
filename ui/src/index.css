@@ -401,7 +401,7 @@
 .btn-destructive {
   border-color: var(--color-red-200);
   background-color: var(--color-red-50);
-  color: var(--color-red-600);
+  color: var(--color-red-700);
 }
 .btn-destructive:hover {
   background-color: var(--color-red-100);

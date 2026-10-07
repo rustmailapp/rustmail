@@ -26,7 +26,7 @@ export default function Settings() {
         <h2 class="text-base font-semibold">Settings</h2>
         <button
           onClick={() => setSettingsOpen(false)}
-          class="rounded-md p-1.5 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+          class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
         >
           <svg
             class="size-4"
@@ -52,7 +52,7 @@ export default function Settings() {
               class={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 -mb-px transition cursor-pointer ${
                 settingsTab() === tab.value
                   ? "border-orange-500 text-zinc-900 dark:text-zinc-100"
-                  : "border-transparent text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
+                  : "border-transparent text-zinc-500 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
               }`}
             >
               <svg
@@ -94,7 +94,7 @@ function AppearanceTab() {
           onClick={() => setTheme("dark")}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "dark"
-              ? "border-orange-500 bg-orange-500/10 text-orange-500"
+              ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
               : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
           }`}
         >
@@ -117,7 +117,7 @@ function AppearanceTab() {
           onClick={() => setTheme("light")}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "light"
-              ? "border-orange-500 bg-orange-500/10 text-orange-500"
+              ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
               : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
           }`}
         >
@@ -140,7 +140,7 @@ function AppearanceTab() {
           onClick={() => setTheme("system")}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "system"
-              ? "border-orange-500 bg-orange-500/10 text-orange-500"
+              ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
               : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
           }`}
         >
@@ -172,7 +172,7 @@ function AppearanceTab() {
               aria-pressed={palette() === option.id}
               class={`rounded-lg border p-2 text-xs font-medium transition cursor-pointer flex flex-col gap-2 ${
                 palette() === option.id
-                  ? "border-orange-500 bg-orange-500/10 text-orange-500"
+                  ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
                   : "border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-600"
               }`}
             >
@@ -196,7 +196,7 @@ function AppearanceTab() {
         <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block">
           Easter egg
         </label>
-        <div class="rounded-lg border border-orange-500 bg-orange-500/10 px-3 py-2 text-xs font-medium text-orange-500 flex items-center justify-between gap-2">
+        <div class="rounded-lg border border-orange-500 bg-orange-500/10 px-3 py-2 text-xs font-medium text-orange-700 dark:text-orange-500 flex items-center justify-between gap-2">
           <span>Rusted · On</span>
           <button
             type="button"

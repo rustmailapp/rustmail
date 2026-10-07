@@ -31,7 +31,7 @@ function Chip(props: {
       class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer select-none ${
         props.active
           ? props.activeClass
-          : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-500 dark:text-zinc-500 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-600 dark:hover:text-zinc-400"
+          : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-700 dark:hover:text-zinc-300"
       }`}
     >
       <Show when={props.icon}>
@@ -110,8 +110,8 @@ function TagDropdown() {
         onClick={() => setOpen(!open())}
         class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer select-none ${
           filters().tags.length > 0
-            ? "bg-orange-50 dark:bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-200 dark:border-orange-500/30"
-            : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-500 dark:text-zinc-500 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-600 dark:hover:text-zinc-400"
+            ? "bg-orange-50 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-500/30"
+            : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-700 dark:hover:text-zinc-300"
         }`}
       >
         <svg
@@ -163,7 +163,7 @@ function TagDropdown() {
             <Show
               when={allTags().length > 0}
               fallback={
-                <div class="px-3 py-4 text-xs text-zinc-400 dark:text-zinc-500 text-center">
+                <div class="px-3 py-4 text-xs text-zinc-500 dark:text-zinc-400 text-center">
                   No tags yet
                 </div>
               }
@@ -176,7 +176,7 @@ function TagDropdown() {
                     value={tagQuery()}
                     onInput={(e) => setTagQuery(e.currentTarget.value)}
                     placeholder="Filter tags..."
-                    class="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-400 dark:placeholder-zinc-500 outline-none focus:border-zinc-400 dark:focus:border-zinc-600"
+                    class="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none focus:border-zinc-400 dark:focus:border-zinc-600"
                   />
                 </div>
               </Show>
@@ -184,7 +184,7 @@ function TagDropdown() {
                 <Show
                   when={visibleTags().length > 0}
                   fallback={
-                    <div class="px-3 py-3 text-xs text-zinc-400 dark:text-zinc-500 text-center">
+                    <div class="px-3 py-3 text-xs text-zinc-500 dark:text-zinc-400 text-center">
                       No matching tags
                     </div>
                   }
@@ -237,7 +237,7 @@ function TagDropdown() {
                 </Show>
               </div>
               <Show when={tagFiltersFull()}>
-                <div class="border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                <div class="border-t border-zinc-100 dark:border-zinc-800 px-3 py-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
                   Up to {MAX_TAG_FILTERS} tags at a time
                 </div>
               </Show>
@@ -248,7 +248,7 @@ function TagDropdown() {
                       clearTagFilters();
                       setOpen(false);
                     }}
-                    class="text-[11px] text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition cursor-pointer"
+                    class="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition cursor-pointer"
                   >
                     Reset tags
                   </button>
@@ -294,7 +294,7 @@ export default function FilterBar() {
           placeholder="Search emails..."
           value={search()}
           onInput={(e) => onSearchInput(e.currentTarget.value)}
-          class="w-full rounded-md border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-950/40 pl-8 pr-3 py-1.5 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-400 dark:placeholder-zinc-500 outline-none focus:border-zinc-400 dark:focus:border-zinc-500 transition"
+          class="w-full rounded-md border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-950/40 pl-8 pr-3 py-1.5 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none focus:border-zinc-400 dark:focus:border-zinc-500 transition"
         />
       </label>
 
@@ -303,7 +303,7 @@ export default function FilterBar() {
           label="Starred"
           icon={"\u2605"}
           active={f().starred}
-          activeClass="bg-amber-50 dark:bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-500/30"
+          activeClass="bg-amber-50 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-500/30"
           onClick={() => toggleFilter("starred")}
         />
         <Chip
@@ -323,12 +323,12 @@ export default function FilterBar() {
 
         <Show when={hasActiveFilters()}>
           <div class="ml-auto flex items-center gap-2">
-            <span class="text-[11px] text-zinc-400 dark:text-zinc-600">
+            <span class="text-[11px] text-zinc-500 dark:text-zinc-400">
               {listSize()} {listSize() === 1 ? "match" : "matches"}
             </span>
             <button
               onClick={clearFilters}
-              class="text-[11px] text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition cursor-pointer"
+              class="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition cursor-pointer"
             >
               Clear
             </button>

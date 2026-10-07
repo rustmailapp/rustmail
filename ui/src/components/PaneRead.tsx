@@ -112,7 +112,7 @@ export function ReadState(props: {
         {(drift) => (
           <div class={`${frame()} text-sm text-zinc-500 dark:text-zinc-400`}>
             <p>This page does not match the server it is talking to.</p>
-            <p class="mt-1 font-mono text-xs break-all text-zinc-400 dark:text-zinc-500">
+            <p class="mt-1 font-mono text-xs break-all text-zinc-500 dark:text-zinc-400">
               {drift().message}
             </p>
             <button
