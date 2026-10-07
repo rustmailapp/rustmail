@@ -27,10 +27,8 @@ const MAX_SETTLED_FETCHES = 4;
  * while the clock is being wound forward.
  */
 const PAST_UNDO_WINDOW_MS = 6_000;
-/** The focus marker on the selected row, as `shadowGeometry` reports it. */
-const LEFT_MARKER = "2px 0px 0px 0px inset";
-/** The list area's fallback focus outline as width, style and offset. */
-const FALLBACK_OUTLINE = "2px solid -2px";
+/** The keyboard focus outline as width, style and offset. */
+const FOCUS_OUTLINE = "2px solid -2px";
 
 function list(page: Page): Locator {
   return page.getByRole("listbox", { name: "Messages" });
@@ -53,36 +51,30 @@ function activeDescription(page: Page): Promise<string> {
 }
 
 /**
- * The element's box-shadow layers reduced to offsets, blur, spread and inset.
+ * The outline drawn around an element as width, style and offset, or `none`.
  *
- * Colour is left out so the check holds under every palette; a focus ring
- * shows up as a layer with a spread, which never matches the left marker.
+ * Colour is left out so the check holds under every palette.
  */
-async function shadowGeometry(target: Locator): Promise<string[]> {
-  const value = await target.evaluate((el) => getComputedStyle(el).boxShadow);
-  if (value === "none") return [];
-  return value.split(/,(?![^(]*\))/).map((layer) =>
-    [
-      ...(layer.match(/-?[\d.]+px/g) ?? []),
-      ...(layer.includes("inset") ? ["inset"] : []),
-    ].join(" "),
-  );
+function outline(target: Locator): Promise<string> {
+  return target.evaluate((el) => {
+    const style = getComputedStyle(el);
+    if (style.outlineStyle === "none") return "none";
+    return `${style.outlineWidth} ${style.outlineStyle} ${style.outlineOffset}`;
+  });
 }
 
 /**
- * The outline drawn around the list area, or `none` when there is none.
+ * The outline around the list area.
  *
  * It is the focus cue of last resort, for when no selected row is rendered to
- * carry the left marker.
+ * carry its own outline.
  */
 function listOutline(page: Page): Promise<string> {
-  return list(page)
-    .locator("..")
-    .evaluate((el) => {
-      const style = getComputedStyle(el);
-      if (style.outlineStyle === "none") return "none";
-      return `${style.outlineWidth} ${style.outlineStyle} ${style.outlineOffset}`;
-    });
+  return outline(list(page).locator(".."));
+}
+
+function rowOutline(page: Page): Promise<string> {
+  return outline(selectedOption(page));
 }
 
 function activeRole(page: Page): Promise<string> {
@@ -371,7 +363,7 @@ test.describe("list focus cue", () => {
     await page.keyboard.press("Escape");
 
     await expect(selectedOption(page)).toHaveCount(0);
-    await expect.poll(() => listOutline(page)).toBe(FALLBACK_OUTLINE);
+    await expect.poll(() => listOutline(page)).toBe(FOCUS_OUTLINE);
     await expect(page.locator(".inbox-row-selected")).toHaveCount(0);
   });
 
@@ -385,18 +377,16 @@ test.describe("list focus cue", () => {
     await page.mouse.wheel(0, 6000);
     await expect.poll(() => selectedOption(page).count()).toBe(0);
 
-    await expect.poll(() => listOutline(page)).toBe(FALLBACK_OUTLINE);
+    await expect.poll(() => listOutline(page)).toBe(FOCUS_OUTLINE);
   });
 
-  test("leaves only the row marker while the selected row is rendered", async ({
+  test("outlines only the selected row while it is rendered", async ({
     page,
   }) => {
     await openInbox(page);
     await tabToList(page);
 
-    await expect
-      .poll(() => shadowGeometry(selectedOption(page)))
-      .toEqual([LEFT_MARKER]);
+    await expect.poll(() => rowOutline(page)).toBe(FOCUS_OUTLINE);
     expect(await listOutline(page)).toBe("none");
   });
 });
@@ -532,18 +522,23 @@ test.describe("global shortcuts", () => {
     expect(await position(page)).toBe(1);
   });
 
-  test("j after a click draws no ring, only the row marker", async ({
-    page,
-  }) => {
+  test("a click draws no outline on the selected row", async ({ page }) => {
+    await openInbox(page);
+
+    await page.locator('[role="option"]').nth(3).click();
+
+    expect(await activeRole(page)).toBe("listbox");
+    expect(await rowOutline(page)).toBe("none");
+  });
+
+  test("j after a click outlines only the selected row", async ({ page }) => {
     await openInbox(page);
 
     await page.locator('[role="option"]').nth(3).click();
     await page.keyboard.press("j");
 
-    await expect
-      .poll(() => shadowGeometry(selectedOption(page)))
-      .toEqual([LEFT_MARKER]);
-    expect(await shadowGeometry(list(page).locator(".."))).toEqual([]);
+    await expect.poll(() => rowOutline(page)).toBe(FOCUS_OUTLINE);
+    expect(await listOutline(page)).toBe("none");
   });
 
   test("j takes focus from a detail tab back to the list", async ({

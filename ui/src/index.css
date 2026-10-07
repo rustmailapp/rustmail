@@ -42,8 +42,10 @@
   background: var(--rm-selection);
 }
 
-[role="listbox"]:focus .inbox-row-selected {
-  box-shadow: inset 2px 0 0 var(--color-orange-500);
+[role="listbox"]:focus-visible .inbox-row-selected {
+  outline: 2px solid
+    color-mix(in oklch, var(--color-orange-500) 40%, transparent);
+  outline-offset: -2px;
 }
 
 .inbox-list:has(> [role="listbox"]:focus-visible):not(
