@@ -144,46 +144,46 @@
 }
 
 [data-palette="rustmail"] {
-  --color-zinc-50: oklch(0.985 0.0016 250);
-  --color-zinc-100: oklch(0.967 0.0032 250);
-  --color-zinc-200: oklch(0.92 0.0064 250);
-  --color-zinc-300: oklch(0.871 0.0096 250);
-  --color-zinc-400: oklch(0.705 0.0144 250);
-  --color-zinc-500: oklch(0.552 0.0176 250);
-  --color-zinc-600: oklch(0.442 0.0192 250);
-  --color-zinc-700: oklch(0.37 0.0192 250);
-  --color-zinc-800: oklch(0.274 0.0192 250);
-  --color-zinc-900: oklch(0.21 0.0176 250);
-  --color-zinc-950: oklch(0.141 0.016 250);
-  --color-orange-50: oklch(0.98 0.016 70);
-  --color-orange-100: oklch(0.955 0.04 68);
-  --color-orange-200: oklch(0.905 0.085 62);
-  --color-orange-300: oklch(0.84 0.13 58);
-  --color-orange-400: oklch(0.76 0.17 52);
-  --color-orange-500: oklch(0.69 0.2 44);
-  --color-orange-600: oklch(0.62 0.2 38);
-  --color-orange-700: oklch(0.53 0.18 34);
-  --color-orange-800: oklch(0.45 0.15 32);
-  --color-orange-900: oklch(0.39 0.12 32);
-  --color-orange-950: oklch(0.27 0.09 32);
+  --color-zinc-50: oklch(0.985 0.003 70);
+  --color-zinc-100: oklch(0.965 0.006 65);
+  --color-zinc-200: oklch(0.918 0.01 60);
+  --color-zinc-300: oklch(0.868 0.014 55);
+  --color-zinc-400: oklch(0.705 0.022 50);
+  --color-zinc-500: oklch(0.552 0.026 48);
+  --color-zinc-600: oklch(0.442 0.026 46);
+  --color-zinc-700: oklch(0.37 0.024 45);
+  --color-zinc-800: oklch(0.274 0.02 45);
+  --color-zinc-900: oklch(0.21 0.017 45);
+  --color-zinc-950: oklch(0.145 0.013 45);
+  --color-orange-50: oklch(0.975 0.016 60);
+  --color-orange-100: oklch(0.945 0.038 55);
+  --color-orange-200: oklch(0.89 0.075 50);
+  --color-orange-300: oklch(0.82 0.115 46);
+  --color-orange-400: oklch(0.74 0.15 42);
+  --color-orange-500: oklch(0.66 0.17 38);
+  --color-orange-600: oklch(0.59 0.17 35);
+  --color-orange-700: oklch(0.51 0.155 33);
+  --color-orange-800: oklch(0.44 0.13 32);
+  --color-orange-900: oklch(0.38 0.105 32);
+  --color-orange-950: oklch(0.265 0.07 32);
 }
 
 [data-palette="rustmail"]:not(.dark, .dark *) {
   --rm-glow:
     radial-gradient(
-      ellipse 55% 100% at 0% 0%,
-      color-mix(in oklab, var(--color-orange-500) 14%, transparent),
+      ellipse 50% 100% at 0% 0%,
+      oklch(0.8 0.12 70 / 0.2),
       transparent
     ),
     radial-gradient(
-      ellipse 40% 80% at 30% 0%,
-      color-mix(in oklab, oklch(0.6 0.18 30) 6%, transparent),
+      ellipse 45% 90% at 28% 0%,
+      color-mix(in oklab, var(--color-orange-600) 10%, transparent),
       transparent
     );
   --rm-selection: linear-gradient(
     90deg,
-    color-mix(in oklab, var(--color-orange-500) 12%, transparent),
-    color-mix(in oklab, var(--color-orange-500) 4%, transparent)
+    oklch(0.8 0.12 70 / 0.22),
+    color-mix(in oklab, var(--color-orange-600) 8%, transparent)
   );
 }
 
@@ -191,19 +191,19 @@
 .dark [data-palette="rustmail"] {
   --rm-glow:
     radial-gradient(
-      ellipse 55% 100% at 0% 0%,
-      color-mix(in oklab, var(--color-orange-500) 12%, transparent),
+      ellipse 50% 100% at 0% 0%,
+      oklch(0.72 0.13 62 / 0.14),
       transparent
     ),
     radial-gradient(
-      ellipse 40% 80% at 30% 0%,
-      color-mix(in oklab, oklch(0.6 0.18 30) 6%, transparent),
+      ellipse 45% 90% at 28% 0%,
+      oklch(0.55 0.16 33 / 0.14),
       transparent
     );
   --rm-selection: linear-gradient(
     90deg,
-    color-mix(in oklab, var(--color-orange-500) 16%, transparent),
-    color-mix(in oklab, var(--color-orange-500) 6%, transparent)
+    oklch(0.72 0.13 62 / 0.18),
+    oklch(0.55 0.16 33 / 0.1)
   );
 }
 
