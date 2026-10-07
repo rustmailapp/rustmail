@@ -59,7 +59,7 @@ Each webhook is an HTTP POST with `Content-Type: application/json`. The body is 
 - **No retries**: failed deliveries are logged as warnings and not retried.
 - **No queue**: webhooks are sent in real time as messages arrive. If the endpoint is down, those notifications are lost.
 - **10 at a time**: at most 10 deliveries are in flight at once; further ones wait for a free slot.
-- **Public endpoints only**: RustMail refuses to start if the URL points at `localhost`, a loopback address, or a private or reserved IP address.
+- **No local or private IP literals**: RustMail refuses to start if the URL's host is `localhost` or a loopback, private, link-local or other reserved IP address. Host names are not resolved, so a name that points at such an address is accepted.
 
 ## Example: Slack Notification
 
