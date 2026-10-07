@@ -30,6 +30,11 @@ asks for confirmation instead, because clearing the inbox cannot be undone.
 within it. Individual rows are not tab stops, so the list stays navigable no
 matter how many rows are on screen.
 
+While the list has keyboard focus, the selected row carries a rounded accent
+outline; with no message selected, the outline goes around the whole list.
+Clicking a row selects it without the outline, so the tinted background alone
+marks the selection when you use the mouse.
+
 | Key | Action |
 |-----|--------|
 | `↓` | Select next message |

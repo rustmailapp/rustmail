@@ -8,7 +8,7 @@ RustMail pushes real-time events over a WebSocket connection. The UI uses this f
 ws://localhost:8025/api/v1/ws
 ```
 
-The connection is **one-way push**: the server sends events to the client. Messages sent by the client are ignored.
+The connection is **one-way push**: the server sends events to the client. Messages sent by the client carry no meaning, but any frame from the client counts as a sign of life (see [Keepalive](#keepalive)).
 
 ## Events
 
@@ -28,12 +28,14 @@ Fired when a new email is received and stored.
   "data": {
     "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
     "sender": "user@example.com",
-    "recipients": "[\"recipient@example.com\"]",
+    "recipients": ["recipient@example.com"],
     "subject": "Hello World",
     "size": 1024,
     "has_attachments": false,
     "is_read": false,
-    "created_at": "2026-03-23T10:30:45.123Z"
+    "is_starred": false,
+    "tags": [],
+    "created_at": "2026-03-23T10:30:45Z"
   }
 }
 ```
@@ -113,9 +115,15 @@ rustmail serve --allowed-origin https://mail.example.com
 
 A maximum of **50 concurrent WebSocket connections** is enforced. New connections beyond this limit receive `503 Service Unavailable`.
 
+## Keepalive
+
+The server sends a ping when the connection opens and every 30 seconds after that. Browsers answer with a pong on their own. If no frame arrives from the client for 90 seconds, the server closes the connection. A send that blocks for more than 10 seconds closes it too, so a client that stopped reading cannot hold one of the 50 slots.
+
+A client that falls more than [`--ws-buffer`](/configuration/cli-flags) events behind is disconnected instead of being sent the events that are left. Its view of the inbox is already incomplete at that point, so it should reconnect and fetch the list again.
+
 ## Reconnection
 
-The built-in UI reconnects automatically with exponential backoff (2s initial, 30s cap), resetting on successful connection. If you're building a custom client, implement similar retry logic.
+The built-in UI reconnects automatically with exponential backoff (2s initial, 30s cap) and random jitter, resetting on successful connection. If you're building a custom client, implement similar retry logic.
 
 ## Example: Node.js Client
 

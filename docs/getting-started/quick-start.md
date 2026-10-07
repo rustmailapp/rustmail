@@ -11,7 +11,8 @@ docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ### Binary
 
 ```sh
-# Default: SMTP on 1025, UI on 8025, SQLite at ./rustmail.db
+# Default: SMTP on 1025, UI on 8025, SQLite in the user data directory
+# (see --db-path in the configuration reference)
 rustmail
 
 # Ephemeral mode for CI: in-memory, nothing written to disk

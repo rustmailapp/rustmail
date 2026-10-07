@@ -22,7 +22,15 @@ Below 1300px the details rail becomes a drawer over the message body. Open it wi
 The gear icon in the header opens **Settings**. Under **Appearance**:
 
 - **Theme**: **Dark**, **Light**, or **System** (the default, which follows the operating system).
-- **Palette**: **RustMail** (the default), **Ember**, **Copper & Teal**, **Dawn**, or **Classic**. Each palette tints the neutrals and the accent colour, in both themes.
+- **Palette**: sets the tint of the neutrals, the accent colour, the glow along the top of the window and the selected row, in both themes.
+
+| Palette | Look |
+|---------|------|
+| **RustMail** (default) | Warm iron neutrals, an oxide orange accent, and an amber-to-oxide glow and selection |
+| **Ember** | Cool slate neutrals with an orange accent |
+| **Copper & Teal** | Teal-grey neutrals, an orange accent, and a copper and teal glow |
+| **Dawn** | Rose-grey neutrals, a coral accent, and an amber-to-rose glow and selection |
+| **Classic** | Plain zinc neutrals, an orange accent, and a grey selection |
 
 Both choices are kept in the browser's local storage, so they apply per browser rather than per server.
 

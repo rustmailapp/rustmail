@@ -6,9 +6,9 @@ RustMail is a Cargo workspace with five crates, each with a single responsibilit
 
 | Crate | Responsibility |
 |-------|---------------|
-| `rustmail-smtp` | TCP listener, ESMTP handshake, emits parsed messages over a tokio broadcast channel |
+| `rustmail-smtp` | TCP listener, ESMTP handshake, hands each message to the server over a tokio mpsc channel and acknowledges it once stored |
 | `rustmail-storage` | sqlx + SQLite repository, FTS5 index, retention enforcement |
-| `rustmail-api` | Axum routes, WebSocket broadcast, bridges HTTP to storage and SMTP channel |
+| `rustmail-api` | Axum routes and the WebSocket; bridges HTTP to storage and relays released mail |
 | `rustmail-server` | Binary entry point: parses config, wires all crates, embeds UI assets |
 | `rustmail-tui` | Terminal UI client (optional, connects to a running RustMail instance) |
 
@@ -19,7 +19,7 @@ SMTP Client (your app)
     │
     ▼
 rustmail-smtp
-    │  tokio broadcast channel (ReceivedMessage)
+    │  tokio mpsc channel (Delivery)
     ▼
 rustmail-storage
     │  event broadcast
@@ -44,4 +44,4 @@ rustmail-api
 
 The UI is a SolidJS + TypeScript + Tailwind CSS v4 application in the `ui/` directory. At build time, Vite produces static assets that are embedded into the Rust binary via `rust-embed`. The server binary serves these at `/` with SPA fallback routing.
 
-Build output: ~28 KB JS + ~13 KB CSS (gzipped).
+Build output: ~48 KB JS + ~11 KB CSS (gzipped).

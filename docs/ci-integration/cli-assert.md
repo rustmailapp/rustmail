@@ -18,6 +18,8 @@ rustmail assert [OPTIONS]
 | `--sender` | — | Filter by sender address substring |
 | `--recipient` | — | Filter by recipient address substring |
 | `--smtp-port` | `1025` | SMTP port to listen on |
+| `--max-message-size` | `10485760` | Maximum accepted message size in bytes |
+| `--log-level` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
 
 ## Examples
 
