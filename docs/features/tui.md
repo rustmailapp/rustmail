@@ -1,3 +1,7 @@
+---
+description: "rustmail tui: browse captured emails in your terminal with live updates over WebSocket and vim-style keys."
+---
+
 # Terminal UI
 
 RustMail includes a built-in terminal UI (TUI) that connects to a running RustMail instance. It provides a full email browser in your terminal with real-time updates via WebSocket.

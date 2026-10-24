@@ -1,3 +1,7 @@
+---
+description: "Preview HTML emails in RustMail at desktop width or in a 375px phone frame, with plain text and raw source views."
+---
+
 # HTML Preview
 
 The message detail panel renders the email's HTML body so you see it the way a real client would.

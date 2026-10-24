@@ -1,3 +1,7 @@
+---
+description: "Test emails in GitHub Actions with the RustMail Action: start an SMTP catcher, run your tests, and assert on count, subject and recipients."
+---
+
 # GitHub Action
 
 RustMail provides a GitHub Action for email assertion in CI pipelines.

@@ -9,7 +9,8 @@ export default {
       .map(({ operationId, summary }) => ({
         params: {
           operationId,
-          pageTitle: `${summary} - RustMail API`,
+          pageTitle: `${summary} - API`,
+          pageDescription: `RustMail REST API: ${summary}.`,
         },
       }));
   },

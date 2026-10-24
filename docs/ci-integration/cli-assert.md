@@ -1,3 +1,7 @@
+---
+description: "Use rustmail assert in CI: start an ephemeral SMTP server, wait for matching emails, and exit 0 on pass or 1 on timeout."
+---
+
 # CLI Assert Mode
 
 The `rustmail assert` subcommand starts an ephemeral SMTP server, waits for emails matching your criteria, and exits with code `0` (pass) or `1` (timeout/fail). No daemon required.

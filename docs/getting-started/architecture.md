@@ -1,3 +1,7 @@
+---
+description: "How RustMail works inside: the Cargo workspace crates for SMTP, storage, API and TUI, and how a message flows between them."
+---
+
 # Architecture
 
 RustMail is a Cargo workspace with five crates, each with a single responsibility.

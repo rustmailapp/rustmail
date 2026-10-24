@@ -1,3 +1,7 @@
+---
+description: "Get a JSON POST on every new email: configure RustMail webhooks to notify your own services when mail is caught."
+---
+
 # Webhooks
 
 RustMail can POST a JSON notification to an HTTP endpoint whenever a new email is received.

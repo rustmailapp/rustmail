@@ -1,3 +1,7 @@
+---
+description: "Every RustMail CLI flag and RUSTMAIL_* environment variable with defaults, and the precedence of flags, env vars and the TOML file."
+---
+
 # CLI Flags & Environment Variables
 
 Configuration is resolved in this precedence order: **CLI flags > environment variables > TOML file > defaults**.

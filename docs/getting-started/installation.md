@@ -1,3 +1,7 @@
+---
+description: "Install RustMail with Docker, Homebrew or a pre-built binary for Linux and macOS."
+---
+
 # Installation
 
 ## Docker
