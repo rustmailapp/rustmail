@@ -991,6 +991,25 @@ impl IntoResponse for AppError {
           "Internal server error".to_string(),
         )
       }
+      AppError::Storage(StorageError::ContentCorrupt { message_id, reason }) => {
+        tracing::error!(
+          event = "content_corrupt",
+          message_id = %message_id,
+          reason = %reason,
+          "Stored message source failed its integrity check; delete the message and re-send it"
+        );
+        (
+          StatusCode::INTERNAL_SERVER_ERROR,
+          "Internal server error".to_string(),
+        )
+      }
+      AppError::Storage(e @ StorageError::Compress(_)) => {
+        tracing::error!(error = %e, "Message compression failed");
+        (
+          StatusCode::INTERNAL_SERVER_ERROR,
+          "Internal server error".to_string(),
+        )
+      }
       AppError::Storage(e @ StorageError::DecodeAborted(_)) => {
         tracing::error!(error = %e, "Attachment decode aborted");
         (

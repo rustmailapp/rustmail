@@ -1,4 +1,4 @@
-//! Identifying a legacy database's contents without reading its bodies.
+//! Identifying an older database's contents without reading its bodies.
 
 use sqlx::SqliteConnection;
 
@@ -96,7 +96,81 @@ impl LegacyColumns {
   }
 }
 
-/// What the fingerprint scan learned about a legacy database.
+/// Which older schema a source database is in, and so how it is read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SourceSchema {
+  /// Schema 0, written by rustmail 0.7 and earlier.
+  Legacy,
+  /// Schema 1, written by rustmail 0.8 and 0.9.
+  Previous,
+}
+
+impl SourceSchema {
+  /// The schema's `user_version`.
+  pub(crate) fn version(self) -> i64 {
+    match self {
+      Self::Legacy => 0,
+      Self::Previous => crate::schema::PREVIOUS_SCHEMA_VERSION,
+    }
+  }
+
+  /// The schema whose `user_version` is `version`, if it is an older one.
+  pub(crate) fn from_version(version: i64) -> Option<Self> {
+    [Self::Legacy, Self::Previous]
+      .into_iter()
+      .find(|schema| schema.version() == version)
+  }
+}
+
+/// How a source database is read: its schema, and for schema 0 the columns
+/// its rustmail version had.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SourceLayout {
+  Legacy(LegacyColumns),
+  Previous,
+}
+
+impl SourceLayout {
+  /// Reads how the `schema` database on `conn`, in `source` schema, is laid out.
+  pub(crate) async fn probe(
+    conn: &mut SqliteConnection,
+    schema: &str,
+    source: SourceSchema,
+  ) -> Result<Self, StorageError> {
+    Ok(match source {
+      SourceSchema::Legacy => Self::Legacy(LegacyColumns::probe(conn, schema).await?),
+      SourceSchema::Previous => Self::Previous,
+    })
+  }
+
+  /// One page of `(seq, id, is_read, is_starred, tags, raw length)` per
+  /// message, in `seq` order after `?1`, at most `?2` rows.
+  fn message_page(&self) -> String {
+    match self {
+      Self::Legacy(columns) => format!(
+        "SELECT rowid, id, is_read, {}, {}, length(raw) FROM main.messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+        columns.is_starred, columns.tags
+      ),
+      Self::Previous => "SELECT seq, id, is_read, is_starred, tags, size FROM main.messages WHERE seq > ?1 ORDER BY seq LIMIT ?2".to_string(),
+    }
+  }
+
+  /// One page of `(rowid, id, parent, length(content))` per attachment, or
+  /// `None` for a file without an attachments table.
+  fn attachment_page(&self) -> Option<&'static str> {
+    match self {
+      Self::Legacy(columns) if !columns.has_attachments_table => None,
+      Self::Legacy(_) => Some(
+        "SELECT rowid, id, message_id, length(content) FROM main.attachments WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+      ),
+      Self::Previous => Some(
+        "SELECT rowid, id, CAST(message_seq AS TEXT), length(content) FROM main.attachments WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
+      ),
+    }
+  }
+}
+
+/// What the fingerprint scan learned about a source database.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourcePrint {
   /// FNV-1a 64 over every message's and attachment's identifying fields, as
@@ -110,7 +184,7 @@ pub(crate) struct SourcePrint {
   pub(crate) raw_bytes: u64,
 }
 
-/// `(rowid, id, is_read, is_starred, tags, length(raw))` of a legacy message.
+/// `(seq, id, is_read, is_starred, tags, raw length)` of a source message.
 type MessageKey = (
   i64,
   Option<String>,
@@ -119,31 +193,29 @@ type MessageKey = (
   Option<String>,
   Option<i64>,
 );
-/// `(rowid, id, message_id, length(content))` of a legacy attachment.
+/// `(rowid, id, parent, length(content))` of a source attachment.
 type AttachmentKey = (i64, Option<String>, Option<String>, Option<i64>);
 
-/// Fingerprints the legacy database that is `main` on `conn`.
+/// Fingerprints the source database that is `main` on `conn`.
 ///
-/// Hashes, in rowid order, `(rowid, id, is_read, is_starred, tags,
-/// length(raw))` of every message and `(rowid, id, message_id,
-/// length(content))` of every attachment, then both counts. Anything a
-/// legacy rustmail writes changes one of those: a new or deleted message, a
-/// flag or tag edit. `length()` reads a blob's size from its row header, so
-/// the scan never loads a body.
+/// Hashes, in `seq` order, `(seq, id, is_read, is_starred, tags, raw
+/// length)` of every message and `(rowid, id, parent, length(content))` of
+/// every attachment, then both counts. The parent is the message's id in
+/// schema 0 and its `seq` in schema 1. Anything an older rustmail writes
+/// changes one of those: a new or deleted message, a flag or tag edit.
+/// `length()` reads a blob's size from its row header, so the scan never
+/// loads a body.
 ///
 /// Run it inside the transaction that keeps writers out, or the result may
 /// describe no single state of the file.
 pub(crate) async fn fingerprint(
   conn: &mut SqliteConnection,
-  columns: &LegacyColumns,
+  layout: &SourceLayout,
 ) -> Result<SourcePrint, StorageError> {
   let mut hash = Fnv1a::new();
   let mut messages: u64 = 0;
   let mut raw_bytes: u64 = 0;
-  let message_page = format!(
-    "SELECT rowid, id, is_read, {}, {}, length(raw) FROM main.messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
-    columns.is_starred, columns.tags
-  );
+  let message_page = layout.message_page();
   let mut after = i64::MIN;
   loop {
     let rows: Vec<MessageKey> = sqlx::query_as(&message_page)
@@ -168,16 +240,14 @@ pub(crate) async fn fingerprint(
   }
 
   let mut attachments: u64 = 0;
-  if columns.has_attachments_table {
+  if let Some(attachment_page) = layout.attachment_page() {
     let mut after = i64::MIN;
     loop {
-      let rows: Vec<AttachmentKey> = sqlx::query_as(
-        "SELECT rowid, id, message_id, length(content) FROM main.attachments WHERE rowid > ?1 ORDER BY rowid LIMIT ?2",
-      )
-      .bind(after)
-      .bind(FINGERPRINT_PAGE_ROWS)
-      .fetch_all(&mut *conn)
-      .await?;
+      let rows: Vec<AttachmentKey> = sqlx::query_as(attachment_page)
+        .bind(after)
+        .bind(FINGERPRINT_PAGE_ROWS)
+        .fetch_all(&mut *conn)
+        .await?;
       let Some(last) = rows.last() else {
         break;
       };

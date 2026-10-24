@@ -496,21 +496,21 @@ async fn next_batch(
   deliveries.recv_many(batch, MAX_BATCH_MESSAGES).await > 0
 }
 
-/// Parses a captured message ahead of its write.
+/// Parses and compresses a captured message ahead of its write.
 ///
-/// A message at or past [`BLOCKING_PARSE_THRESHOLD_BYTES`] is parsed on the
-/// blocking pool: decoding megabytes of base64 inline would stall a runtime
-/// worker, and with it every SMTP session scheduled there.
-async fn prepare(received: ReceivedMessage) -> Result<PreparedMessage, tokio::task::JoinError> {
+/// A message at or past [`BLOCKING_PARSE_THRESHOLD_BYTES`] is prepared on the
+/// blocking pool: decoding and compressing megabytes inline would stall a
+/// runtime worker, and with it every SMTP session scheduled there.
+async fn prepare(received: ReceivedMessage) -> Result<PreparedMessage> {
   let ReceivedMessage {
     sender,
     recipients,
     raw,
   } = received;
   if raw.len() < BLOCKING_PARSE_THRESHOLD_BYTES {
-    return Ok(PreparedMessage::parse(sender, &recipients, raw));
+    return Ok(PreparedMessage::parse(sender, &recipients, raw)?);
   }
-  tokio::task::spawn_blocking(move || PreparedMessage::parse(sender, &recipients, raw)).await
+  Ok(tokio::task::spawn_blocking(move || PreparedMessage::parse(sender, &recipients, raw)).await??)
 }
 
 /// Splits a received batch into groups of at most [`MAX_BATCH_BYTES`] of raw

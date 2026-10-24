@@ -7,6 +7,7 @@ use time::macros::format_description;
 use tracing::{debug, error};
 use ulid::Ulid;
 
+use crate::content::{Bodies, decompress, decompress_prefix};
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::locator::TransferEncoding;
 use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
@@ -148,7 +149,7 @@ impl MessageRepository {
     recipients: &[String],
     raw: &[u8],
   ) -> Result<MessageSummary, StorageError> {
-    let message = PreparedMessage::parse(sender.to_string(), recipients, raw.to_vec());
+    let message = PreparedMessage::parse(sender.to_string(), recipients, raw.to_vec())?;
     self.insert_prepared(&message).await
   }
 
@@ -303,10 +304,10 @@ impl MessageRepository {
 
   /// Counts the total number of FTS5 search matches.
   ///
-  /// Counted on the index alone. `messages_fts` is an external-content table
-  /// over `messages` and `message_content`, so every indexed rowid has exactly
-  /// one source row and joining back cannot change the count: it only spends
-  /// a primary-key lookup per match to fetch a row the count then discards.
+  /// Counted on the index alone. Every indexed rowid is a stored message's
+  /// `seq`, written and removed with it, so joining back cannot change the
+  /// count: it only spends a primary-key lookup per match to fetch a row the
+  /// count then discards.
   pub async fn search_count(&self, query: &str) -> Result<i64, StorageError> {
     let quoted = match Self::sanitize_fts_query(query) {
       Some(q) => q,
@@ -357,21 +358,28 @@ impl MessageRepository {
     Some(format!("\"{}\"", sanitized))
   }
 
-  /// Fetches a single message by ID, including its parsed bodies.
+  /// Fetches a single message by ID, including its bodies.
   ///
-  /// The raw RFC 5322 bytes are not read; use [`Self::get_raw`] for those.
-  /// They follow the bodies in `message_content`, so SQLite stops reading the
-  /// row before it reaches them.
+  /// The bodies are parsed from the stored source, the way ingest parsed
+  /// them, on the blocking pool for a large message.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id, and
+  /// [`StorageError::ContentCorrupt`] if its stored source is damaged.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
-    let message = sqlx::query_as::<_, Message>(
-      "SELECT m.id, m.sender, m.recipients, m.subject, c.text_body, c.html_body, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    let row = sqlx::query_as::<_, MessageRow>(
+      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at, c.raw FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
     )
     .bind(id)
     .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
 
-    Ok(message)
+    if row.size >= BLOCKING_DECODE_THRESHOLD_BYTES {
+      return tokio::task::spawn_blocking(move || row.into_message()).await?;
+    }
+    row.into_message()
   }
 
   /// Atomically applies one or more metadata updates to a message.
@@ -409,8 +417,7 @@ impl MessageRepository {
   /// Deletes a single message, its FTS5 index entry, its content and its
   /// attachments atomically.
   ///
-  /// The index entry goes first: FTS5 reads the row back through
-  /// `messages_fts_source` to find the tokens to remove. Content and
+  /// The contentless index removes its entry by rowid alone. Content and
   /// attachments follow the `messages` row by cascade.
   pub async fn delete(&self, id: &str) -> Result<(), StorageError> {
     let mut txn = self.writer.begin().await?;
@@ -436,10 +443,9 @@ impl MessageRepository {
   /// Deletes all messages and clears the FTS5 index atomically. Returns the
   /// count of deleted messages.
   ///
-  /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`.
-  /// An external-content index reads the content row to work out which tokens
-  /// to remove, so a plain `DELETE` issued after the source rows are gone is a
-  /// silent no-op that leaves the whole index behind. The child tables are
+  /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`,
+  /// which empties the index in one step instead of removing every row's
+  /// tokens one by one. The child tables are
   /// emptied next, each by a `DELETE` without a `WHERE` that SQLite turns into
   /// dropping its pages whole, so removing `messages` last has no cascade left
   /// to walk.
@@ -633,39 +639,54 @@ impl MessageRepository {
   }
 
   /// Returns the raw RFC 5322 bytes for a message.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id, and
+  /// [`StorageError::ContentCorrupt`] if its stored source is damaged.
   pub async fn get_raw(&self, id: &str) -> Result<Vec<u8>, StorageError> {
-    let row: (Vec<u8>,) = sqlx::query_as(
-      "SELECT c.raw FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    let (frame, size): (Vec<u8>, i64) = sqlx::query_as(
+      "SELECT c.raw, m.size FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
     )
     .bind(id)
     .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
-    Ok(row.0)
+    if size >= BLOCKING_DECODE_THRESHOLD_BYTES {
+      let id = id.to_string();
+      return tokio::task::spawn_blocking(move || decompress(&frame, size, &id)).await?;
+    }
+    decompress(&frame, size, id)
   }
 
   /// Returns at most `max_bytes` from the start of a message's raw bytes.
   ///
   /// Callers that only need the header section, or only enough source to fill
-  /// a preview, should use this rather than [`Self::get_raw`]: `substr` saves
-  /// copying the rest of the blob out of SQLite and sending it to the caller.
-  /// It does not save the read itself: SQLite still loads the whole blob to
-  /// take a prefix of it, so this costs about as much disk and cache as
-  /// [`Self::get_raw`].
+  /// a preview, should use this rather than [`Self::get_raw`]: only the
+  /// prefix is decompressed. SQLite still loads the whole stored frame, so it
+  /// saves CPU and memory, not the read itself.
   ///
   /// # Errors
   ///
-  /// Returns [`StorageError::NotFound`] if no message has that id.
+  /// Returns [`StorageError::NotFound`] if no message has that id, and
+  /// [`StorageError::ContentCorrupt`] if its stored source is damaged.
   pub async fn get_raw_prefix(&self, id: &str, max_bytes: i64) -> Result<Vec<u8>, StorageError> {
-    let row: (Vec<u8>,) = sqlx::query_as(
-      "SELECT substr(c.raw, 1, ?2) FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    let (frame, size): (Vec<u8>, i64) = sqlx::query_as(
+      "SELECT c.raw, m.size FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
     )
     .bind(id)
-    .bind(max_bytes)
     .fetch_optional(&self.readers)
     .await?
     .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
-    Ok(row.0)
+    let max_bytes = max_bytes.max(0);
+    if max_bytes.min(size) >= BLOCKING_DECODE_THRESHOLD_BYTES {
+      let id = id.to_string();
+      return tokio::task::spawn_blocking(move || {
+        decompress_prefix(&frame, max_bytes.unsigned_abs(), &id)
+      })
+      .await?;
+    }
+    decompress_prefix(&frame, max_bytes.unsigned_abs(), id)
   }
 
   /// Deletes messages older than the given ISO 8601 cutoff. Returns IDs of deleted messages.
@@ -818,7 +839,7 @@ async fn insert_rows_in(
   message: &PreparedMessage,
 ) -> Result<(i64, MessageSummary), StorageError> {
   let id = Ulid::new().to_string();
-  let size = message.raw.len() as i64;
+  let size = message.size as i64;
   let now = OffsetDateTime::now_utc()
     .format(ISO8601_FMT)
     .unwrap_or_default();
@@ -840,15 +861,11 @@ async fn insert_rows_in(
   .await?
   .last_insert_rowid();
 
-  sqlx::query(
-    "INSERT INTO message_content (seq, text_body, html_body, raw) VALUES (?1, ?2, ?3, ?4)",
-  )
-  .bind(seq)
-  .bind(&message.text_body)
-  .bind(&message.html_body)
-  .bind(&message.raw)
-  .execute(&mut *conn)
-  .await?;
+  sqlx::query("INSERT INTO message_content (seq, raw) VALUES (?1, ?2)")
+    .bind(seq)
+    .bind(&message.compressed_raw)
+    .execute(&mut *conn)
+    .await?;
 
   for attachment in &message.attachments {
     let (locator, content) = match &attachment.storage {
@@ -892,15 +909,53 @@ async fn insert_rows_in(
   ))
 }
 
-/// Located parts at least this long are decoded on the blocking pool.
+/// Messages, and located parts, at least this long are decompressed and
+/// decoded on the blocking pool.
 const BLOCKING_DECODE_THRESHOLD_BYTES: i64 = 256 * 1024;
+
+/// A message as stored, its source still compressed.
+#[derive(sqlx::FromRow)]
+struct MessageRow {
+  id: String,
+  sender: String,
+  recipients: String,
+  subject: Option<String>,
+  size: i64,
+  has_attachments: bool,
+  is_read: bool,
+  is_starred: bool,
+  tags: String,
+  created_at: String,
+  raw: Vec<u8>,
+}
+
+impl MessageRow {
+  /// Returns the message with the bodies parsed from its source.
+  fn into_message(self) -> Result<Message, StorageError> {
+    let bodies = Bodies::parse(&decompress(&self.raw, self.size, &self.id)?);
+    Ok(Message {
+      id: self.id,
+      sender: self.sender,
+      recipients: self.recipients,
+      subject: self.subject,
+      text_body: bodies.text,
+      html_body: bodies.html,
+      size: self.size,
+      has_attachments: self.has_attachments,
+      is_read: self.is_read,
+      is_starred: self.is_starred,
+      tags: self.tags,
+      created_at: self.created_at,
+    })
+  }
+}
 
 /// Columns of an [`AttachmentRow`], read from `attachments` aliased `a`,
 /// `messages` aliased `m` and `message_content` aliased `c`.
 ///
 /// `raw` is only touched for a located row, so an inline one never loads its
-/// message's raw source.
-const ATTACHMENT_ROW_COLUMNS: &str = "a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content, a.raw_offset, a.raw_len, a.transfer_encoding, CASE WHEN a.raw_offset IS NULL THEN NULL ELSE length(c.raw) END AS raw_size, CASE WHEN a.raw_offset IS NULL THEN NULL ELSE substr(c.raw, a.raw_offset + 1, a.raw_len) END AS located_body";
+/// message's source.
+const ATTACHMENT_ROW_COLUMNS: &str = "a.id, m.id AS message_id, a.filename, a.content_type, a.content_id, a.size, a.content, a.raw_offset, a.raw_len, a.transfer_encoding, m.size AS raw_size, CASE WHEN a.raw_offset IS NULL THEN NULL ELSE c.raw END AS compressed_raw";
 
 /// An attachment as stored: inline content, or a located slice of its
 /// message's raw source still to be decoded.
@@ -916,18 +971,15 @@ struct AttachmentRow {
   raw_offset: Option<i64>,
   raw_len: Option<i64>,
   transfer_encoding: Option<i64>,
-  raw_size: Option<i64>,
-  located_body: Option<Vec<u8>>,
+  raw_size: i64,
+  compressed_raw: Option<Vec<u8>>,
 }
 
 impl AttachmentRow {
-  /// Resolves the row into the attachment it stores, decoding a large
-  /// located part off the async runtime.
+  /// Resolves the row into the attachment it stores, decompressing and
+  /// decoding a located part of a large message off the async runtime.
   async fn resolve(self) -> Result<Attachment, StorageError> {
-    if self
-      .raw_len
-      .is_some_and(|len| len >= BLOCKING_DECODE_THRESHOLD_BYTES)
-    {
+    if self.compressed_raw.is_some() && self.raw_size >= BLOCKING_DECODE_THRESHOLD_BYTES {
       return tokio::task::spawn_blocking(move || self.into_attachment()).await?;
     }
     self.into_attachment()
@@ -935,23 +987,29 @@ impl AttachmentRow {
 
   /// Returns the attachment with its decoded contents.
   ///
-  /// A located part must lie within the raw source, decode, and decode to
-  /// the size recorded at ingest; otherwise the row is reported corrupt
+  /// A located part must lie within its message's source, decode, and decode
+  /// to the size recorded at ingest; otherwise the row is reported corrupt
   /// rather than served.
   fn into_attachment(self) -> Result<Attachment, StorageError> {
-    let content = match (self.content, &self.located_body) {
+    let raw = match &self.compressed_raw {
+      Some(frame) => Some(decompress(frame, self.raw_size, &self.message_id)?),
+      None => None,
+    };
+    let content = match (self.content, raw) {
       (Some(content), None) => Ok(content),
-      (None, Some(body)) => {
-        let in_bounds = matches!(
-          (self.raw_offset, self.raw_len, self.raw_size),
-          (Some(offset), Some(len), Some(raw_size))
-            if offset >= 0 && len >= 0 && offset.checked_add(len).is_some_and(|end| end <= raw_size)
-        );
+      (None, Some(raw)) => {
+        let body = match (self.raw_offset, self.raw_len) {
+          (Some(offset), Some(len)) => usize::try_from(offset)
+            .ok()
+            .zip(usize::try_from(len).ok())
+            .and_then(|(offset, len)| raw.get(offset..offset.checked_add(len)?)),
+          _ => None,
+        };
         let decoded = self
           .transfer_encoding
           .and_then(TransferEncoding::from_code)
-          .filter(|_| in_bounds)
-          .and_then(|encoding| encoding.decode(body));
+          .zip(body)
+          .and_then(|(encoding, body)| encoding.decode(body));
         match decoded {
           Some(decoded) if self.size == Some(decoded.len() as i64) => Ok(decoded),
           decoded => Err(decoded.map(|decoded| decoded.len() as i64)),
@@ -1141,7 +1199,8 @@ mod tests {
       "sender@test.com".to_string(),
       &["rcpt@test.com".into()],
       multipart_email("Prepared"),
-    );
+    )
+    .unwrap();
 
     let summary = repo.insert_prepared(&prepared).await.unwrap();
 
@@ -1159,7 +1218,8 @@ mod tests {
       "a@test.com".to_string(),
       &["b@test.com".into()],
       raw_email("Twice", "a@test.com", "b@test.com"),
-    );
+    )
+    .unwrap();
 
     let first = repo.insert_prepared(&prepared).await.unwrap();
     let second = repo.insert_prepared(&prepared).await.unwrap();
@@ -1174,6 +1234,7 @@ mod tests {
       &["b@test.com".into()],
       raw_email(subject, "a@test.com", "b@test.com"),
     )
+    .unwrap()
   }
 
   async fn poison_subject(repo: &MessageRepository, subject: &str) {
@@ -2756,10 +2817,6 @@ mod tests {
   async fn listing_searching_and_counting_work_without_message_content() {
     let repo = test_repo().await;
     let ids = seed_mailbox(&repo).await;
-    sqlx::query("DROP VIEW messages_fts_source")
-      .execute(&repo.writer)
-      .await
-      .unwrap();
     sqlx::query("DROP TABLE message_content")
       .execute(&repo.writer)
       .await

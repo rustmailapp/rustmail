@@ -9,13 +9,21 @@ use crate::StorageError;
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Schema version this binary reads and writes, kept in `PRAGMA user_version`.
 ///
-/// Schema 1 keeps each message's metadata in `messages` and its bodies and
-/// raw source in `message_content`, so listing, counting and searching never
-/// read a body. A file with a higher version was written by a newer rustmail
-/// and is refused.
-pub const SCHEMA_VERSION: i64 = 1;
+/// Schema 2 keeps each message's metadata in `messages` and only its raw
+/// source, compressed, in `message_content`; the bodies are parsed from it on
+/// read. Listing, counting and searching never read the raw source. A file
+/// with a higher version was written by a newer rustmail and is refused.
+pub const SCHEMA_VERSION: i64 = 2;
+/// `user_version` of the schema rustmail 0.8 and 0.9 write, which
+/// [`crate::prepare_database_file`] migrates.
+pub(crate) const PREVIOUS_SCHEMA_VERSION: i64 = 1;
 /// `user_version` of every file written before schema versioning existed.
 const LEGACY_SCHEMA_VERSION: i64 = 0;
+/// zstd level `message_content.raw` is compressed at.
+///
+/// Level 1 compresses mail about as well as the default level 3 and a little
+/// faster, which matters on the ingest path.
+pub(crate) const RAW_COMPRESSION_LEVEL: i32 = 1;
 /// Name the database is reported under when SQLite has no file path for it.
 const IN_MEMORY_DATABASE_NAME: &str = "in-memory database";
 /// Page cache of every connection.
@@ -43,19 +51,20 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// file at its high-water size forever.
 const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 
-/// Statements that create schema 1 in an empty file, in order.
+/// Statements that create schema 2 in an empty file, in order.
 ///
 /// `messages` holds only what a listing reads, so a list, count or filter
-/// never walks a body's overflow chain. Bodies sit ahead of `raw` in
-/// `message_content`, so reading a message's bodies stops before its raw
-/// source. `seq` is an explicit `INTEGER PRIMARY KEY`: it is arrival order,
-/// the cursor position and the FTS rowid, and `VACUUM` never renumbers it.
+/// never walks a message's content. `message_content.raw` is the RFC 5322
+/// source as one zstd frame; its decompressed length is `messages.size`.
+/// `seq` is an explicit `INTEGER PRIMARY KEY`: it is arrival order, the
+/// cursor position and the FTS rowid, and `VACUUM` never renumbers it.
 ///
-/// The full-text index keeps its external content, now read through a view
-/// joining both tables on their primary keys. `attachments` has no
-/// `message_id` and none of the legacy index names, so a rustmail from before
-/// schema versioning fails on its first `CREATE INDEX` against this file,
-/// before it writes anything.
+/// The full-text index is contentless with `contentless_delete`, so it keeps
+/// no copy of the text it indexes and still removes a row by rowid alone.
+/// `attachments` has no `message_id` and none of the legacy index names, so
+/// a rustmail from before schema versioning fails on its first
+/// `CREATE INDEX` against this file, before it writes anything; 0.8 and 0.9
+/// refuse its `user_version`.
 ///
 /// `messages.tags` stays the JSON array the API returns, order and duplicates
 /// included. `message_tags` indexes it, one row per distinct tag, so the tag
@@ -67,25 +76,48 @@ const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 ///
 /// An attachment is either located or inline, never both. A located one
 /// keeps `raw_offset`, `raw_len` and `transfer_encoding` (0 identity, 1
-/// quoted-printable, 2 base64) into its message's `raw` and is decoded on
-/// request; an inline one keeps its decoded `content`, because serving it
-/// from `raw` could not be proven to reproduce the parser's output.
-pub(crate) const SCHEMA_1_DDL: &[&str] = &[
+/// quoted-printable, 2 base64) into its message's decompressed source and is
+/// decoded on request; an inline one keeps its decoded `content`, because
+/// serving it from the source could not be proven to reproduce the parser's
+/// output.
+pub(crate) const SCHEMA_DDL: &[&str] = &[
+  MESSAGES_DDL,
+  "CREATE INDEX idx_messages_created_at ON messages(created_at)",
+  "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
+  "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
   r#"
-  CREATE TABLE messages (
-    seq             INTEGER PRIMARY KEY,
-    id              TEXT NOT NULL UNIQUE,
-    sender          TEXT NOT NULL,
-    recipients      TEXT NOT NULL,
-    subject         TEXT,
-    size            INTEGER NOT NULL,
-    has_attachments INTEGER NOT NULL DEFAULT 0,
-    is_read         INTEGER NOT NULL DEFAULT 0,
-    is_starred      INTEGER NOT NULL DEFAULT 0,
-    tags            TEXT NOT NULL DEFAULT '[]',
-    created_at      TEXT NOT NULL
+  CREATE TABLE message_content (
+    seq INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
+    raw BLOB NOT NULL
   )
   "#,
+  r#"
+  CREATE VIRTUAL TABLE messages_fts USING fts5(
+    subject,
+    text_body,
+    sender,
+    recipients,
+    content='',
+    contentless_delete=1
+  )
+  "#,
+  ATTACHMENTS_DDL,
+  "CREATE INDEX idx_attachments_by_message ON attachments(message_seq)",
+  ATTACHMENTS_BY_CID_DDL,
+  MESSAGE_TAGS_DDL,
+  "CREATE INDEX idx_message_tags_by_message ON message_tags(message_seq)",
+  MESSAGE_TAGS_INSERT_TRIGGER_DDL,
+  MESSAGE_TAGS_UPDATE_TRIGGER_DDL,
+];
+
+/// Statements that created schema 1, which rustmail 0.8 and 0.9 write.
+///
+/// The same as [`SCHEMA_DDL`] except for `message_content`, which keeps the
+/// parsed bodies ahead of an uncompressed `raw`, and the full-text index,
+/// which reads its external content through a view joining both tables.
+#[cfg(test)]
+pub(crate) const SCHEMA_1_DDL: &[&str] = &[
+  MESSAGES_DDL,
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
   "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
@@ -113,7 +145,32 @@ pub(crate) const SCHEMA_1_DDL: &[&str] = &[
     content_rowid='seq'
   )
   "#,
-  r#"
+  ATTACHMENTS_DDL,
+  "CREATE INDEX idx_attachments_by_message ON attachments(message_seq)",
+  ATTACHMENTS_BY_CID_DDL,
+  MESSAGE_TAGS_DDL,
+  "CREATE INDEX idx_message_tags_by_message ON message_tags(message_seq)",
+  MESSAGE_TAGS_INSERT_TRIGGER_DDL,
+  MESSAGE_TAGS_UPDATE_TRIGGER_DDL,
+];
+
+const MESSAGES_DDL: &str = r#"
+  CREATE TABLE messages (
+    seq             INTEGER PRIMARY KEY,
+    id              TEXT NOT NULL UNIQUE,
+    sender          TEXT NOT NULL,
+    recipients      TEXT NOT NULL,
+    subject         TEXT,
+    size            INTEGER NOT NULL,
+    has_attachments INTEGER NOT NULL DEFAULT 0,
+    is_read         INTEGER NOT NULL DEFAULT 0,
+    is_starred      INTEGER NOT NULL DEFAULT 0,
+    tags            TEXT NOT NULL DEFAULT '[]',
+    created_at      TEXT NOT NULL
+  )
+  "#;
+
+const ATTACHMENTS_DDL: &str = r#"
   CREATE TABLE attachments (
     id                TEXT PRIMARY KEY,
     message_seq       INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
@@ -128,29 +185,31 @@ pub(crate) const SCHEMA_1_DDL: &[&str] = &[
     CHECK ((content IS NULL) = (raw_offset IS NOT NULL)),
     CHECK (raw_offset IS NULL OR (raw_offset >= 0 AND raw_len >= 0 AND transfer_encoding IN (0, 1, 2)))
   )
-  "#,
-  "CREATE INDEX idx_attachments_by_message ON attachments(message_seq)",
-  r#"
+  "#;
+
+const ATTACHMENTS_BY_CID_DDL: &str = r#"
   CREATE INDEX idx_attachments_by_cid ON attachments(message_seq, content_id)
   WHERE content_id IS NOT NULL
-  "#,
-  r#"
+  "#;
+
+const MESSAGE_TAGS_DDL: &str = r#"
   CREATE TABLE message_tags (
     tag         TEXT NOT NULL,
     message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
     PRIMARY KEY (tag, message_seq)
   ) WITHOUT ROWID
-  "#,
-  "CREATE INDEX idx_message_tags_by_message ON message_tags(message_seq)",
-  r#"
+  "#;
+
+const MESSAGE_TAGS_INSERT_TRIGGER_DDL: &str = r#"
   CREATE TRIGGER message_tags_after_insert AFTER INSERT ON messages
   WHEN NEW.tags <> '[]'
   BEGIN
     INSERT OR IGNORE INTO message_tags(tag, message_seq)
       SELECT value, NEW.seq FROM json_each(NEW.tags);
   END
-  "#,
-  r#"
+  "#;
+
+const MESSAGE_TAGS_UPDATE_TRIGGER_DDL: &str = r#"
   CREATE TRIGGER message_tags_after_update AFTER UPDATE OF tags ON messages
   WHEN NEW.tags IS NOT OLD.tags
   BEGIN
@@ -158,8 +217,7 @@ pub(crate) const SCHEMA_1_DDL: &[&str] = &[
     INSERT OR IGNORE INTO message_tags(tag, message_seq)
       SELECT value, NEW.seq FROM json_each(NEW.tags);
   END
-  "#,
-];
+  "#;
 
 /// Builds connection options for `db_url` with RustMail's SQLite tuning.
 ///
@@ -199,27 +257,28 @@ pub(crate) fn tuned(options: SqliteConnectOptions) -> SqliteConnectOptions {
 
 /// A database this binary can open, as found before anything is written.
 enum Layout {
-  /// No tables yet: schema 1 is created.
+  /// No tables yet: the current schema is created.
   Empty,
-  /// Schema 1, ready to use.
+  /// [`SCHEMA_VERSION`], ready to use.
   Current,
 }
 
-/// Opens the database at [`SCHEMA_VERSION`], creating schema 1 in an empty
-/// file, and switches it to WAL.
+/// Opens the database at [`SCHEMA_VERSION`], creating it in an empty file,
+/// and switches it to WAL.
 ///
 /// The file's `user_version` and tables are read before anything is written,
 /// and every refusal leaves the file untouched:
 ///
 /// | `user_version` | Contents | Result |
 /// |---|---|---|
-/// | 0 | no tables | schema 1 is created |
+/// | 0 | no tables | schema 2 is created |
 /// | 0 | a `messages` table with a `raw` column | [`StorageError::LegacySchema`] |
-/// | 0 | anything else | [`StorageError::UnrecognizedSchema`] |
-/// | 1 | – | opened |
-/// | > 1 | – | [`StorageError::NewerSchema`] |
+/// | 1 | a `message_content` table with a `text_body` column | [`StorageError::LegacySchema`] |
+/// | 0 or 1 | anything else | [`StorageError::UnrecognizedSchema`] |
+/// | 2 | – | opened |
+/// | > 2 | – | [`StorageError::NewerSchema`] |
 ///
-/// Creating schema 1 is one `IMMEDIATE` transaction whose last statement sets
+/// Creating the schema is one `IMMEDIATE` transaction whose last statement sets
 /// `user_version`, so a crash midway leaves an empty file, and a second
 /// process racing to create the same file finds the finished schema instead.
 ///
@@ -244,7 +303,7 @@ async fn create_schema(conn: &mut SqliteConnection) -> Result<(), StorageError> 
   if let Layout::Current = inspect_layout(&mut txn).await? {
     return Ok(());
   }
-  for statement in SCHEMA_1_DDL {
+  for statement in SCHEMA_DDL {
     sqlx::query(statement).execute(&mut *txn).await?;
   }
   sqlx::query(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
@@ -258,8 +317,9 @@ async fn inspect_layout(conn: &mut SqliteConnection) -> Result<Layout, StorageEr
   match probe(conn).await? {
     FileSchema::Empty => Ok(Layout::Empty),
     FileSchema::Current => Ok(Layout::Current),
-    FileSchema::Legacy => Err(StorageError::LegacySchema {
+    FileSchema::Legacy | FileSchema::Previous => Err(StorageError::LegacySchema {
       database: database_name(conn).await?,
+      found: probe_version(conn).await?,
       supported: SCHEMA_VERSION,
     }),
   }
@@ -272,6 +332,9 @@ pub(crate) enum FileSchema {
   Empty,
   /// Schema 0: one `messages` row per message, raw source included.
   Legacy,
+  /// Schema 1: parsed bodies and uncompressed raw source in
+  /// `message_content`, written by rustmail 0.8 and 0.9.
+  Previous,
   /// [`SCHEMA_VERSION`].
   Current,
 }
@@ -313,11 +376,27 @@ pub(crate) async fn probe(conn: &mut SqliteConnection) -> Result<FileSchema, Sto
   if found == LEGACY_SCHEMA_VERSION && has_legacy_messages {
     return Ok(FileSchema::Legacy);
   }
+  let has_previous_content: bool = sqlx::query_scalar(
+    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('message_content') WHERE name = 'text_body')",
+  )
+  .fetch_one(&mut *conn)
+  .await?;
+  if found == PREVIOUS_SCHEMA_VERSION && has_previous_content {
+    return Ok(FileSchema::Previous);
+  }
   Err(StorageError::UnrecognizedSchema {
     database: database_name(conn).await?,
     found,
     tables,
   })
+}
+
+async fn probe_version(conn: &mut SqliteConnection) -> Result<i64, StorageError> {
+  Ok(
+    sqlx::query_scalar("PRAGMA user_version")
+      .fetch_one(&mut *conn)
+      .await?,
+  )
 }
 
 async fn database_name(conn: &mut SqliteConnection) -> Result<String, StorageError> {
@@ -579,8 +658,8 @@ mod tests {
     assert_eq!(
       error.to_string(),
       format!(
-        "{database} is schema 2, written by a newer rustmail; \
-         this binary supports schema 1. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
+        "{database} is schema 3, written by a newer rustmail; \
+         this binary supports schema 2. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
       )
     );
   }
@@ -616,16 +695,34 @@ mod tests {
 
     let StorageError::LegacySchema {
       ref database,
+      found,
       supported,
     } = error
     else {
       panic!("expected LegacySchema, got {error:?}");
     };
+    assert_eq!(found, LEGACY_SCHEMA_VERSION);
     assert_eq!(supported, SCHEMA_VERSION);
     assert!(
       database.ends_with("rustmail.db"),
       "the error should name the file, got {database}"
     );
+  }
+
+  #[tokio::test]
+  async fn a_schema_1_database_is_refused_untouched() {
+    let (_guard, path) = scratch_database("previous-schema");
+    let mut statements: Vec<String> = SCHEMA_1_DDL.iter().map(|ddl| ddl.to_string()).collect();
+    statements.push(format!("PRAGMA user_version = {PREVIOUS_SCHEMA_VERSION}"));
+    let statements: Vec<&str> = statements.iter().map(String::as_str).collect();
+    run_on_plain_file(&path, &statements).await;
+
+    let error = assert_refused_untouched(&path).await;
+
+    let StorageError::LegacySchema { found, .. } = error else {
+      panic!("expected LegacySchema, got {error:?}");
+    };
+    assert_eq!(found, PREVIOUS_SCHEMA_VERSION);
   }
 
   #[tokio::test]
@@ -736,23 +833,6 @@ mod tests {
     assert!(
       plan.contains("idx_attachments_by_message"),
       "attachment lookup by message is not using its index: {plan}"
-    );
-  }
-
-  #[tokio::test]
-  async fn the_fts_content_view_resolves_a_row_by_both_primary_keys() {
-    let pool = open_in_memory().await;
-    initialize_database(&pool).await.unwrap();
-
-    let plan = query_plan(
-      &pool,
-      "SELECT seq, subject, text_body, sender, recipients FROM messages_fts_source WHERE seq = 1",
-    )
-    .await;
-    assert_eq!(
-      plan,
-      "SEARCH m USING INTEGER PRIMARY KEY (rowid=?) | SEARCH c USING INTEGER PRIMARY KEY (rowid=?)",
-      "FTS5 reads its content through this lookup on every delete"
     );
   }
 

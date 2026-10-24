@@ -201,8 +201,11 @@ mod tests {
   const SMALL_MESSAGES: usize = 3000;
   const FEW_SMALL_MESSAGES: usize = 1000;
   const SMALL_BODY_BYTES: usize = 8 * 1024;
-  const LARGE_MESSAGES: usize = 80;
+  const LARGE_MESSAGES: usize = 100;
+  const BASE64_ALPHABET: &[u8] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const LARGE_ATTACHMENT_BYTES: usize = 1024 * 1024;
+  const LINE_CHARS: usize = 76;
   const CONCURRENT_INSERTS: usize = 32;
   const BATCH: usize = 500;
   const FUTURE_CUTOFF: &str = "9999-12-31T23:59:59Z";
@@ -266,19 +269,39 @@ mod tests {
     .sum()
   }
 
+  /// `len` base64 characters from a generator seeded with `seed`: text zstd
+  /// shrinks by about a quarter at most, so the stored sizes stay close to
+  /// the raw ones.
+  fn incompressible_text(seed: usize, len: usize) -> String {
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ seed as u64;
+    (0..len)
+      .map(|_| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        char::from(BASE64_ALPHABET[(state % BASE64_ALPHABET.len() as u64) as usize])
+      })
+      .collect()
+  }
+
   fn small_message(index: usize) -> PreparedMessage {
-    let body = "lorem ipsum dolor sit amet ".repeat(SMALL_BODY_BYTES / 27);
+    let body = incompressible_text(index, SMALL_BODY_BYTES);
     PreparedMessage::parse(
       "a@test.com".to_string(),
       &["b@test.com".into()],
       format!("From: a@test.com\r\nTo: b@test.com\r\nSubject: small {index}\r\n\r\n{body}")
         .into_bytes(),
     )
+    .unwrap()
   }
 
   fn large_message(index: usize) -> PreparedMessage {
-    let line = format!("{index:0>76}\r\n");
-    let payload = line.repeat(LARGE_ATTACHMENT_BYTES / line.len());
+    let noise = incompressible_text(index, LARGE_ATTACHMENT_BYTES);
+    let payload: String = noise
+      .as_bytes()
+      .chunks(LINE_CHARS)
+      .map(|line| format!("{}\r\n", String::from_utf8_lossy(line)))
+      .collect();
     PreparedMessage::parse(
       "a@test.com".to_string(),
       &["b@test.com".into()],
@@ -296,6 +319,7 @@ mod tests {
       )
       .into_bytes(),
     )
+    .unwrap()
   }
 
   async fn fill(repo: &MessageRepository, messages: Vec<PreparedMessage>) {

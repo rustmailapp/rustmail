@@ -18,7 +18,7 @@ See the [Docker guide](/getting-started/docker) for Compose, persistence, and co
 brew install rustmailapp/rustmail/rustmail
 ```
 
-If you run RustMail as a service (`brew services start rustmail`), upgrading to 0.8 migrates the database unattended on the next restart. See [Upgrading](/getting-started/upgrading).
+If you run RustMail as a service (`brew services start rustmail`), upgrading to 0.8 or 0.10 migrates the database unattended on the next restart. See [Upgrading](/getting-started/upgrading).
 
 ## Arch Linux (AUR)
 

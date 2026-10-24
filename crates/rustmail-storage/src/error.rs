@@ -23,17 +23,19 @@ pub enum StorageError {
     /// The newest schema version this binary supports.
     supported: i64,
   },
-  /// The database predates schema versioning: rustmail 0.7 and earlier kept
-  /// every message in one `messages` row. It is refused before anything is
+  /// The database was written by an older rustmail: schema 0 by 0.7 and
+  /// earlier, schema 1 by 0.8 and 0.9. It is refused before anything is
   /// written to it; [`crate::prepare_database_file`] migrates it first.
   #[error(
-    "{database} is schema 0, written by rustmail 0.7 or earlier; \
+    "{database} is schema {found}, written by an older rustmail; \
      this binary supports schema {supported} and migrates such a file before opening it. \
      Start rustmail on it to migrate it, or open it with the rustmail that wrote it."
   )]
   LegacySchema {
     /// The database file, as SQLite reports it.
     database: String,
+    /// The schema version recorded in the file's `user_version`.
+    found: i64,
     /// The schema version this binary supports.
     supported: i64,
   },
@@ -56,6 +58,21 @@ pub enum StorageError {
     /// decode or lie outside the raw message.
     actual_size: Option<i64>,
   },
+  /// A message's stored source did not decompress to its recorded size.
+  /// Nothing is served in its place.
+  #[error(
+    "the stored source of message {message_id} is damaged ({reason}); \
+     delete the message and re-send it"
+  )]
+  ContentCorrupt {
+    /// The message whose source failed its check.
+    message_id: String,
+    /// What the check found.
+    reason: String,
+  },
+  /// zstd refused to compress a message's raw source.
+  #[error("could not compress a message's raw source: {0}")]
+  Compress(std::io::Error),
   /// The blocking task decoding a large attachment did not complete.
   #[error("decoding a stored attachment did not complete: {0}")]
   DecodeAborted(#[from] tokio::task::JoinError),
@@ -150,10 +167,11 @@ const BYTES_PER_MB: u64 = 1_000_000;
 /// hand; the refusal itself changes nothing.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationRefusal {
-  /// A legacy database sits next to a backup from an earlier migration, so
-  /// an older rustmail probably created a new database after a partial swap.
+  /// An older database sits next to a backup of the same schema from an
+  /// earlier migration, so an older rustmail probably created a new database
+  /// after a partial swap.
   #[error(
-    "{} is schema 0 but the backup {} already exists, so an older rustmail may have \
+    "{} is schema {schema} but the backup {} already exists, so an older rustmail may have \
      written a new database after an interrupted migration (migration copy: {}). Keep the \
      file whose mail you want as {}, move the others away, and restart.",
     .database.display(),
@@ -164,14 +182,17 @@ pub enum MigrationRefusal {
   AmbiguousBackup {
     /// The database.
     database: PathBuf,
+    /// The database's schema version.
+    schema: i64,
     /// The existing backup.
     backup: PathBuf,
     /// The migration copy, if one exists.
     migrating: Option<PathBuf>,
   },
-  /// A migration copy sits next to a database that is already schema 1.
+  /// A migration copy sits next to a database that is already at the current
+  /// schema.
   #[error(
-    "{} is already schema 1, but a stray migration copy {} sits next to it. \
+    "{} is already at the current schema, but a stray migration copy {} sits next to it. \
      Move {} away, with any -wal or -shm beside it, and restart.",
     .database.display(),
     .migrating.display(),
@@ -215,7 +236,7 @@ pub enum MigrationRefusal {
     /// The `-wal` or `-shm` file found.
     file: PathBuf,
   },
-  /// The legacy database changed while the migration held its write lock,
+  /// The source database changed while the migration held its write lock,
   /// which only a writer bypassing SQLite's locks can do.
   #[error(
     "{} changed while the migration held its write lock; stop every process \
@@ -226,14 +247,13 @@ pub enum MigrationRefusal {
     /// The database.
     database: PathBuf,
   },
-  /// Any other combination of database, backup and migration copy.
+  /// Any other combination of database, backups and migration copy.
   #[error(
-    "cannot tell how to open {}: the database is {}, the backup {} is {}, and the \
+    "cannot tell how to open {}: the database is {}, the backups beside it are {}, and the \
      migration copy {} is {}. Put the file you want at {}, move the others away, and restart.",
     .database.display(),
     .database_state,
-    .backup.display(),
-    .backup_state,
+    describe_backups(.backups),
     .migrating.display(),
     .migrating_state,
     .database.display()
@@ -241,17 +261,26 @@ pub enum MigrationRefusal {
   UnknownState {
     /// The database.
     database: PathBuf,
-    /// What the database is: absent, empty, schema 0 or schema 1.
+    /// What the database is: absent, empty, schema 0, 1 or 2.
     database_state: &'static str,
-    /// The backup.
-    backup: PathBuf,
-    /// Whether the backup exists.
-    backup_state: &'static str,
+    /// The backups that exist.
+    backups: Vec<PathBuf>,
     /// The migration copy.
     migrating: PathBuf,
     /// Whether the copy exists, and whether it is complete.
     migrating_state: &'static str,
   },
+}
+
+fn describe_backups(backups: &[PathBuf]) -> String {
+  if backups.is_empty() {
+    return "none".to_string();
+  }
+  backups
+    .iter()
+    .map(|backup| backup.display().to_string())
+    .collect::<Vec<_>>()
+    .join(", ")
 }
 
 /// Why `restore-backup` refused to put the backup back in place.
@@ -260,10 +289,10 @@ pub enum MigrationRefusal {
 /// renames nothing.
 #[derive(Debug, thiserror::Error)]
 pub enum RestoreRefusal {
-  /// The database is not a migrated schema-1 file, so there is nothing to
-  /// restore the backup over.
+  /// The database is not a file at the current schema, so there is nothing
+  /// to restore the backup over.
   #[error(
-    "{} is {}, not a schema-1 database, so there is nothing to restore the backup over; \
+    "{} is {}, not a schema-2 database, so there is nothing to restore the backup over; \
      restore-backup only undoes a completed storage migration (was the backup already restored?)",
     .database.display(),
     .database_state
@@ -271,31 +300,34 @@ pub enum RestoreRefusal {
   NotMigrated {
     /// The database.
     database: PathBuf,
-    /// What the database is: absent, empty or schema 0.
+    /// What the database is: absent, empty, schema 0 or schema 1.
     database_state: &'static str,
   },
   /// No backup sits beside the database.
   #[error(
-    "there is no backup {} to restore over {}; only a database migrated from rustmail 0.7 \
-     or earlier has one, and it is gone once deleted or restored",
+    "there is no backup {} to restore over {}; only a database migrated from an older \
+     rustmail has one, and it is gone once deleted or restored",
     .backup.display(),
     .database.display()
   )]
   NoBackup {
     /// The database.
     database: PathBuf,
-    /// Where the backup would be, `<db>.schema0.bak`.
+    /// Where the backup would be: the one its migration recorded, or
+    /// `<db>.schema1.bak` for a database no migration made.
     backup: PathBuf,
   },
-  /// The backup is not an intact schema-0 database.
+  /// The backup is not an intact database of the schema it was kept from.
   #[error(
-    "{} is not an intact schema-0 rustmail database ({reason}), so it is not restored; \
+    "{} is not an intact schema-{schema} rustmail database ({reason}), so it is not restored; \
      nothing was changed. Keep the file for inspection.",
     .backup.display()
   )]
   BackupInvalid {
     /// The backup.
     backup: PathBuf,
+    /// The schema the backup should be in.
+    schema: i64,
     /// What is wrong with it.
     reason: String,
   },
@@ -336,7 +368,7 @@ pub enum RestoreRefusal {
     /// The database.
     database: PathBuf,
   },
-  /// The name the schema-1 database would be kept under is taken.
+  /// The name the current database would be kept under is taken.
   #[error(
     "{} already exists; move it away, or wait a second, and run restore-backup again",
     .kept.display()
@@ -359,7 +391,7 @@ pub enum RestoreRefusal {
   NotAnInterruptedRestore {
     /// The missing database.
     database: PathBuf,
-    /// The backup, `<db>.schema0.bak`.
+    /// The backup.
     backup: PathBuf,
     /// What the files beside them show instead.
     reason: String,
