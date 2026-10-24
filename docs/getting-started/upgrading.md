@@ -24,7 +24,7 @@ Before the SMTP and HTTP listeners start, RustMail:
 3. Verifies the copy against the old database (counts, search index, integrity checks), and every compressed message against the source it came from.
 4. Swaps the files: the old database becomes the backup (see [The backup](#the-backup)) and the copy becomes `rustmail.db`.
 
-The old database is only read, never modified. If a check fails, RustMail exits with an error and leaves `rustmail.db` as it was. The next start rebuilds `rustmail.db.migrating` from scratch, so copy it somewhere else first if you want to attach it to a bug report.
+The old database is only read, never modified. If a check fails, RustMail exits with an error, keeps `rustmail.db.migrating` for a bug report, and leaves `rustmail.db` as it was. The next start checks the same copy again; delete it to have RustMail build a new one.
 
 The log shows progress while it runs. Every line carries `event="storage_migration"` and a `phase`:
 
