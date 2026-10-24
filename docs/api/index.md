@@ -1,4 +1,5 @@
 ---
+description: "RustMail REST API reference: list, read, export, release and delete captured emails, run CI assertions and stream events over WebSocket."
 aside: false
 outline: false
 title: API Reference

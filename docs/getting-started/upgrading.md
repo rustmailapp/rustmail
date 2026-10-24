@@ -1,3 +1,7 @@
+---
+description: "Upgrade RustMail to 0.8 and later: the automatic database upgrade, where the backup goes, and how to roll back."
+---
+
 # Upgrading
 
 RustMail 0.8 stores messages in a new database layout (schema 1). The first time the new version starts on a database written by RustMail 0.7 or earlier, it upgrades that database automatically. There is nothing to run by hand, and no API changes.

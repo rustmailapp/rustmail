@@ -1,3 +1,7 @@
+---
+description: "Configure RustMail with a TOML file: ports, storage, retention, STARTTLS, webhooks and release in one place."
+---
+
 # TOML Configuration File
 
 RustMail supports an optional TOML configuration file. Pass it with:

@@ -1,3 +1,7 @@
+---
+description: "Vim-style keyboard shortcuts for the RustMail web UI: move through the inbox, search, open details and delete without the mouse."
+---
+
 # Keyboard Shortcuts
 
 RustMail's web UI supports vim-style keyboard navigation.

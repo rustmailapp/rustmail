@@ -1,3 +1,7 @@
+---
+description: "The RustMail web UI: a live inbox, HTML preview, details rail with auth results, attachments and flagged links, in dark or light."
+---
+
 # Web UI
 
 The web UI is served on the HTTP port (`8025` by default) and updates live over the [WebSocket](/features/websocket): new mail shows up the moment it arrives.

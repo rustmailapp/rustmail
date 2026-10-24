@@ -1,3 +1,7 @@
+---
+description: "RustMail is a local SMTP mail catcher: point your app at it in dev or CI and every email lands in a web UI instead of a real inbox."
+---
+
 # Introduction
 
 RustMail is a local SMTP mail catcher. Point your app's outbound email at it during development or testing, and every message lands in a web UI instead of a real inbox.

@@ -1,3 +1,7 @@
+---
+description: "Run RustMail with Docker or Docker Compose: multi-arch image for amd64, arm64 and armv7, persistence, environment variables and STARTTLS."
+---
+
 # Docker
 
 RustMail ships a multi-arch Docker image supporting `linux/amd64`, `linux/arm64`, and `linux/arm/v7`.

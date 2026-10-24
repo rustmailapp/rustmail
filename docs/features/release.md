@@ -1,3 +1,7 @@
+---
+description: "Forward a captured email to a real SMTP server with RustMail release, to re-deliver a test email to an actual mailbox."
+---
+
 # Email Release
 
 Forward a captured email to a real SMTP server. This is useful for re-delivering a test email to an actual mailbox.

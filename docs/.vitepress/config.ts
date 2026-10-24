@@ -78,30 +78,55 @@ const reference: DefaultTheme.SidebarItem[] = [
   { text: "Getting Started Guide", link: "/getting-started/introduction" },
 ];
 
+const SITE_URL = "https://docs.rustmail.app";
+const OG_IMAGE = "https://rustmail.app/og.png";
+const OG_IMAGE_WIDTH = "1200";
+const OG_IMAGE_HEIGHT = "630";
+const OG_IMAGE_ALT =
+  "RustMail web UI: the inbox, an HTML email in desktop preview, and the details rail listing its links";
+
+function pageUrl(relativePath: string): string {
+  const path = relativePath.replace(/(^|\/)index\.md$/, "$1").replace(/\.md$/, "");
+  return `${SITE_URL}/${path}`;
+}
+
 export default defineConfig({
   transformPageData(pageData) {
     if (pageData.params?.pageTitle) {
       pageData.title = pageData.params.pageTitle;
     }
+    if (pageData.params?.pageDescription) {
+      pageData.description = pageData.params.pageDescription;
+    }
+  },
+
+  transformHead({ pageData, title, description }) {
+    const url = pageUrl(pageData.relativePath);
+    return [
+      ["link", { rel: "canonical", href: url }],
+      ["meta", { property: "og:type", content: "website" }],
+      ["meta", { property: "og:site_name", content: "RustMail" }],
+      ["meta", { property: "og:url", content: url }],
+      ["meta", { property: "og:title", content: title }],
+      ["meta", { property: "og:description", content: description }],
+      ["meta", { property: "og:image", content: OG_IMAGE }],
+      ["meta", { property: "og:image:width", content: OG_IMAGE_WIDTH }],
+      ["meta", { property: "og:image:height", content: OG_IMAGE_HEIGHT }],
+      ["meta", { property: "og:image:alt", content: OG_IMAGE_ALT }],
+      ["meta", { name: "twitter:card", content: "summary_large_image" }],
+    ];
   },
 
   title: "RustMail",
   description:
-    "A self-hosted SMTP mail catcher built in Rust — capture, inspect, and test outbound email",
+    "RustMail documentation: install, configure and use the local SMTP mail catcher in dev and CI.",
   head: [
     ["link", { rel: "icon", type: "image/png", href: "/favicon.png" }],
     ["meta", { name: "theme-color", content: "#e6653c" }],
-    ["meta", { property: "og:title", content: "RustMail" }],
-    [
-      "meta",
-      {
-        property: "og:description",
-        content:
-          "Self-hosted SMTP mail catcher with a modern web UI, full-text search, and CI-native assertions",
-      },
-    ],
-    ["meta", { name: "twitter:card", content: "summary" }],
   ],
+  sitemap: {
+    hostname: SITE_URL,
+  },
   cleanUrls: true,
   appearance: "dark",
   lastUpdated: true,

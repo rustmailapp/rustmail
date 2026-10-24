@@ -1,3 +1,7 @@
+---
+description: "Download captured emails as EML or JSON from the RustMail web UI or the REST export endpoint."
+---
+
 # Export
 
 Download captured emails in EML or JSON format via the REST API or the UI download button.

@@ -1,3 +1,7 @@
+---
+description: "Runtime benchmark of RustMail against Mailpit and MailHog: ingest rate and HTTP latency from one reproducible run."
+---
+
 # Benchmarks
 
 Runtime benchmark of RustMail against Mailpit and MailHog, from a single run

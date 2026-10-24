@@ -1,3 +1,7 @@
+---
+description: "rustmail.nvim: browse emails captured by RustMail in a floating window without leaving Neovim."
+---
+
 # Neovim Plugin
 
 [rustmail.nvim](https://github.com/rustmailapp/rustmail.nvim) is a Neovim client that connects to a running RustMail instance, providing a floating-window UI for browsing captured emails. New messages appear automatically via background polling.

@@ -1,3 +1,7 @@
+---
+description: "See DKIM, SPF and DMARC results for every captured email in RustMail, with verdict badges in the message details rail."
+---
+
 # Email Authentication Results
 
 RustMail parses email authentication headers and displays them in the **Authentication** section of the message details rail. No other local mail catcher offers this.

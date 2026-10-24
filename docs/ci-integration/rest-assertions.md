@@ -1,3 +1,7 @@
+---
+description: "Assert on captured emails over HTTP: the RustMail assertion endpoint returns 200 when conditions match and 417 otherwise, built for curl -f."
+---
+
 # REST Assertions
 
 RustMail exposes a purpose-built assertion endpoint for CI pipelines. It returns `200 OK` when conditions are met and `417 Expectation Failed` otherwise. Designed for `curl -f`.

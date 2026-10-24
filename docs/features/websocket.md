@@ -1,3 +1,7 @@
+---
+description: "Subscribe to RustMail events over WebSocket for live inbox updates and custom integrations."
+---
+
 # WebSocket
 
 RustMail pushes real-time events over a WebSocket connection. The UI uses this for live inbox updates. You can use the same endpoint for custom integrations.

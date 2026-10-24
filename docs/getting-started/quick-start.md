@@ -1,3 +1,7 @@
+---
+description: "Start RustMail, point your app's SMTP at localhost:1025 and open the inbox at localhost:8025 in under a minute."
+---
+
 # Quick Start
 
 ## Start the Server
