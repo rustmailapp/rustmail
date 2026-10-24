@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.rustmail.app">Documentation</a> · <a href="https://docs.rustmail.app/api/">API Reference</a> · <a href="https://hub.docker.com/r/smyile/rustmail">Docker Hub</a>
+  <a href="https://rustmail.app">Website</a> · <a href="https://docs.rustmail.app">Documentation</a> · <a href="https://docs.rustmail.app/api/">API Reference</a> · <a href="https://hub.docker.com/r/smyile/rustmail">Docker Hub</a>
 </p>
 
 <p align="center">
