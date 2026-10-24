@@ -1,8 +1,14 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rustmailapp/rustmail/master/docs/public/logo.png" alt="RustMail" width="96" />
+</p>
+
 # RustMail
 
 A local SMTP mail catcher for development and CI, built in Rust. Your app sends email to RustMail instead of a real server, and every message lands in a web UI where you can inspect it, search it and assert on it in tests.
 
 **Website:** [rustmail.app](https://rustmail.app) · **Docs:** [docs.rustmail.app](https://docs.rustmail.app) · **GitHub:** [rustmailapp/rustmail](https://github.com/rustmailapp/rustmail)
+
+![RustMail web UI: the inbox, an HTML email in desktop preview, and the details rail listing its links](https://rustmail.app/og.png)
 
 ## Quick Start
 
