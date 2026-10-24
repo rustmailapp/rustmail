@@ -1,8 +1,14 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rustmailapp/rustmail/master/docs/public/logo.png" alt="RustMail" width="96" />
+</p>
+
 # RustMail
 
-A fast, feature-rich SMTP mail catcher built in Rust. Single binary. Persistent storage. Modern UI. CI-ready.
+A local SMTP mail catcher for development and CI, built in Rust. Your app sends email to RustMail instead of a real server, and every message lands in a web UI where you can inspect it, search it and assert on it in tests.
 
-**GitHub:** [rustmailapp/rustmail](https://github.com/rustmailapp/rustmail) · **Docs:** [docs.rustmail.app](https://docs.rustmail.app)
+**Website:** [rustmail.app](https://rustmail.app) · **Docs:** [docs.rustmail.app](https://docs.rustmail.app) · **GitHub:** [rustmailapp/rustmail](https://github.com/rustmailapp/rustmail)
+
+![RustMail web UI: the inbox, an HTML email in desktop preview, and the details rail listing its links](https://rustmail.app/og.png)
 
 ## Quick Start
 
@@ -11,6 +17,8 @@ docker run -p 1025:1025 -p 8025:8025 smyile/rustmail:latest
 ```
 
 Point your app's SMTP at `localhost:1025`, then open [localhost:8025](http://localhost:8025). Emails show up in real time.
+
+Coming from MailHog or Mailpit? RustMail uses the same default ports, SMTP `1025` and HTTP `8025`, so your app's SMTP settings stay as they are.
 
 ## Docker Compose
 
@@ -64,12 +72,17 @@ All configuration is done via `RUSTMAIL_*` environment variables:
 | `RUSTMAIL_RETENTION` | `0` | Auto-delete messages after N hours (`0` = keep forever) |
 | `RUSTMAIL_MAX_MESSAGES` | `0` | Max messages to retain (`0` = unlimited) |
 | `RUSTMAIL_MAX_MESSAGE_SIZE` | `10485760` | Max accepted message size in bytes (10 MB) |
-| `RUSTMAIL_SMTP_TLS_CERT` | — | Path to a PEM certificate for optional SMTP STARTTLS |
-| `RUSTMAIL_SMTP_TLS_KEY` | — | Path to a PEM private key for optional SMTP STARTTLS |
+| `RUSTMAIL_SMTP_TLS_CERT` | unset | Path to a PEM certificate for optional SMTP STARTTLS |
+| `RUSTMAIL_SMTP_TLS_KEY` | unset | Path to a PEM private key for optional SMTP STARTTLS |
 | `RUSTMAIL_EPHEMERAL` | `false` | Use in-memory SQLite (no data written to disk) |
-| `RUSTMAIL_WEBHOOK_URL` | — | URL to POST on every new message |
+| `RUSTMAIL_WEBHOOK_URL` | unset | URL to POST on every new message |
 | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error` |
-| `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release (`host:port`) |
+| `RUSTMAIL_RELEASE_HOST` | unset | Allowed SMTP target for email release (`host:port`) |
+| `RUSTMAIL_ALLOWED_HOSTS` | unset | Comma-separated host names browsers may reach RustMail on, such as `mail.example.com`. IP addresses and `localhost` are always answered |
+| `RUSTMAIL_ALLOWED_ORIGINS` | unset | Comma-separated extra origins allowed to open the WebSocket, as `scheme://host[:port]` |
+| `RUSTMAIL_WS_BUFFER` | `4096` | WebSocket events buffered for each client |
+
+See the [configuration reference](https://docs.rustmail.app/configuration/cli-flags) for every option.
 
 ## Ports
 
@@ -94,6 +107,16 @@ docker run \
 ```
 
 Clients must issue `EHLO`, then `STARTTLS`, and then `EHLO` again after the TLS handshake completes.
+
+## Test emails in CI
+
+Run the image as a service container, or use the [RustMail GitHub Action](https://github.com/marketplace/actions/rustmail-action), then fail the build when an email is missing:
+
+```sh
+curl -f "localhost:8025/api/v1/assert/count?min=1&subject=Welcome"
+```
+
+The endpoint answers `200` when the condition holds and `417` otherwise. See [CI integration](https://docs.rustmail.app/ci-integration/rest-assertions).
 
 ## Features
 
