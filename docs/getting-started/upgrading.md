@@ -24,7 +24,7 @@ Before the SMTP and HTTP listeners start, RustMail:
 3. Verifies the copy against the old database (counts, search index, integrity checks), and every compressed message against the source it came from.
 4. Swaps the files: the old database becomes the backup (see [The backup](#the-backup)) and the copy becomes `rustmail.db`.
 
-The old database is only read, never modified. If a check fails, RustMail exits with an error, keeps `rustmail.db.migrating` for a bug report, and leaves `rustmail.db` as it was.
+The old database is only read, never modified. If a check fails, RustMail exits with an error and leaves `rustmail.db` as it was. The next start rebuilds `rustmail.db.migrating` from scratch, so copy it somewhere else first if you want to attach it to a bug report.
 
 The log shows progress while it runs. Every line carries `event="storage_migration"` and a `phase`:
 
@@ -45,6 +45,8 @@ SMTP and HTTP are not available until the upgrade finishes. Mail sent to RustMai
 ### Stopping and resuming
 
 You can stop RustMail during the upgrade (`Ctrl+C` or `SIGTERM`). It finishes the batch in progress, logs `Storage migration paused at N/T; it resumes on next start`, and exits. The next start picks up where it stopped. If the old database was changed in the meantime (for example by an older RustMail), the copy is rebuilt from scratch. A copy that RustMail 0.8 or 0.9 left behind is rebuilt in the new layout, unless they were stopped while swapping it in: then it is swapped in and upgraded again on the same start.
+
+If an upgrade from 0.7 or earlier is stopped, finish it by starting 0.10 or later again. Do not start 0.8 or 0.9 while `rustmail.db.migrating` exists: they can take the unfinished copy for one of their own and swap it in, after which no version opens `rustmail.db`. Nothing is lost in that case, because the original is still `rustmail.db.schema0.bak`. To recover, stop RustMail, move `rustmail.db` and `rustmail.db.migrating` out of the way, rename `rustmail.db.schema0.bak` to `rustmail.db`, and start 0.10 or later.
 
 ### Disk space
 
