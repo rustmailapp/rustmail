@@ -327,6 +327,24 @@ async fn mark_copy(db: &Path) {
   pool.close().await;
 }
 
+/// Stores the bare fingerprint of `source` in the origin of `copy`, as
+/// rustmail 0.10.0 stored it, and returns it.
+async fn store_bare_fingerprint(copy: &Path, source: &Path) -> String {
+  let bare = fingerprint_of(source, SourceSchema::Legacy).await.unwrap();
+  let pool = legacy::open_plain(copy).await;
+  sqlx::query("UPDATE migration_origin SET source_fingerprint = ?1")
+    .bind(&bare)
+    .execute(&pool)
+    .await
+    .unwrap();
+  pool.close().await;
+  bare
+}
+
+async fn stored_fingerprint(copy: &Path) -> Option<String> {
+  text(copy, "SELECT source_fingerprint FROM migration_origin").await
+}
+
 fn assert_no_sidecars(db: &Path) {
   for suffix in [WAL_SUFFIX, SHM_SUFFIX, JOURNAL_SUFFIX] {
     assert!(
@@ -549,6 +567,57 @@ async fn a_migration_cancelled_at_batch_k_resumes_where_it_stopped() {
 }
 
 #[tokio::test]
+async fn a_copy_stores_a_fingerprint_rustmail_0_9_does_not_match() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, MESSAGES).await;
+  let bare = fingerprint_of(&db, SourceSchema::Legacy).await.unwrap();
+  let asked = AtomicUsize::new(0);
+  let stop_after_one = || asked.fetch_add(1, Ordering::SeqCst) >= 1;
+
+  prepare_with(&db, &small_batches(), &stop_after_one)
+    .await
+    .unwrap();
+
+  let stored = stored_fingerprint(&sidecar(&db, MIGRATING_SUFFIX)).await;
+  assert_eq!(stored, Some(format!("schema2:{bare}")));
+}
+
+#[tokio::test]
+async fn a_copy_paused_by_0_10_0_is_qualified_and_resumed_where_it_stopped() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, MESSAGES).await;
+  let (legacy_messages, legacy_attachments) = legacy_snapshot(&db).await;
+  let asked = AtomicUsize::new(0);
+  let stop_after_k = || asked.fetch_add(1, Ordering::SeqCst) >= CANCEL_AFTER_BATCHES;
+  prepare_with(&db, &small_batches(), &stop_after_k)
+    .await
+    .unwrap();
+  let copy = sidecar(&db, MIGRATING_SUFFIX);
+  let bare = store_bare_fingerprint(&copy, &db).await;
+
+  let paused = prepare_with(&db, &small_batches(), &|| true).await.unwrap();
+
+  assert_eq!(
+    paused,
+    Preparation::Paused {
+      migrated: CANCEL_AFTER_BATCHES as u64 * SMALL_BATCH as u64,
+      total: MESSAGES as u64
+    }
+  );
+  assert_eq!(
+    stored_fingerprint(&copy).await,
+    Some(format!("schema2:{bare}"))
+  );
+  let Preparation::Ready(Some(_)) = prepare_with(&db, &small_batches(), &never).await.unwrap()
+  else {
+    panic!("the resumed migration should complete");
+  };
+  let (messages, attachments) = migrated_snapshot(&db).await;
+  assert_eq!(messages, legacy_messages);
+  assert_eq!(attachments, legacy_attachments);
+}
+
+#[tokio::test]
 async fn an_incomplete_copy_of_a_changed_database_is_rebuilt() {
   let (_dir, db) = scratch();
   legacy_database(&db, MESSAGES).await;
@@ -679,6 +748,47 @@ async fn a_swap_interrupted_between_its_renames_is_finished() {
   legacy_database(&db, 3).await;
   let (legacy_messages, _) = legacy_snapshot(&db).await;
   complete_copy_beside(&db).await;
+  std::fs::rename(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
+
+  assert_eq!(migrate(&db).await.unwrap(), Preparation::Ready(None));
+
+  assert!(!sidecar(&db, MIGRATING_SUFFIX).exists());
+  let (messages, _) = migrated_snapshot(&db).await;
+  assert_eq!(messages, legacy_messages);
+}
+
+#[tokio::test]
+async fn a_complete_copy_left_by_0_10_0_is_swapped_without_rebuilding() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, 3).await;
+  complete_copy_beside(&db).await;
+  mark_copy(&db).await;
+  let bare = store_bare_fingerprint(&sidecar(&db, MIGRATING_SUFFIX), &db).await;
+
+  assert!(matches!(
+    migrate(&db).await.unwrap(),
+    Preparation::Ready(Some(_))
+  ));
+
+  assert_eq!(
+    text(&db, "SELECT completed_at FROM migration_origin")
+      .await
+      .as_deref(),
+    Some(MARKER)
+  );
+  assert_eq!(
+    stored_fingerprint(&db).await,
+    Some(format!("schema2:{bare}"))
+  );
+}
+
+#[tokio::test]
+async fn a_swap_0_10_0_was_interrupted_in_is_finished() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, 3).await;
+  let (legacy_messages, _) = legacy_snapshot(&db).await;
+  complete_copy_beside(&db).await;
+  store_bare_fingerprint(&sidecar(&db, MIGRATING_SUFFIX), &db).await;
   std::fs::rename(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
 
   assert_eq!(migrate(&db).await.unwrap(), Preparation::Ready(None));
