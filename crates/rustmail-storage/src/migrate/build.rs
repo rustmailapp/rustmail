@@ -30,6 +30,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 /// `restore-backup` can always tell which database a copy was made from.
 /// Copies made by rustmail 0.8 and 0.9 lack `source_schema` and
 /// `target_schema`; they were all built from schema 0 into schema 1.
+/// `source_fingerprint` holds the [`qualified_fingerprint`], or the bare one
+/// in copies made by 0.8, 0.9 and 0.10.0.
 const MIGRATION_ORIGIN_DDL: &str = r#"
   CREATE TABLE migration_origin (
     id                    INTEGER PRIMARY KEY CHECK (id = 1),
@@ -57,6 +59,42 @@ pub(crate) struct Origin {
   pub(crate) source_schema: i64,
   /// `user_version` the copy is built at.
   pub(crate) target_schema: i64,
+}
+
+impl Origin {
+  /// Whether the copy was made from the database whose fingerprint is
+  /// `fingerprint`, stored in either form.
+  pub(crate) fn made_from(&self, fingerprint: &str) -> bool {
+    self.fingerprint == fingerprint
+      || self.fingerprint == qualified_fingerprint(fingerprint, self.target_schema)
+  }
+}
+
+/// `fingerprint` as a copy built at `target_schema` stores it.
+///
+/// Rustmail 0.8, 0.9 and 0.10.0 compare the stored value with the bare
+/// fingerprint of the database beside the copy, so they never take a copy
+/// that stores this form for one made from it: they rebuild it instead of
+/// resuming it or swapping it in.
+pub(crate) fn qualified_fingerprint(fingerprint: &str, target_schema: i64) -> String {
+  format!("schema{target_schema}:{fingerprint}")
+}
+
+/// Rewrites the bare `fingerprint` in the origin of the copy at `path` to its
+/// qualified form, so older rustmail versions stop taking the copy for one
+/// of their own.
+pub(crate) async fn qualify_origin(path: &Path, fingerprint: &str) -> Result<(), StorageError> {
+  let mut conn = SqliteConnection::connect_with(&super::existing_file(path)).await?;
+  let updated = sqlx::query(
+    "UPDATE migration_origin SET source_fingerprint = ?1 WHERE id = 1 AND source_fingerprint = ?2",
+  )
+  .bind(qualified_fingerprint(fingerprint, SCHEMA_VERSION))
+  .bind(fingerprint)
+  .execute(&mut conn)
+  .await;
+  conn.close().await?;
+  updated?;
+  Ok(())
 }
 
 /// Reads the origin row of the copy open on `conn`, if it has one.
@@ -154,7 +192,7 @@ impl Target {
     sqlx::query(
       "INSERT INTO migration_origin (id, source_fingerprint, last_source_seq, source_schema, target_schema) VALUES (1, ?1, 0, ?2, ?3)",
     )
-    .bind(fingerprint)
+    .bind(qualified_fingerprint(fingerprint, SCHEMA_VERSION))
     .bind(source_schema.version())
     .bind(SCHEMA_VERSION)
     .execute(&mut *txn)

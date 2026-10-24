@@ -407,6 +407,24 @@ async fn a_restore_interrupted_between_its_renames_is_finished() {
 }
 
 #[tokio::test]
+async fn a_restore_interrupted_after_a_0_10_0_migration_is_finished() {
+  let (_dir, db) = scratch();
+  migrated_with_new_mail(&db, 2).await;
+  let backup = sidecar(&db, LEGACY_BACKUP_SUFFIX);
+  store_bare_fingerprint(&db, &backup).await;
+  checkpoint(&db).await;
+  let kept = sidecar(&db, INTERRUPTED_KEPT_SUFFIX);
+  std::fs::rename(&db, &kept).unwrap();
+  let legacy_bytes = std::fs::read(&backup).unwrap();
+
+  let report = restore_backup(&db).await.unwrap();
+
+  assert_eq!(report.restored_from, backup);
+  assert_eq!(report.kept_as, kept);
+  assert_eq!(std::fs::read(&db).unwrap(), legacy_bytes);
+}
+
+#[tokio::test]
 async fn an_interrupted_second_restore_is_finished_beside_the_first_kept_file() {
   let (_dir, db) = scratch();
   migrated_with_new_mail(&db, 2).await;

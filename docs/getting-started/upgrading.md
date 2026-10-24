@@ -46,7 +46,9 @@ SMTP and HTTP are not available until the upgrade finishes. Mail sent to RustMai
 
 You can stop RustMail during the upgrade (`Ctrl+C` or `SIGTERM`). It finishes the batch in progress, logs `Storage migration paused at N/T; it resumes on next start`, and exits. The next start picks up where it stopped. If the old database was changed in the meantime (for example by an older RustMail), the copy is rebuilt from scratch. A copy that RustMail 0.8 or 0.9 left behind is rebuilt in the new layout, unless they were stopped while swapping it in: then it is swapped in and upgraded again on the same start.
 
-If an upgrade from 0.7 or earlier is stopped, finish it by starting 0.10 or later again. Do not start 0.8 or 0.9 while `rustmail.db.migrating` exists: they can take the unfinished copy for one of their own and swap it in, after which no version opens `rustmail.db`. Nothing is lost in that case, because the original is still `rustmail.db.schema0.bak`. To recover, stop RustMail, move `rustmail.db` and `rustmail.db.migrating` out of the way, rename `rustmail.db.schema0.bak` to `rustmail.db`, and start 0.10 or later.
+If an upgrade from 0.7 or earlier is stopped, finish it by starting 0.10.1 or later again. If 0.8 or 0.9 starts on it instead, it discards the unfinished copy and runs its own upgrade to schema 1, which the next start of 0.10.1 or later then takes on.
+
+A copy left by 0.10.0 is the exception. Do not start 0.8 or 0.9 while a `rustmail.db.migrating` left by 0.10.0 exists: they can take the unfinished copy for one of their own and swap it in, after which no version opens `rustmail.db`. Once 0.10.1 or later has resumed that copy, it is safe from 0.8 and 0.9 even if the upgrade is stopped again. Nothing is lost if it happens, because the original is still `rustmail.db.schema0.bak`. To recover, stop RustMail, move `rustmail.db` and `rustmail.db.migrating` out of the way, rename `rustmail.db.schema0.bak` to `rustmail.db`, and start 0.10.1 or later.
 
 ### Disk space
 

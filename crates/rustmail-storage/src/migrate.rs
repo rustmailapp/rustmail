@@ -32,6 +32,12 @@
 //! swapping in when they stopped is swapped in, after the same check, and
 //! the result is then migrated on in the same call.
 //!
+//! A copy stores its fingerprint qualified by the schema it is built at,
+//! which rustmail 0.8, 0.9 and 0.10.0 never match: beside a schema-0 file
+//! they rebuild the copy as one of their own instead of swapping in an
+//! unfinished schema-2 file. A copy 0.10.0 left stores the bare fingerprint;
+//! it still matches, and is qualified before it is resumed or swapped in.
+//!
 //! [`restore_backup`] undoes a migration under the same lock: it moves the
 //! current `db` to `<db>.schema2-<UTC timestamp>` and the backup it was made
 //! from back to `db`, which the next start then migrates again. The kept
@@ -56,7 +62,7 @@ use ulid::Ulid;
 
 use crate::error::{MigrationRefusal, SQLITE_FULL, StorageError};
 use crate::schema::{BUSY_TIMEOUT, FileSchema, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, probe};
-use build::{CopyOutcome, Origin, Target, read_origin};
+use build::{CopyOutcome, Origin, Target, qualify_origin, read_origin};
 use fingerprint::{SourceLayout, SourcePrint, SourceSchema, fingerprint};
 pub use restore::{RestoreReport, restore_backup};
 
@@ -584,7 +590,7 @@ async fn finish_interrupted_swap(paths: &Paths, origin: Origin) -> Result<(), St
     }
     .into()
   };
-  if !exists(&backup).await? || origin.fingerprint != fingerprint_of(&backup, source).await? {
+  if !exists(&backup).await? || !origin.made_from(&fingerprint_of(&backup, source).await?) {
     return Err(changed());
   }
   refuse_open_files(paths, &[&backup, &paths.migrating]).await?;
@@ -821,9 +827,13 @@ impl<'a> Migration<'a> {
     let layout = SourceLayout::probe(&mut source.conn, "main", self.source).await?;
     let mut print = source.fingerprint(&layout).await?;
     let source_bytes = file_len(&self.paths.db).await?;
-    let matching = copy
+    let resumable = copy
       .resumable_origin(self.source)
-      .is_some_and(|origin| origin.fingerprint == print.fingerprint);
+      .filter(|origin| origin.made_from(&print.fingerprint));
+    if resumable.is_some_and(|origin| origin.fingerprint == print.fingerprint) {
+      qualify_origin(&self.paths.migrating, &print.fingerprint).await?;
+    }
+    let matching = resumable.is_some();
     let (mut start, fingerprint_match) = match (&copy, matching) {
       (CopyState::Absent, _) => (Start::Fresh, None),
       (_, false) => (Start::Fresh, Some(false)),

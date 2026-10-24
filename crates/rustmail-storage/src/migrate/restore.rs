@@ -264,7 +264,10 @@ async fn interrupted_kept_file(
     ));
   }
   refuse_side_files(&paths.db, &backup).await?;
-  if fingerprint_of(&backup, source).await.ok() != Some(origin.fingerprint) {
+  if !fingerprint_of(&backup, source)
+    .await
+    .is_ok_and(|print| origin.made_from(&print))
+  {
     return Err(refuse(
       &backup,
       format!(
