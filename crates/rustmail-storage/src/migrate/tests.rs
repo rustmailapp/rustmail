@@ -5,7 +5,8 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
 use super::*;
-use crate::{MessageRepository, connect_options, initialize_database};
+use crate::prepared::AttachmentStorage;
+use crate::{MessageRepository, PreparedMessage, connect_options, initialize_database};
 
 #[path = "../../tests/common/legacy_v0_7_0.rs"]
 mod legacy;
@@ -38,6 +39,20 @@ fn scratch() -> (TempDir, PathBuf) {
 
 fn never() -> bool {
   false
+}
+
+/// `len` hex digits from a fixed-seed generator: text zstd cannot shrink
+/// much, so a copy of it fills pages as the source does.
+fn incompressible_text(len: usize) -> String {
+  let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
+  (0..len)
+    .map(|_| {
+      state ^= state << 13;
+      state ^= state >> 7;
+      state ^= state << 17;
+      char::from_digit((state % 16) as u32, 16).unwrap_or('0')
+    })
+    .collect()
 }
 
 fn multipart(subject: &str, parts: &[(&str, &str)]) -> Vec<u8> {
@@ -204,16 +219,36 @@ async fn open_migrated(db: &Path) -> MessageRepository {
   MessageRepository::new(pool)
 }
 
+/// The rows of a migrated database as the repository serves them: bodies
+/// parsed and the source decompressed.
 async fn migrated_snapshot(db: &Path) -> (Vec<MessageRow>, Vec<AttachmentRow>) {
   let repo = open_migrated(db).await;
   let pool = legacy::open_plain(db).await;
-  let messages = sqlx::query_as::<_, MessageRow>(
-    "SELECT m.seq, m.id, m.sender, m.recipients, m.subject, c.text_body, c.html_body, c.raw, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at FROM messages m JOIN message_content c ON c.seq = m.seq ORDER BY m.seq",
-  )
-  .fetch_all(&pool)
-  .await
-  .unwrap();
+  let stored: Vec<(i64, String)> = sqlx::query_as("SELECT seq, id FROM messages ORDER BY seq")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
   pool.close().await;
+  let mut messages = Vec::new();
+  for (seq, id) in stored {
+    let message = repo.get(&id).await.unwrap();
+    messages.push(MessageRow {
+      seq,
+      raw: repo.get_raw(&id).await.unwrap(),
+      id: message.id,
+      sender: message.sender,
+      recipients: message.recipients,
+      subject: message.subject,
+      text_body: message.text_body,
+      html_body: message.html_body,
+      size: message.size,
+      has_attachments: message.has_attachments,
+      is_read: message.is_read,
+      is_starred: message.is_starred,
+      tags: message.tags,
+      created_at: message.created_at,
+    });
+  }
   let mut attachments = Vec::new();
   for message in &messages {
     for summary in repo.get_attachments(&message.id).await.unwrap() {
@@ -320,7 +355,7 @@ async fn a_legacy_database_migrates_with_every_row_preserved() {
     legacy_attachments.len() as u64
   );
   assert!(report.attachments_located > 0 && report.attachments_inline > 0);
-  assert_eq!(report.backup_path, sidecar(&db, BACKUP_SUFFIX));
+  assert_eq!(report.backup_path, sidecar(&db, LEGACY_BACKUP_SUFFIX));
   assert_eq!(std::fs::read(&report.backup_path).unwrap(), legacy_bytes);
   assert!(!sidecar(&db, MIGRATING_SUFFIX).exists());
   assert_eq!(
@@ -558,7 +593,7 @@ async fn the_swap_is_refused_while_the_database_is_open_elsewhere() {
   complete_copy_beside(&db).await;
 
   assert_eq!(std::fs::read(&db).unwrap(), legacy_bytes);
-  assert!(!sidecar(&db, BACKUP_SUFFIX).exists());
+  assert!(!sidecar(&db, LEGACY_BACKUP_SUFFIX).exists());
   assert_eq!(scalar(&db, "PRAGMA user_version").await, 0);
 }
 
@@ -608,7 +643,7 @@ async fn a_complete_copy_of_an_unchanged_database_is_swapped_without_rebuilding(
     Some(MARKER)
   );
   assert_eq!(
-    std::fs::read(sidecar(&db, BACKUP_SUFFIX)).unwrap(),
+    std::fs::read(sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap(),
     legacy_bytes
   );
 }
@@ -644,7 +679,7 @@ async fn a_swap_interrupted_between_its_renames_is_finished() {
   legacy_database(&db, 3).await;
   let (legacy_messages, _) = legacy_snapshot(&db).await;
   complete_copy_beside(&db).await;
-  std::fs::rename(&db, sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  std::fs::rename(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
 
   assert_eq!(migrate(&db).await.unwrap(), Preparation::Ready(None));
 
@@ -658,7 +693,7 @@ async fn an_interrupted_swap_whose_backup_changed_is_refused() {
   let (_dir, db) = scratch();
   legacy_database(&db, 3).await;
   complete_copy_beside(&db).await;
-  let backup = sidecar(&db, BACKUP_SUFFIX);
+  let backup = sidecar(&db, LEGACY_BACKUP_SUFFIX);
   std::fs::rename(&db, &backup).unwrap();
   add_to_legacy(&backup, 3).await;
 
@@ -679,7 +714,7 @@ async fn an_interrupted_swap_whose_backup_changed_is_refused() {
 async fn a_legacy_database_beside_an_existing_backup_is_refused_as_ambiguous() {
   let (_dir, db) = scratch();
   legacy_database(&db, 2).await;
-  std::fs::copy(&db, sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  std::fs::copy(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
   let legacy_bytes = std::fs::read(&db).unwrap();
 
   let error = migrate(&db).await.unwrap_err();
@@ -727,7 +762,7 @@ async fn a_current_database_with_its_backup_opens() {
 async fn a_backup_without_a_database_or_a_copy_is_refused() {
   let (_dir, db) = scratch();
   legacy_database(&db, 2).await;
-  std::fs::rename(&db, sidecar(&db, BACKUP_SUFFIX)).unwrap();
+  std::fs::rename(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
 
   let error = migrate(&db).await.unwrap_err();
 
@@ -747,7 +782,7 @@ async fn running_out_of_space_leaves_the_legacy_database_byte_identical() {
   let pool = legacy::create_legacy_database(&db).await;
   let large = format!(
     "From: a@test.com\r\nTo: b@test.com\r\nSubject: large\r\n\r\n{}",
-    "x".repeat(LARGE_BODY_BYTES)
+    incompressible_text(LARGE_BODY_BYTES)
   );
   for _ in 0..2 {
     legacy::insert_as_v0_7_0(
@@ -780,7 +815,7 @@ async fn running_out_of_space_leaves_the_legacy_database_byte_identical() {
   );
   assert_eq!(std::fs::read(&db).unwrap(), legacy_bytes);
   assert_no_sidecars(&db);
-  assert!(!sidecar(&db, BACKUP_SUFFIX).exists());
+  assert!(!sidecar(&db, LEGACY_BACKUP_SUFFIX).exists());
 
   assert!(matches!(
     migrate(&db).await.unwrap(),
@@ -801,7 +836,7 @@ async fn the_database_file_mode_is_preserved() {
 
   for file in [
     db.clone(),
-    sidecar(&db, BACKUP_SUFFIX),
+    sidecar(&db, LEGACY_BACKUP_SUFFIX),
     sidecar(&db, LOCK_SUFFIX),
   ] {
     let mode = std::fs::metadata(&file).unwrap().permissions().mode() & MODE_BITS;
@@ -812,4 +847,288 @@ async fn the_database_file_mode_is_preserved() {
       file.display()
     );
   }
+}
+
+const PREVIOUS_SCHEMA: i64 = 1;
+/// `migration_origin` as rustmail 0.8 and 0.9 create it in their copy.
+const PREVIOUS_ORIGIN_DDL: &str = "CREATE TABLE migration_origin (id INTEGER PRIMARY KEY CHECK (id = 1), source_fingerprint TEXT NOT NULL, last_source_seq INTEGER NOT NULL, attachment_mismatches INTEGER NOT NULL DEFAULT 0, completed_at TEXT)";
+
+/// Writes `count` messages into a new schema-1 database at `db`, laid out as
+/// rustmail 0.8 and 0.9 store them, with a mix of flags and tags, and
+/// returns the rows and attachments a migration must preserve.
+async fn previous_database(db: &Path, count: usize) -> (Vec<MessageRow>, Vec<AttachmentRow>) {
+  let pool = legacy::open_plain(db).await;
+  for statement in crate::schema::SCHEMA_1_DDL {
+    sqlx::query(statement).execute(&pool).await.unwrap();
+  }
+  sqlx::query(&format!("PRAGMA user_version = {PREVIOUS_SCHEMA}"))
+    .execute(&pool)
+    .await
+    .unwrap();
+  let mut messages = Vec::new();
+  let mut attachments = Vec::new();
+  for index in 0..count {
+    let raw = sample_mail(index);
+    let prepared = PreparedMessage::parse(
+      "sender@test.com".to_string(),
+      &["rcpt@test.com".to_string()],
+      raw.clone(),
+    )
+    .unwrap();
+    let bodies = crate::content::Bodies::parse(&raw);
+    let tags = match index % 3 {
+      0 => "[]",
+      1 => r#"["work"]"#,
+      _ => r#"["work","urgent","work"]"#,
+    };
+    let row = MessageRow {
+      seq: index as i64 + 1,
+      id: Ulid::new().to_string(),
+      sender: prepared.sender.clone(),
+      recipients: prepared.recipients_json.clone(),
+      subject: prepared.subject.clone(),
+      text_body: bodies.text,
+      html_body: bodies.html,
+      raw: raw.clone(),
+      size: raw.len() as i64,
+      has_attachments: prepared.has_attachments,
+      is_read: index.is_multiple_of(2),
+      is_starred: index.is_multiple_of(5),
+      tags: tags.to_string(),
+      created_at: format!("2026-10-01T09:{:02}:{:02}Z", index / 60, index % 60),
+    };
+    sqlx::query(
+      "INSERT INTO messages (seq, id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+    )
+    .bind(row.seq)
+    .bind(&row.id)
+    .bind(&row.sender)
+    .bind(&row.recipients)
+    .bind(&row.subject)
+    .bind(row.size)
+    .bind(row.has_attachments)
+    .bind(row.is_read)
+    .bind(row.is_starred)
+    .bind(&row.tags)
+    .bind(&row.created_at)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+      "INSERT INTO message_content (seq, text_body, html_body, raw) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(row.seq)
+    .bind(&row.text_body)
+    .bind(&row.html_body)
+    .bind(&row.raw)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO messages_fts (rowid, subject, text_body, sender, recipients) VALUES (?1, ?2, ?3, ?4, ?5)")
+      .bind(row.seq)
+      .bind(&row.subject)
+      .bind(&row.text_body)
+      .bind(&row.sender)
+      .bind(&row.recipients)
+      .execute(&pool)
+      .await
+      .unwrap();
+    let parsed = mail_parser::MessageParser::default().parse(&raw).unwrap();
+    let decoded: Vec<Vec<u8>> = crate::prepared::stored_part_refs(&parsed)
+      .map(|part| crate::prepared::part_contents(part).to_vec())
+      .collect();
+    for (attachment, content) in prepared.attachments.iter().zip(decoded) {
+      let id = Ulid::new().to_string();
+      let (locator, inline) = match &attachment.storage {
+        AttachmentStorage::Located(locator) => (Some(*locator), None),
+        AttachmentStorage::Inline(content) => (None, Some(content.clone())),
+      };
+      sqlx::query(
+        "INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+      )
+      .bind(&id)
+      .bind(row.seq)
+      .bind(&attachment.filename)
+      .bind(&attachment.content_type)
+      .bind(&attachment.content_id)
+      .bind(attachment.size as i64)
+      .bind(locator.map(|locator| locator.offset as i64))
+      .bind(locator.map(|locator| locator.len as i64))
+      .bind(locator.map(|locator| locator.encoding.code()))
+      .bind(inline)
+      .execute(&pool)
+      .await
+      .unwrap();
+      attachments.push(AttachmentRow {
+        message_id: row.id.clone(),
+        id,
+        filename: attachment.filename.clone(),
+        content_type: attachment.content_type.clone(),
+        content_id: attachment.content_id.clone(),
+        size: Some(attachment.size as i64),
+        content,
+      });
+    }
+    messages.push(row);
+  }
+  pool.close().await;
+  (messages, attachments)
+}
+
+#[tokio::test]
+async fn a_schema_1_database_migrates_with_every_row_preserved() {
+  let (_dir, db) = scratch();
+  let (expected_messages, expected_attachments) = previous_database(&db, MESSAGES).await;
+  let previous_bytes = std::fs::read(&db).unwrap();
+
+  let Preparation::Ready(Some(report)) = migrate(&db).await.unwrap() else {
+    panic!("a schema-1 database should be migrated");
+  };
+
+  assert_eq!(report.messages, MESSAGES as u64);
+  assert_eq!(report.attachment_mismatches, 0);
+  assert_eq!(
+    report.attachments_located + report.attachments_inline,
+    expected_attachments.len() as u64
+  );
+  assert_eq!(report.backup_path, sidecar(&db, PREVIOUS_BACKUP_SUFFIX));
+  assert_eq!(std::fs::read(&report.backup_path).unwrap(), previous_bytes);
+  assert!(!sidecar(&db, LEGACY_BACKUP_SUFFIX).exists());
+  assert_eq!(
+    scalar(&db, "PRAGMA user_version").await,
+    crate::SCHEMA_VERSION
+  );
+  assert_eq!(
+    scalar(&db, "SELECT source_schema FROM migration_origin").await,
+    PREVIOUS_SCHEMA
+  );
+  let (messages, attachments) = migrated_snapshot(&db).await;
+  assert_eq!(messages, expected_messages);
+  assert_eq!(attachments, expected_attachments);
+
+  let repo = open_migrated(&db).await;
+  let found = repo.search("mail 5", i64::MAX, 0).await.unwrap();
+  assert!(
+    found
+      .iter()
+      .any(|summary| summary.id == expected_messages[5].id)
+  );
+  repo.close().await;
+  assert_eq!(
+    scalar(&db, "SELECT count(*) FROM message_tags").await,
+    scalar(
+      &sidecar(&db, PREVIOUS_BACKUP_SUFFIX),
+      "SELECT count(*) FROM message_tags"
+    )
+    .await
+  );
+}
+
+#[tokio::test]
+async fn a_schema_1_database_beside_its_backup_is_refused_as_ambiguous() {
+  let (_dir, db) = scratch();
+  previous_database(&db, 2).await;
+  std::fs::copy(&db, sidecar(&db, PREVIOUS_BACKUP_SUFFIX)).unwrap();
+  let previous_bytes = std::fs::read(&db).unwrap();
+
+  let error = migrate(&db).await.unwrap_err();
+
+  assert!(
+    matches!(
+      error,
+      StorageError::MigrationRefused(MigrationRefusal::AmbiguousBackup { schema: 1, .. })
+    ),
+    "got {error:?}"
+  );
+  assert!(error.to_string().contains(".schema1.bak"));
+  assert_eq!(std::fs::read(&db).unwrap(), previous_bytes);
+}
+
+#[tokio::test]
+async fn a_copy_left_complete_by_0_9_is_swapped_in_and_then_migrated_on() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, 3).await;
+  let mut source = Source::lock(&db).await.unwrap();
+  let layout = SourceLayout::probe(&mut source.conn, "main", SourceSchema::Legacy)
+    .await
+    .unwrap();
+  let print = source.fingerprint(&layout).await.unwrap();
+  source.release().await.unwrap();
+  let copy = sidecar(&db, MIGRATING_SUFFIX);
+  let (expected_messages, _) = previous_database(&copy, 3).await;
+  let pool = legacy::open_plain(&copy).await;
+  sqlx::query(PREVIOUS_ORIGIN_DDL)
+    .execute(&pool)
+    .await
+    .unwrap();
+  sqlx::query("INSERT INTO migration_origin (id, source_fingerprint, last_source_seq, completed_at) VALUES (1, ?1, 3, ?2)")
+    .bind(&print.fingerprint)
+    .bind(MARKER)
+    .execute(&pool)
+    .await
+    .unwrap();
+  pool.close().await;
+  let legacy_bytes = std::fs::read(&db).unwrap();
+  std::fs::rename(&db, sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap();
+  let copy_bytes = std::fs::read(&copy).unwrap();
+
+  let Preparation::Ready(Some(report)) = migrate(&db).await.unwrap() else {
+    panic!("the finished schema-1 copy should be swapped in and migrated");
+  };
+
+  assert_eq!(report.backup_path, sidecar(&db, PREVIOUS_BACKUP_SUFFIX));
+  assert_eq!(std::fs::read(&report.backup_path).unwrap(), copy_bytes);
+  assert_eq!(
+    std::fs::read(sidecar(&db, LEGACY_BACKUP_SUFFIX)).unwrap(),
+    legacy_bytes
+  );
+  assert!(!copy.exists());
+  assert_eq!(
+    scalar(&db, "PRAGMA user_version").await,
+    crate::SCHEMA_VERSION
+  );
+  let (messages, _) = migrated_snapshot(&db).await;
+  assert_eq!(messages, expected_messages);
+}
+
+#[tokio::test]
+async fn an_incomplete_copy_left_by_0_9_is_rebuilt() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, 3).await;
+  let (legacy_messages, _) = legacy_snapshot(&db).await;
+  let mut source = Source::lock(&db).await.unwrap();
+  let layout = SourceLayout::probe(&mut source.conn, "main", SourceSchema::Legacy)
+    .await
+    .unwrap();
+  let print = source.fingerprint(&layout).await.unwrap();
+  source.release().await.unwrap();
+  let copy = sidecar(&db, MIGRATING_SUFFIX);
+  let pool = legacy::open_plain(&copy).await;
+  for statement in crate::schema::SCHEMA_1_DDL {
+    sqlx::query(statement).execute(&pool).await.unwrap();
+  }
+  sqlx::query(PREVIOUS_ORIGIN_DDL)
+    .execute(&pool)
+    .await
+    .unwrap();
+  sqlx::query(
+    "INSERT INTO migration_origin (id, source_fingerprint, last_source_seq) VALUES (1, ?1, 1)",
+  )
+  .bind(&print.fingerprint)
+  .execute(&pool)
+  .await
+  .unwrap();
+  pool.close().await;
+
+  let Preparation::Ready(Some(report)) = migrate(&db).await.unwrap() else {
+    panic!("the migration should complete");
+  };
+
+  assert_eq!(report.messages, 3);
+  assert_eq!(
+    scalar(&db, "PRAGMA user_version").await,
+    crate::SCHEMA_VERSION
+  );
+  let (messages, _) = migrated_snapshot(&db).await;
+  assert_eq!(messages, legacy_messages);
 }

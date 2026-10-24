@@ -1,4 +1,4 @@
-//! Building the schema-1 copy of a legacy database, batch by batch.
+//! Building the current-schema copy of an older database, batch by batch.
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -11,39 +11,52 @@ use time::OffsetDateTime;
 use tracing::info;
 
 use super::MigrationOptions;
-use super::fingerprint::LegacyColumns;
+use super::fingerprint::{SourceLayout, SourceSchema};
 use crate::StorageError;
+use crate::content::{compress, decompress};
 use crate::locator::{Locator, locate};
 use crate::prepared::{AttachmentStorage, stored_part_refs};
 use crate::repo::format_iso8601;
-use crate::schema::{SCHEMA_1_DDL, SCHEMA_VERSION, tuned};
+use crate::schema::{SCHEMA_DDL, SCHEMA_VERSION, tuned};
 
-/// Schema name the legacy database is attached under on the copy's connection.
+/// Schema name the source database is attached under on the copy's connection.
 const SOURCE_SCHEMA: &str = "src";
 /// How often the copy logs its progress.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Records where the copy came from and how far it got.
 ///
-/// Kept in the finished file, so the pre-swap check and a later start can
-/// always tell which legacy database a copy was made from.
+/// Kept in the finished file, so the pre-swap check, a later start and
+/// `restore-backup` can always tell which database a copy was made from.
+/// Copies made by rustmail 0.8 and 0.9 lack `source_schema` and
+/// `target_schema`; they were all built from schema 0 into schema 1.
 const MIGRATION_ORIGIN_DDL: &str = r#"
   CREATE TABLE migration_origin (
     id                    INTEGER PRIMARY KEY CHECK (id = 1),
     source_fingerprint    TEXT NOT NULL,
     last_source_seq       INTEGER NOT NULL,
     attachment_mismatches INTEGER NOT NULL DEFAULT 0,
-    completed_at          TEXT
+    completed_at          TEXT,
+    source_schema         INTEGER NOT NULL,
+    target_schema         INTEGER NOT NULL
   )
 "#;
+/// `source_schema` of a copy whose origin row predates the column.
+const ORIGIN_DEFAULT_SOURCE_SCHEMA: i64 = 0;
+/// `target_schema` of a copy whose origin row predates the column.
+const ORIGIN_DEFAULT_TARGET_SCHEMA: i64 = 1;
 
 /// What a copy records about its origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Origin {
-  /// Fingerprint of the legacy database the copy is made from.
+  /// Fingerprint of the database the copy is made from.
   pub(crate) fingerprint: String,
-  /// Rowid of the last legacy message copied.
+  /// `seq` of the last source message copied.
   pub(crate) last_source_seq: i64,
+  /// `user_version` of the database the copy is made from.
+  pub(crate) source_schema: i64,
+  /// `user_version` the copy is built at.
+  pub(crate) target_schema: i64,
 }
 
 /// Reads the origin row of the copy open on `conn`, if it has one.
@@ -58,14 +71,31 @@ pub(crate) async fn read_origin(
   if !has_table {
     return Ok(None);
   }
-  let row: Option<(String, i64)> =
-    sqlx::query_as("SELECT source_fingerprint, last_source_seq FROM migration_origin WHERE id = 1")
-      .fetch_optional(&mut *conn)
-      .await?;
-  Ok(row.map(|(fingerprint, last_source_seq)| Origin {
-    fingerprint,
-    last_source_seq,
-  }))
+  let has_schemas: bool = sqlx::query_scalar(
+    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('migration_origin') WHERE name = 'source_schema')",
+  )
+  .fetch_one(&mut *conn)
+  .await?;
+  let columns = if has_schemas {
+    "source_schema, target_schema"
+  } else {
+    "?1, ?2"
+  };
+  let row: Option<(String, i64, i64, i64)> = sqlx::query_as(&format!(
+    "SELECT source_fingerprint, last_source_seq, {columns} FROM migration_origin WHERE id = 1"
+  ))
+  .bind(ORIGIN_DEFAULT_SOURCE_SCHEMA)
+  .bind(ORIGIN_DEFAULT_TARGET_SCHEMA)
+  .fetch_optional(&mut *conn)
+  .await?;
+  Ok(row.map(
+    |(fingerprint, last_source_seq, source_schema, target_schema)| Origin {
+      fingerprint,
+      last_source_seq,
+      source_schema,
+      target_schema,
+    },
+  ))
 }
 
 /// Attachment counts of a finished copy.
@@ -76,19 +106,20 @@ pub(crate) struct AttachmentCounts {
   pub(crate) mismatches: u64,
 }
 
-/// Whether the batch loop ran to the end of the legacy table.
+/// Whether the batch loop ran to the end of the source table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CopyOutcome {
-  /// Every legacy message is in the copy.
+  /// Every source message is in the copy.
   Finished,
   /// Stopped between batches; `migrated` of `total` messages are copied.
   Paused { migrated: u64, total: u64 },
 }
 
-/// The copy being built, open with the legacy database attached.
+/// The copy being built, open with the source database attached.
 pub(crate) struct Target {
   conn: SqliteConnection,
   path: PathBuf,
+  source: PathBuf,
 }
 
 fn target_options(path: &Path, options: &MigrationOptions) -> SqliteConnectOptions {
@@ -105,24 +136,27 @@ fn target_options(path: &Path, options: &MigrationOptions) -> SqliteConnectOptio
 }
 
 impl Target {
-  /// Creates schema 1 and the origin row in the empty file at `path`,
-  /// without setting `user_version`.
+  /// Creates the current schema and the origin row in the empty file at
+  /// `path`, without setting `user_version`.
   pub(crate) async fn create(
     path: &Path,
     source: &Path,
+    source_schema: SourceSchema,
     fingerprint: &str,
     options: &MigrationOptions,
   ) -> Result<Self, StorageError> {
     let mut conn = SqliteConnection::connect_with(&target_options(path, options)).await?;
     let mut txn = conn.begin_with("BEGIN IMMEDIATE").await?;
-    for statement in SCHEMA_1_DDL {
+    for statement in SCHEMA_DDL {
       sqlx::query(statement).execute(&mut *txn).await?;
     }
     sqlx::query(MIGRATION_ORIGIN_DDL).execute(&mut *txn).await?;
     sqlx::query(
-      "INSERT INTO migration_origin (id, source_fingerprint, last_source_seq) VALUES (1, ?1, 0)",
+      "INSERT INTO migration_origin (id, source_fingerprint, last_source_seq, source_schema, target_schema) VALUES (1, ?1, 0, ?2, ?3)",
     )
     .bind(fingerprint)
+    .bind(source_schema.version())
+    .bind(SCHEMA_VERSION)
     .execute(&mut *txn)
     .await?;
     txn.commit().await?;
@@ -151,6 +185,7 @@ impl Target {
     Ok(Self {
       conn,
       path: path.to_path_buf(),
+      source: source.to_path_buf(),
     })
   }
 
@@ -160,20 +195,23 @@ impl Target {
     Ok(())
   }
 
-  /// The legacy columns as the attached source holds them.
-  pub(crate) async fn legacy_columns(&mut self) -> Result<LegacyColumns, StorageError> {
-    LegacyColumns::probe(&mut self.conn, SOURCE_SCHEMA).await
+  /// How the attached source, in `schema`, is laid out.
+  pub(crate) async fn source_layout(
+    &mut self,
+    schema: SourceSchema,
+  ) -> Result<SourceLayout, StorageError> {
+    SourceLayout::probe(&mut self.conn, SOURCE_SCHEMA, schema).await
   }
 
   async fn scalar(&mut self, sql: &str) -> Result<i64, StorageError> {
     Ok(sqlx::query_scalar(sql).fetch_one(&mut self.conn).await?)
   }
 
-  /// Copies every legacy message after the origin's `last_source_seq`, one
+  /// Copies every source message after the origin's `last_source_seq`, one
   /// committed batch at a time, asking `should_stop` before each batch.
   pub(crate) async fn copy(
     &mut self,
-    columns: &LegacyColumns,
+    layout: &SourceLayout,
     options: &MigrationOptions,
     total: u64,
     migration_id: &str,
@@ -190,10 +228,10 @@ impl Target {
       if should_stop() {
         return Ok(CopyOutcome::Paused { migrated, total });
       }
-      let Some(batch) = self.next_batch(last_seq, options).await? else {
+      let Some(batch) = self.next_batch(layout, last_seq, options).await? else {
         return Ok(CopyOutcome::Finished);
       };
-      self.copy_batch(columns, last_seq, &batch).await?;
+      self.copy_batch(layout, last_seq, &batch).await?;
       last_seq = batch.last_seq;
       migrated += batch.messages;
       progress.report(migration_id, migrated, total);
@@ -202,16 +240,23 @@ impl Target {
 
   async fn next_batch(
     &mut self,
+    layout: &SourceLayout,
     after: i64,
     options: &MigrationOptions,
   ) -> Result<Option<Batch>, StorageError> {
-    let rows: Vec<(i64, i64)> = sqlx::query_as(&format!(
-      "SELECT rowid, length(raw) FROM {SOURCE_SCHEMA}.messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2"
-    ))
-    .bind(after)
-    .bind(options.batch_messages)
-    .fetch_all(&mut self.conn)
-    .await?;
+    let sizes = match layout {
+      SourceLayout::Legacy(_) => format!(
+        "SELECT rowid, length(raw) FROM {SOURCE_SCHEMA}.messages WHERE rowid > ?1 ORDER BY rowid LIMIT ?2"
+      ),
+      SourceLayout::Previous => format!(
+        "SELECT seq, size FROM {SOURCE_SCHEMA}.messages WHERE seq > ?1 ORDER BY seq LIMIT ?2"
+      ),
+    };
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&sizes)
+      .bind(after)
+      .bind(options.batch_messages)
+      .fetch_all(&mut self.conn)
+      .await?;
     let mut batch: Option<Batch> = None;
     for (rowid, raw_len) in rows {
       match &mut batch {
@@ -235,46 +280,83 @@ impl Target {
 
   async fn copy_batch(
     &mut self,
-    columns: &LegacyColumns,
+    layout: &SourceLayout,
     after: i64,
     batch: &Batch,
   ) -> Result<(), StorageError> {
-    let planned = self
-      .plan_attachments(columns, after, batch.last_seq)
-      .await?;
+    let planned = match layout {
+      SourceLayout::Legacy(columns) => {
+        self
+          .plan_attachments(columns.has_attachments_table, after, batch.last_seq)
+          .await?
+      }
+      SourceLayout::Previous => Vec::new(),
+    };
     let mismatches = planned
       .iter()
       .filter(|attachment| attachment.mismatch)
       .count();
+    let content = self
+      .compressed_content(layout, after, batch.last_seq)
+      .await?;
+    let (messages_sql, fts_sql) = match layout {
+      SourceLayout::Legacy(columns) => (
+        format!(
+          "INSERT INTO messages (seq, id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at) \
+           SELECT rowid, id, sender, recipients, subject, length(raw), has_attachments, is_read, {}, {}, created_at \
+           FROM {SOURCE_SCHEMA}.messages WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid",
+          columns.is_starred, columns.tags
+        ),
+        format!(
+          "INSERT INTO messages_fts (rowid, subject, text_body, sender, recipients) \
+           SELECT rowid, subject, text_body, sender, recipients FROM {SOURCE_SCHEMA}.messages \
+           WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid"
+        ),
+      ),
+      SourceLayout::Previous => (
+        format!(
+          "INSERT INTO messages (seq, id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at) \
+           SELECT m.seq, m.id, m.sender, m.recipients, m.subject, length(c.raw), m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at \
+           FROM {SOURCE_SCHEMA}.messages m JOIN {SOURCE_SCHEMA}.message_content c ON c.seq = m.seq \
+           WHERE m.seq > ?1 AND m.seq <= ?2 ORDER BY m.seq"
+        ),
+        format!(
+          "INSERT INTO messages_fts (rowid, subject, text_body, sender, recipients) \
+           SELECT m.seq, m.subject, c.text_body, m.sender, m.recipients \
+           FROM {SOURCE_SCHEMA}.messages m JOIN {SOURCE_SCHEMA}.message_content c ON c.seq = m.seq \
+           WHERE m.seq > ?1 AND m.seq <= ?2 ORDER BY m.seq"
+        ),
+      ),
+    };
     let mut txn = self.conn.begin().await?;
-    sqlx::query(&format!(
-      "INSERT INTO messages (seq, id, sender, recipients, subject, size, has_attachments, is_read, is_starred, tags, created_at) \
-       SELECT rowid, id, sender, recipients, subject, size, has_attachments, is_read, {}, {}, created_at \
-       FROM {SOURCE_SCHEMA}.messages WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid",
-      columns.is_starred, columns.tags
-    ))
-    .bind(after)
-    .bind(batch.last_seq)
-    .execute(&mut *txn)
-    .await?;
-    sqlx::query(&format!(
-      "INSERT INTO message_content (seq, text_body, html_body, raw) \
-       SELECT rowid, text_body, html_body, raw FROM {SOURCE_SCHEMA}.messages \
-       WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid"
-    ))
-    .bind(after)
-    .bind(batch.last_seq)
-    .execute(&mut *txn)
-    .await?;
-    sqlx::query(&format!(
-      "INSERT INTO messages_fts (rowid, subject, text_body, sender, recipients) \
-       SELECT rowid, subject, text_body, sender, recipients FROM {SOURCE_SCHEMA}.messages \
-       WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid"
-    ))
-    .bind(after)
-    .bind(batch.last_seq)
-    .execute(&mut *txn)
-    .await?;
+    sqlx::query(&messages_sql)
+      .bind(after)
+      .bind(batch.last_seq)
+      .execute(&mut *txn)
+      .await?;
+    for (seq, frame) in &content {
+      sqlx::query("INSERT INTO message_content (seq, raw) VALUES (?1, ?2)")
+        .bind(seq)
+        .bind(frame)
+        .execute(&mut *txn)
+        .await?;
+    }
+    sqlx::query(&fts_sql)
+      .bind(after)
+      .bind(batch.last_seq)
+      .execute(&mut *txn)
+      .await?;
+    if let SourceLayout::Previous = layout {
+      sqlx::query(&format!(
+        "INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content) \
+         SELECT id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content \
+         FROM {SOURCE_SCHEMA}.attachments WHERE message_seq > ?1 AND message_seq <= ?2 ORDER BY rowid"
+      ))
+      .bind(after)
+      .bind(batch.last_seq)
+      .execute(&mut *txn)
+      .await?;
+    }
     for attachment in &planned {
       let (locator, content) = match &attachment.storage {
         AttachmentStorage::Located(locator) => (Some(locator), None),
@@ -308,15 +390,59 @@ impl Target {
     Ok(())
   }
 
+  /// The batch's raw sources, each compressed and proven to decompress back
+  /// to itself, in `seq` order.
+  async fn compressed_content(
+    &mut self,
+    layout: &SourceLayout,
+    after: i64,
+    last_seq: i64,
+  ) -> Result<Vec<(i64, Vec<u8>)>, StorageError> {
+    let sources = match layout {
+      SourceLayout::Legacy(_) => format!(
+        "SELECT rowid, raw FROM {SOURCE_SCHEMA}.messages WHERE rowid > ?1 AND rowid <= ?2 ORDER BY rowid"
+      ),
+      SourceLayout::Previous => format!(
+        "SELECT seq, raw FROM {SOURCE_SCHEMA}.message_content WHERE seq > ?1 AND seq <= ?2 ORDER BY seq"
+      ),
+    };
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(&sources)
+      .bind(after)
+      .bind(last_seq)
+      .fetch_all(&mut self.conn)
+      .await?;
+    let compressed = in_parallel(rows, |(seq, raw)| {
+      let frame = compress(&raw)?;
+      let round_trip = decompress(&frame, raw.len() as i64, &seq.to_string())?;
+      Ok::<_, StorageError>((seq, frame, round_trip == raw))
+    })
+    .await?
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    match compressed.iter().find(|(_, _, intact)| !intact) {
+      Some((seq, _, _)) => Err(self.verify_failed_at(
+        "compressed source",
+        format!("message {seq} decompresses to its source"),
+        "different bytes".to_string(),
+      )),
+      None => Ok(
+        compressed
+          .into_iter()
+          .map(|(seq, frame, _)| (seq, frame))
+          .collect(),
+      ),
+    }
+  }
+
   /// Decides how each legacy attachment of the batch is stored, parsing the
   /// raw sources on the blocking pool.
   async fn plan_attachments(
     &mut self,
-    columns: &LegacyColumns,
+    has_attachments_table: bool,
     after: i64,
     last_seq: i64,
   ) -> Result<Vec<PlannedAttachment>, StorageError> {
-    if !columns.has_attachments_table {
+    if !has_attachments_table {
       return Ok(Vec::new());
     }
     let rows: Vec<LegacyAttachmentRow> = sqlx::query_as(&format!(
@@ -348,29 +474,51 @@ impl Target {
       .fetch_one(&mut self.conn)
       .await?;
     }
-    plan_in_parallel(messages).await
+    let mut planned: Vec<PlannedAttachment> = in_parallel(messages, plan_message)
+      .await?
+      .into_iter()
+      .flatten()
+      .collect();
+    planned.sort_by_key(|attachment| attachment.seq);
+    Ok(planned)
   }
 
-  /// Checks the finished copy against the attached legacy database.
+  /// Checks the finished copy against the attached source database.
   pub(crate) async fn verify(
     &mut self,
-    columns: &LegacyColumns,
+    layout: &SourceLayout,
     database: &Path,
   ) -> Result<AttachmentCounts, StorageError> {
-    let legacy_attachments = if columns.has_attachments_table {
-      format!(
-        "SELECT count(*) FROM {SOURCE_SCHEMA}.messages m JOIN {SOURCE_SCHEMA}.attachments a ON a.message_id = m.id"
-      )
-    } else {
-      "SELECT 0".to_string()
+    let (legacy_attachments, legacy_tags) = match layout {
+      SourceLayout::Legacy(columns) => (
+        if columns.has_attachments_table {
+          format!(
+            "SELECT count(*) FROM {SOURCE_SCHEMA}.messages m JOIN {SOURCE_SCHEMA}.attachments a ON a.message_id = m.id"
+          )
+        } else {
+          "SELECT 0".to_string()
+        },
+        format!(
+          "SELECT count(*) FROM (SELECT DISTINCT s.seq, t.value FROM \
+           (SELECT rowid AS seq, {} AS tags FROM {SOURCE_SCHEMA}.messages) s, json_each(s.tags) t)",
+          columns.tags
+        ),
+      ),
+      SourceLayout::Previous => (
+        format!("SELECT count(*) FROM {SOURCE_SCHEMA}.attachments"),
+        format!("SELECT count(*) FROM {SOURCE_SCHEMA}.message_tags"),
+      ),
     };
-    let legacy_tags = format!(
-      "SELECT count(*) FROM (SELECT DISTINCT s.seq, t.value FROM \
-       (SELECT rowid AS seq, {} AS tags FROM {SOURCE_SCHEMA}.messages) s, json_each(s.tags) t)",
-      columns.tags
-    );
     let legacy_messages = format!("SELECT count(*) FROM {SOURCE_SCHEMA}.messages");
-    let checks: [(&'static str, &str, &str); 6] = [
+    let source_raw_bytes = match layout {
+      SourceLayout::Legacy(_) => {
+        format!("SELECT coalesce(sum(length(raw)), 0) FROM {SOURCE_SCHEMA}.messages")
+      }
+      SourceLayout::Previous => {
+        format!("SELECT coalesce(sum(length(raw)), 0) FROM {SOURCE_SCHEMA}.message_content")
+      }
+    };
+    let checks: [(&'static str, &str, &str); 7] = [
       (
         "message count",
         &legacy_messages,
@@ -380,6 +528,11 @@ impl Target {
         "content count",
         &legacy_messages,
         "SELECT count(*) FROM message_content",
+      ),
+      (
+        "raw bytes",
+        &source_raw_bytes,
+        "SELECT coalesce(sum(size), 0) FROM messages",
       ),
       (
         "attachment count",
@@ -464,6 +617,17 @@ impl Target {
   ) -> StorageError {
     StorageError::MigrationVerifyFailed {
       database: database.to_path_buf(),
+      target: self.path.clone(),
+      check,
+      expected,
+      found,
+    }
+  }
+
+  /// [`Self::verify_failed`] for the source attached to this copy.
+  fn verify_failed_at(&self, check: &'static str, expected: String, found: String) -> StorageError {
+    StorageError::MigrationVerifyFailed {
+      database: self.source.clone(),
       target: self.path.clone(),
       check,
       expected,
@@ -563,33 +727,40 @@ struct PlannedAttachment {
   mismatch: bool,
 }
 
-async fn plan_in_parallel(
-  messages: Vec<LegacyMessage>,
-) -> Result<Vec<PlannedAttachment>, StorageError> {
-  if messages.is_empty() {
+/// Runs `work` on every item across the blocking pool, one share per core,
+/// and returns the results in input order.
+async fn in_parallel<T, R>(items: Vec<T>, work: fn(T) -> R) -> Result<Vec<R>, StorageError>
+where
+  T: Send + 'static,
+  R: Send + 'static,
+{
+  if items.is_empty() {
     return Ok(Vec::new());
   }
   let workers = std::thread::available_parallelism()
     .map_or(1, NonZeroUsize::get)
-    .min(messages.len());
-  let mut shares: Vec<Vec<LegacyMessage>> = (0..workers).map(|_| Vec::new()).collect();
-  for (index, message) in messages.into_iter().enumerate() {
-    shares[index % workers].push(message);
+    .min(items.len());
+  let mut shares: Vec<Vec<(usize, T)>> = (0..workers).map(|_| Vec::new()).collect();
+  for (index, item) in items.into_iter().enumerate() {
+    shares[index % workers].push((index, item));
   }
   let handles: Vec<_> = shares
     .into_iter()
     .map(|share| {
       tokio::task::spawn_blocking(move || {
-        share.into_iter().flat_map(plan_message).collect::<Vec<_>>()
+        share
+          .into_iter()
+          .map(|(index, item)| (index, work(item)))
+          .collect::<Vec<_>>()
       })
     })
     .collect();
-  let mut planned = Vec::new();
+  let mut results = Vec::new();
   for handle in handles {
-    planned.extend(handle.await.map_err(StorageError::MigrationTaskAborted)?);
+    results.extend(handle.await.map_err(StorageError::MigrationTaskAborted)?);
   }
-  planned.sort_by_key(|attachment| attachment.seq);
-  Ok(planned)
+  results.sort_by_key(|(index, _)| *index);
+  Ok(results.into_iter().map(|(_, result)| result).collect())
 }
 
 /// Pairs a message's legacy attachment rows with the parts ingest stores

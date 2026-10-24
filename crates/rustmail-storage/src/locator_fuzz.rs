@@ -367,7 +367,7 @@ fn assert_every_locate_holds(
 }
 
 fn check_message(raw: &[u8], context: &str, coverage: &mut Coverage) {
-  let prepared = PreparedMessage::parse("s@fuzz.test".to_string(), &[], raw.to_vec());
+  let prepared = PreparedMessage::parse("s@fuzz.test".to_string(), &[], raw.to_vec()).unwrap();
   let Some(parsed) = MessageParser::default().parse(raw) else {
     assert!(prepared.attachments.is_empty(), "{context}");
     return;

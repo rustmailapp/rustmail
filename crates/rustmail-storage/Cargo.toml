@@ -20,4 +20,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 ulid = { workspace = true }
 mail-parser = { workspace = true }
+zstd = { workspace = true }
 time = { workspace = true }

@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+mod content;
 mod error;
 mod locator;
 #[cfg(test)]

@@ -2,22 +2,27 @@ use std::collections::HashSet;
 
 use mail_parser::{ContentType, MessageParser, MessagePart, MimeHeaders, PartType};
 
+use crate::StorageError;
+use crate::content::{Bodies, compress};
 use crate::locator::{Locator, locate};
 
 /// A captured message parsed into the rows it will be stored as.
 ///
-/// Parsing is pure and, for large MIME bodies, the most expensive CPU work
-/// on the ingest path. Doing it once, ahead of the write, means a contended
+/// Parsing and compressing are pure and the most expensive CPU work on the
+/// ingest path. Doing both once, ahead of the write, means a contended
 /// insert retries only the write, and the single writer never waits on MIME
-/// decoding.
+/// decoding or zstd.
 #[derive(Debug, Clone)]
 pub struct PreparedMessage {
   pub(crate) sender: String,
   pub(crate) recipients_json: String,
   pub(crate) subject: Option<String>,
+  /// Indexed for search; not stored, since it is parsed again on read.
   pub(crate) text_body: Option<String>,
-  pub(crate) html_body: Option<String>,
-  pub(crate) raw: Vec<u8>,
+  /// Length of the raw source.
+  pub(crate) size: usize,
+  /// The raw source as one zstd frame.
+  pub(crate) compressed_raw: Vec<u8>,
   pub(crate) has_attachments: bool,
   pub(crate) attachments: Vec<PreparedAttachment>,
 }
@@ -45,33 +50,37 @@ pub(crate) enum AttachmentStorage {
 }
 
 impl PreparedMessage {
-  /// Parses `raw` and extracts everything the store keeps besides the bytes.
+  /// Parses `raw`, extracts everything the store keeps besides the bytes,
+  /// and compresses the bytes.
   ///
-  /// Never fails: mail the parser cannot read is still stored, with no
-  /// subject, bodies or attachments, so its raw source stays inspectable.
-  pub fn parse(sender: String, recipients: &[String], raw: Vec<u8>) -> Self {
+  /// Mail the parser cannot read is still stored, with no subject, bodies or
+  /// attachments, so its raw source stays inspectable.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Compress`] if zstd refuses the source.
+  pub fn parse(sender: String, recipients: &[String], raw: Vec<u8>) -> Result<Self, StorageError> {
     let recipients_json = serde_json::to_string(recipients).unwrap_or_default();
-    let (subject, text_body, html_body, has_attachments, attachments) =
+    let (subject, text_body, has_attachments, attachments) =
       match MessageParser::default().parse(&raw) {
         Some(parsed) => (
           parsed.subject().map(String::from),
-          parsed.body_text(0).map(|body| body.into_owned()),
-          parsed.body_html(0).map(|body| body.into_owned()),
+          Bodies::of(&parsed).text,
           parsed.attachment_count() > 0,
           stored_parts(&parsed, &raw),
         ),
-        None => (None, None, None, false, Vec::new()),
+        None => (None, None, false, Vec::new()),
       };
-    Self {
+    Ok(Self {
       sender,
       recipients_json,
       subject,
       text_body,
-      html_body,
-      raw,
+      size: raw.len(),
+      compressed_raw: compress(&raw)?,
       has_attachments,
       attachments,
-    }
+    })
   }
 }
 
@@ -155,7 +164,8 @@ mod tests {
       "sender@test.com".to_string(),
       &["rcpt@test.com".to_string()],
       MULTIPART.as_bytes().to_vec(),
-    );
+    )
+    .unwrap();
 
     assert_eq!(prepared.subject.as_deref(), Some("Quarterly"));
     assert_eq!(prepared.text_body.as_deref(), Some("Body text"));
@@ -173,7 +183,11 @@ mod tests {
       &MULTIPART.as_bytes()[locator.offset..locator.offset + locator.len],
       b"fake-pdf-content"
     );
-    assert_eq!(prepared.raw, MULTIPART.as_bytes());
+    assert_eq!(prepared.size, MULTIPART.len());
+    assert_eq!(
+      crate::content::decompress(&prepared.compressed_raw, prepared.size as i64, "m").unwrap(),
+      MULTIPART.as_bytes()
+    );
   }
 
   #[test]
@@ -193,16 +207,19 @@ mod tests {
       "--D--\r\n",
     );
     let prepared =
-      PreparedMessage::parse("sender@test.com".to_string(), &[], raw.as_bytes().to_vec());
+      PreparedMessage::parse("sender@test.com".to_string(), &[], raw.as_bytes().to_vec()).unwrap();
 
     assert!(prepared.attachments.is_empty());
-    assert_eq!(prepared.raw, raw.as_bytes());
+    assert_eq!(
+      crate::content::decompress(&prepared.compressed_raw, prepared.size as i64, "m").unwrap(),
+      raw.as_bytes()
+    );
   }
 
   #[test]
   fn keeps_mail_the_parser_cannot_read() {
     let raw = Vec::new();
-    let prepared = PreparedMessage::parse("a@test.com".to_string(), &[], raw);
+    let prepared = PreparedMessage::parse("a@test.com".to_string(), &[], raw).unwrap();
 
     assert_eq!(prepared.subject, None);
     assert!(prepared.attachments.is_empty());

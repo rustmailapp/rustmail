@@ -15,7 +15,7 @@ use tokio_rustls::TlsConnector;
 
 use rustmail_api::{AppState, WsEvent, WsFrame, router};
 use rustmail_smtp::{Delivery, ReceivedMessage, Session, SmtpServer, SmtpServerConfig, TlsConfig};
-use rustmail_storage::{MessageRepository, initialize_database};
+use rustmail_storage::{MessageRepository, SCHEMA_VERSION, initialize_database};
 
 #[path = "../../rustmail-storage/tests/common/legacy_v0_7_0.rs"]
 mod legacy_v0_7_0;
@@ -1582,7 +1582,7 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
     .execute(&pool)
     .await
     .unwrap();
-  sqlx::query("PRAGMA user_version = 2")
+  sqlx::query(&format!("PRAGMA user_version = {}", SCHEMA_VERSION + 1))
     .execute(&pool)
     .await
     .unwrap();
@@ -1621,7 +1621,7 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
   );
   assert!(
     stderr.contains(
-      "rustmail.db is schema 2, written by a newer rustmail; this binary supports schema 1. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
+      "rustmail.db is schema 3, written by a newer rustmail; this binary supports schema 2. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
     ),
     "unexpected stderr: {stderr}"
   );
@@ -1699,7 +1699,7 @@ async fn serve_migrates_a_legacy_database_before_it_listens() {
     .fetch_one(&pool)
     .await
     .unwrap();
-  assert_eq!(version, 1);
+  assert_eq!(version, SCHEMA_VERSION);
   let (id, is_read, tags): (String, bool, String) =
     sqlx::query_as("SELECT id, is_read, tags FROM messages WHERE seq = 1")
       .fetch_one(&pool)
@@ -1761,7 +1761,7 @@ async fn serve_exits_while_another_process_holds_the_migration_lock() {
 
 const RESTORE_SUBJECTS: [&str; 2] = ["before one", "before two"];
 const POST_MIGRATION_SUBJECT: &str = "after the migration";
-const KEPT_INFIX: &str = ".schema1-";
+const KEPT_INFIX: &str = ".schema2-";
 
 /// Writes a legacy database with rustmail v0.7.0's own statements and
 /// returns its message ids in arrival order.
@@ -1816,7 +1816,7 @@ async fn migrated_database(db_path: &std::path::Path) {
   ));
 }
 
-fn kept_schema_1_files(db_path: &std::path::Path) -> Vec<PathBuf> {
+fn kept_schema_2_files(db_path: &std::path::Path) -> Vec<PathBuf> {
   let prefix = format!(
     "{}{KEPT_INFIX}",
     db_path.file_name().unwrap().to_string_lossy()
@@ -1909,8 +1909,8 @@ async fn restore_backup_puts_the_v0_7_0_mailbox_back_and_serve_migrates_it_again
     "restore-backup failed: {}",
     String::from_utf8_lossy(&output.stderr)
   );
-  let kept = kept_schema_1_files(&db_path);
-  assert_eq!(kept.len(), 1, "expected one kept schema-1 file: {kept:?}");
+  let kept = kept_schema_2_files(&db_path);
+  assert_eq!(kept.len(), 1, "expected one kept schema-2 file: {kept:?}");
   let kept = &kept[0];
   for expected in [
     format!("Restored {} to {}.", backup.display(), db_path.display()),
@@ -1944,7 +1944,7 @@ async fn restore_backup_puts_the_v0_7_0_mailbox_back_and_serve_migrates_it_again
   pool.close().await;
   assert_eq!(query_ids(&db_path).await, legacy_ids);
   assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 0);
-  assert_eq!(query_i64(kept, "PRAGMA user_version").await, 1);
+  assert_eq!(query_i64(kept, "PRAGMA user_version").await, SCHEMA_VERSION);
   assert_eq!(
     query_i64(
       kept,
@@ -1958,7 +1958,10 @@ async fn restore_backup_puts_the_v0_7_0_mailbox_back_and_serve_migrates_it_again
   let mut server = spawn_serve(&db_path);
   server.smtp_addr().await;
   assert_eq!(std::fs::read(&backup).unwrap(), legacy_bytes);
-  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+  assert_eq!(
+    query_i64(&db_path, "PRAGMA user_version").await,
+    SCHEMA_VERSION
+  );
   assert_eq!(
     query_i64(&db_path, "SELECT count(*) FROM messages").await,
     legacy_ids.len() as i64
@@ -1992,8 +1995,11 @@ async fn restore_backup_refuses_while_a_server_has_the_database_open() {
     "unexpected stderr: {stderr}"
   );
   assert!(sidecar(&db_path, ".schema0.bak").exists());
-  assert!(kept_schema_1_files(&db_path).is_empty());
-  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+  assert!(kept_schema_2_files(&db_path).is_empty());
+  assert_eq!(
+    query_i64(&db_path, "PRAGMA user_version").await,
+    SCHEMA_VERSION
+  );
 }
 
 #[tokio::test]
@@ -2028,8 +2034,11 @@ async fn restore_backup_refuses_while_another_process_holds_the_migration_lock()
     std::fs::read(sidecar(&db_path, ".schema0.bak")).unwrap(),
     backup_bytes
   );
-  assert!(kept_schema_1_files(&db_path).is_empty());
-  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+  assert!(kept_schema_2_files(&db_path).is_empty());
+  assert_eq!(
+    query_i64(&db_path, "PRAGMA user_version").await,
+    SCHEMA_VERSION
+  );
 }
 
 #[tokio::test]
@@ -2052,8 +2061,11 @@ async fn restore_backup_refuses_without_a_backup() {
     )),
     "unexpected stderr: {stderr}"
   );
-  assert!(kept_schema_1_files(&db_path).is_empty());
-  assert_eq!(query_i64(&db_path, "PRAGMA user_version").await, 1);
+  assert!(kept_schema_2_files(&db_path).is_empty());
+  assert_eq!(
+    query_i64(&db_path, "PRAGMA user_version").await,
+    SCHEMA_VERSION
+  );
 }
 
 async fn connect_smtp_and_greet(addr: std::net::SocketAddr) -> BufReader<TcpStream> {
