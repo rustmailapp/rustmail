@@ -171,7 +171,9 @@ impl MessageRepository {
     message: &PreparedMessage,
   ) -> Result<MessageSummary, StorageError> {
     let mut txn = self.writer.begin().await?;
-    let summary = insert_in(&mut txn, message).await?;
+    let summary = insert_all_in(&mut txn, std::slice::from_ref(message))
+      .await?
+      .remove(0);
     txn.commit().await?;
     debug!(id = %summary.id, subject = ?summary.subject, "Message stored");
     Ok(summary)
@@ -201,10 +203,7 @@ impl MessageRepository {
     messages: &[PreparedMessage],
   ) -> Result<Vec<MessageSummary>, StorageError> {
     let mut txn = self.writer.begin().await?;
-    let mut summaries = Vec::with_capacity(messages.len());
-    for message in messages {
-      summaries.push(insert_in(&mut txn, message).await?);
-    }
+    let summaries = insert_all_in(&mut txn, messages).await?;
     txn.commit().await?;
     debug!(count = summaries.len(), "Message batch stored");
     Ok(summaries)
@@ -757,14 +756,67 @@ impl MessageRepository {
   }
 }
 
-/// Writes `message` and its content, index and attachment rows on `conn`.
+/// Most messages indexed by one full-text insert statement.
+///
+/// Five bound columns each keeps a statement far under SQLite's limit of
+/// 32 766 parameters.
+const FTS_ROWS_PER_STATEMENT: usize = 1000;
+
+/// Writes every message in `messages` with its content, attachment and
+/// full-text index rows on `conn`, returning their summaries in input order.
+///
+/// The index rows go in last, in as few statements as possible. FTS5 flushes
+/// its pending terms to a new on-disk segment at every statement savepoint
+/// once it has joined the transaction, so indexing each message between the
+/// inserts of the next would write one segment per message and leave the
+/// commit to merge them.
+async fn insert_all_in(
+  conn: &mut SqliteConnection,
+  messages: &[PreparedMessage],
+) -> Result<Vec<MessageSummary>, StorageError> {
+  let mut seqs = Vec::with_capacity(messages.len());
+  let mut summaries = Vec::with_capacity(messages.len());
+  for message in messages {
+    let (seq, summary) = insert_rows_in(conn, message).await?;
+    seqs.push(seq);
+    summaries.push(summary);
+  }
+  let indexed: Vec<(i64, &PreparedMessage)> = seqs.into_iter().zip(messages).collect();
+  for chunk in indexed.chunks(FTS_ROWS_PER_STATEMENT) {
+    index_in(conn, chunk).await?;
+  }
+  Ok(summaries)
+}
+
+/// Adds one full-text index row per `(seq, message)` in a single statement.
+async fn index_in(
+  conn: &mut SqliteConnection,
+  rows: &[(i64, &PreparedMessage)],
+) -> Result<(), StorageError> {
+  let mut builder = QueryBuilder::<Sqlite>::new(
+    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) ",
+  );
+  builder.push_values(rows, |mut row, (seq, message)| {
+    row
+      .push_bind(*seq)
+      .push_bind(message.subject.as_deref())
+      .push_bind(message.text_body.as_deref())
+      .push_bind(message.sender.as_str())
+      .push_bind(message.recipients_json.as_str());
+  });
+  builder.build().execute(&mut *conn).await?;
+  Ok(())
+}
+
+/// Writes `message` and its content and attachment rows on `conn`, returning
+/// its `seq` and summary. The full-text row is left to [`index_in`].
 ///
 /// Mints a fresh id on every call, so a retried or re-batched write can never
 /// collide with a row an earlier attempt committed.
-async fn insert_in(
+async fn insert_rows_in(
   conn: &mut SqliteConnection,
   message: &PreparedMessage,
-) -> Result<MessageSummary, StorageError> {
+) -> Result<(i64, MessageSummary), StorageError> {
   let id = Ulid::new().to_string();
   let size = message.raw.len() as i64;
   let now = OffsetDateTime::now_utc()
@@ -798,17 +850,6 @@ async fn insert_in(
   .execute(&mut *conn)
   .await?;
 
-  sqlx::query(
-    "INSERT INTO messages_fts(rowid, subject, text_body, sender, recipients) VALUES (?1, ?2, ?3, ?4, ?5)",
-  )
-  .bind(seq)
-  .bind(&message.subject)
-  .bind(&message.text_body)
-  .bind(&message.sender)
-  .bind(&message.recipients_json)
-  .execute(&mut *conn)
-  .await?;
-
   for attachment in &message.attachments {
     let (locator, content) = match &attachment.storage {
       AttachmentStorage::Located(locator) => (Some(locator), None),
@@ -834,18 +875,21 @@ async fn insert_in(
     .await?;
   }
 
-  Ok(MessageSummary {
-    id,
-    sender: message.sender.clone(),
-    recipients: message.recipients_json.clone(),
-    subject: message.subject.clone(),
-    size,
-    has_attachments: message.has_attachments,
-    is_read: false,
-    is_starred: false,
-    tags: "[]".to_string(),
-    created_at: now,
-  })
+  Ok((
+    seq,
+    MessageSummary {
+      id,
+      sender: message.sender.clone(),
+      recipients: message.recipients_json.clone(),
+      subject: message.subject.clone(),
+      size,
+      has_attachments: message.has_attachments,
+      is_read: false,
+      is_starred: false,
+      tags: "[]".to_string(),
+      created_at: now,
+    },
+  ))
 }
 
 /// Located parts at least this long are decoded on the blocking pool.
@@ -1171,6 +1215,23 @@ mod tests {
     assert!(repo.insert_batch(&batch).await.is_err());
     assert_eq!(repo.count().await.unwrap(), 0);
     assert!(repo.search("good", 10, 0).await.unwrap().is_empty());
+  }
+
+  #[tokio::test]
+  async fn a_batch_is_indexed_as_one_fts_segment() {
+    let repo = test_repo().await;
+    let batch: Vec<PreparedMessage> = (0..8).map(|i| prepared(&format!("msg{i}"))).collect();
+
+    repo.insert_batch(&batch).await.unwrap();
+
+    let segments: i64 = sqlx::query_scalar(
+      "SELECT count(DISTINCT id >> 37) FROM messages_fts_data WHERE id >> 37 > 0",
+    )
+    .fetch_one(&repo.writer)
+    .await
+    .unwrap();
+    assert_eq!(segments, 1);
+    assert_eq!(repo.search("msg7", 10, 0).await.unwrap().len(), 1);
   }
 
   #[tokio::test]
