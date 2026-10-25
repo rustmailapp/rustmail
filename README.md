@@ -103,6 +103,19 @@ To go back, run `rustmail restore-backup` with the new binary **before** install
 | **Retention policies** | Auto-purge by age (`--retention`) or count (`--max-messages`). |
 | **TUI** | Optional terminal UI client for Neovim and headless workflows. |
 
+## Benchmarks
+
+RustMail and Mailpit, both in Docker, with 100,000 messages stored. Medians of 6 runs; latencies are p50.
+
+| | RustMail | Mailpit |
+|---|---|---|
+| Search, rare term | **0.66 ms** | 203 ms |
+| Inbox list, first page | **0.94 ms** | 8.3 ms |
+| Disk, 100,000 messages | **110 MB** | 210 MB |
+| Idle memory | **9.4 MB** | 19.6 MB |
+
+Method, MailHog and every other number: [docs.rustmail.app/benchmarks](https://docs.rustmail.app/benchmarks).
+
 ## GitHub Action
 
 ```yaml

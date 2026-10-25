@@ -4,9 +4,46 @@ description: "Runtime benchmark of RustMail against Mailpit and MailHog: ingest 
 
 # Benchmarks
 
-Runtime benchmark of RustMail against Mailpit and MailHog, from one session
-on one machine. The harness lives in `scripts/bench/` (`bench.py`,
-`summarize.py`, `README.md`); see that README to reproduce or extend it.
+Runtime benchmark of RustMail against Mailpit and MailHog on one machine.
+The harness lives in `scripts/bench/` (`bench.py`, `summarize.py`,
+`README.md`); see that README to reproduce or extend it.
+
+## Docker comparison
+
+These are the numbers on rustmail.app and in the README. RustMail v0.10.1
+(`ghcr.io/rustmailapp/rustmail:latest`), Mailpit v1.32.0
+(`axllent/mailpit:latest`, `--max 0 --database /data/mailpit.db`) and
+MailHog (`mailhog/mailhog:latest`, amd64 emulated), each in Docker Desktop
+on the machine below, 100 000 small messages at 8 connections
+(`--scenario S1-8c --http --restart`). RustMail and Mailpit ran 6 times,
+MailHog 3 times, interleaved in rotating order on 2026-10-25. Each cell is
+the median; latencies are p50 in ms.
+
+| 100 000 stored | RustMail | Mailpit | MailHog |
+|---|---|---|---|
+| search rare term (10 hits) | 0.66 | 203 | 1 265 |
+| search common term (100 000 hits) | 2.9 | 536 | 358 |
+| list first page | 0.94 | 8.3 | 2.2 |
+| list offset 90 000 | 1.5 | 12.8 | 2.4 |
+| get one | 0.46 | 0.38 | 0.41 |
+| disk (MB) | 110 | 210 | memory only |
+| idle memory, empty (MB anon) | 9.4 | 19.6 | 22.7 |
+| restart to full count (s) | 0.30 | 0.64 | 0.51, mailbox empty |
+| stored msgs/s through the port-forward | 2 620 | 2 402 | 590 |
+
+- The load average at the start of a run ranged from 4 to 24. RustMail's
+  sub-millisecond latencies are the most sensitive to it: its rare-term
+  search took 0.47-0.79 ms in four runs and 3.6-4.2 ms in the two that
+  started at load 24 and 9. The medians include every run.
+- Getting one message is the one row where Mailpit is ahead, by less than
+  the run-to-run spread.
+- Through Docker Desktop's port-forward the ingest rates tie, as explained
+  under [Reading the ingest numbers](#reading-the-ingest-numbers). The
+  website's ingest row (6 025 against 3 698 msgs/s) is the in-VM run from
+  that section.
+
+The sections below are the full single-session run of 2026-10-24 at commit
+`c4b80da`, including native RustMail.
 
 ## Method
 
