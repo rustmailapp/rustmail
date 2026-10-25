@@ -131,6 +131,19 @@ The endpoint answers `200` when the condition holds and `417` otherwise. See [CI
 - **Export**: download as EML or JSON
 - **Retention policies**: auto-purge by age or count
 
+## Benchmarks
+
+RustMail and Mailpit, both in Docker, with 100,000 messages stored. Medians of 6 runs; latencies are p50.
+
+| | RustMail | Mailpit |
+|---|---|---|
+| Search, rare term | **0.66 ms** | 203 ms |
+| Inbox list, first page | **0.94 ms** | 8.3 ms |
+| Disk, 100,000 messages | **110 MB** | 210 MB |
+| Idle memory | **9.4 MB** | 19.6 MB |
+
+Method, MailHog and every other number: [docs.rustmail.app/benchmarks](https://docs.rustmail.app/benchmarks).
+
 ## Image Details
 
 - **Base image:** `alpine:3.21`

@@ -4,9 +4,58 @@ description: "Runtime benchmark of RustMail against Mailpit and MailHog: ingest 
 
 # Benchmarks
 
-Runtime benchmark of RustMail against Mailpit and MailHog, from one session
-on one machine. The harness lives in `scripts/bench/` (`bench.py`,
-`summarize.py`, `README.md`); see that README to reproduce or extend it.
+Runtime benchmark of RustMail against Mailpit and MailHog on one machine.
+The harness lives in `scripts/bench/` (`bench.py`, `summarize.py`,
+`README.md`); see that README to reproduce or extend it.
+
+## Docker comparison
+
+These are the numbers on rustmail.app and in the README. RustMail v0.10.1
+(`ghcr.io/rustmailapp/rustmail:latest`), Mailpit v1.32.0
+(`axllent/mailpit:latest`), MailHog (`mailhog/mailhog:latest`, amd64
+emulated), MailDev 3.0.0 (`maildev/maildev:latest`) and MailCrab v1.10.0
+(`marlonb/mailcrab:latest`), each in Docker Desktop on the machine below,
+100 000 small messages at 8 connections (`--scenario S1-8c --http
+--restart`); `scripts/bench/README.md` lists how each tool is configured.
+RustMail and Mailpit ran 6 times, the others 3 times, interleaved in
+rotating order on 2026-10-25. Each cell is the median; latencies are p50
+in ms.
+
+| 100 000 stored | RustMail | Mailpit | MailHog | MailDev | MailCrab |
+|---|---|---|---|---|---|
+| search rare term (10 hits) | 0.66 | 203 | 1 265 | 81 | no search endpoint |
+| search common term (100 000 hits) | 2.9 | 536 | 358 | 63 | no search endpoint |
+| list first page | 0.94 | 8.3 | 2.2 | 38 | no paged listing |
+| list offset 90 000 | 1.5 | 12.8 | 2.4 | 39 | no paged listing |
+| get one | 0.46 | 0.38 | 0.41 | 0.38 | 0.27 |
+| disk (MB) | 110 | 210 | memory only | 393 | memory only |
+| idle memory, empty (MB anon) | 9.4 | 19.6 | 22.7 | 106.5 | 6.6 |
+| restart to full count (s) | 0.30 | 0.64 | 0.51, mailbox empty | 24 | 0.30, mailbox empty |
+| stored msgs/s through the port-forward | 2 620 | 2 402 | 590 | 2 076 | see below |
+
+- The load average at the start of a run ranged from 4 to 24. RustMail's
+  sub-millisecond latencies are the most sensitive to it: its rare-term
+  search took 0.47-0.79 ms in four runs and 3.6-4.2 ms in the two that
+  started at load 24 and 9. The medians include every run.
+- Getting one message is faster on MailCrab (0.27 ms) and slightly faster
+  on Mailpit and MailDev. MailCrab also idles in less memory than RustMail.
+- MailCrab accepted 5 190 msgs/s over SMTP and kept 99 940-99 975 of the
+  100 000 messages in each run, so its stored rate never reached the full
+  count; its README notes that it can drop messages under heavy load.
+- MailDev reloads every stored message from its mail directory on start,
+  which is why its restart takes 24 s and its memory after the restart is
+  449 MB.
+- smtp4dev 3 is supported by the harness but is not in the table: with its
+  message cap raised to keep 100 000 messages, its ingest slowed to about
+  7 msgs/s after 58 000 messages, so a run could not finish in a
+  reasonable time.
+- Through Docker Desktop's port-forward the ingest rates tie, as explained
+  under [Reading the ingest numbers](#reading-the-ingest-numbers). The
+  website's ingest row (6 025 against 3 698 msgs/s) is the in-VM run from
+  that section.
+
+The sections below are the full single-session run of 2026-10-24 at commit
+`c4b80da`, including native RustMail.
 
 ## Method
 
