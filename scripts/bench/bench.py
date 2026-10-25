@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RustMail vs Mailpit vs MailHog runtime benchmark (Python stdlib only).
+"""RustMail vs other mail catchers runtime benchmark (Python stdlib only).
 
 Run `python3 bench.py --help`. Results are appended as JSON lines to
 <output-dir>/<tool>.jsonl (default: results/<tool>.jsonl next to this file).
@@ -35,6 +35,9 @@ DEFAULT_PORTS = {
     "rustmail-docker-glibc": (9025, 9026),
     "mailpit": (9125, 9126),
     "mailhog": (9225, 9226),
+    "maildev": (9325, 9326),
+    "smtp4dev": (9425, 9426),
+    "mailcrab": (9525, 9526),
 }
 
 RARE_TERM = "quokkazeta"
@@ -214,7 +217,7 @@ class Http:
                     raise
         raise RuntimeError("unreachable")
 
-    def json(self, method: str, path: str) -> dict:
+    def json(self, method: str, path: str) -> dict | list:
         status, body = self.request(method, path)
         if status >= 400:
             raise RuntimeError(f"{method} {path} -> HTTP {status}: {body[:200]!r}")
@@ -222,12 +225,16 @@ class Http:
 
 
 class Api:
+    """HTTP endpoints of one tool; an empty `list_path` or `search_path` means the tool has no such endpoint."""
+
     count_path = ""
     list_path = ""
     search_path = ""
     get_path = ""
     delete_all_path = ""
+    delete_all_method = "DELETE"
     total_key = "total"
+    id_key = "id"
 
     def __init__(self, port: int):
         self.http = Http(port)
@@ -235,11 +242,11 @@ class Api:
     def count(self) -> int:
         return int(self.http.json("GET", self.count_path)[self.total_key])
 
-    def list(self, offset: int, limit: int = 50) -> str:
-        return self.list_path.format(offset=offset, limit=limit)
+    def list(self, offset: int, limit: int = 50) -> str | None:
+        return self.list_path.format(offset=offset, limit=limit) if self.list_path else None
 
-    def search(self, term: str) -> str:
-        return self.search_path.format(term=term)
+    def search(self, term: str) -> str | None:
+        return self.search_path.format(term=term) if self.search_path else None
 
     def get(self, msg_id: str) -> str:
         return self.get_path.format(id=msg_id)
@@ -247,10 +254,33 @@ class Api:
     def ids(self, offset: int, limit: int) -> list[str]:
         return [m[self.id_key] for m in self.messages(self.http.json("GET", self.list(offset, limit)))]
 
+    def sample_ids(self, stored: int) -> list[str]:
+        ids = []
+        for offset in range(0, stored, max(1, stored // GET_ID_POOL)):
+            ids.extend(self.ids(offset, 1))
+        return ids
+
     def messages(self, payload: dict) -> list[dict]:
         return payload["messages"]
 
-    id_key = "id"
+    def hits(self, payload: dict) -> int | None:
+        return payload.get("messages_count", payload.get("total"))
+
+
+class ListAllApi(Api):
+    """A tool whose only listing returns every stored message, with no count, paging or search."""
+
+    list_all_path = ""
+
+    def all_messages(self) -> list[dict]:
+        return self.http.json("GET", self.list_all_path)
+
+    def count(self) -> int:
+        return len(self.all_messages())
+
+    def sample_ids(self, stored: int) -> list[str]:
+        everything = self.all_messages()
+        return [m[self.id_key] for m in everything[:: max(1, len(everything) // GET_ID_POOL)]]
 
 
 class RustmailApi(Api):
@@ -280,6 +310,41 @@ class MailhogApi(Api):
 
     def messages(self, payload: dict) -> list[dict]:
         return payload["items"]
+
+
+class Smtp4devApi(Api):
+    count_path = "/api/messages?pageSize=1"
+    search_path = "/api/messages?searchTerms={term}&pageSize=50"
+    get_path = "/api/messages/{id}"
+    delete_all_path = "/api/messages/*"
+    total_key = "rowCount"
+
+    def list(self, offset: int, limit: int = 50) -> str:
+        return f"/api/messages?page={offset // limit + 1}&pageSize={limit}"
+
+    def messages(self, payload: dict) -> list[dict]:
+        return payload["results"]
+
+    def hits(self, payload: dict) -> int | None:
+        return payload.get("rowCount")
+
+
+class MaildevApi(Api):
+    count_path = "/api/email/summary?limit=1"
+    list_path = "/api/email/summary?skip={offset}&limit={limit}"
+    search_path = "/api/email/summary?search={term}&limit=50"
+    get_path = "/api/email/{id}"
+    delete_all_path = "/api/email/all"
+
+    def messages(self, payload: dict) -> list[dict]:
+        return payload["items"]
+
+
+class MailcrabApi(ListAllApi):
+    list_all_path = "/api/messages"
+    get_path = "/api/message/{id}"
+    delete_all_path = "/api/delete-all"
+    delete_all_method = "POST"
 
 
 def cpu_seconds_from_ps(value: str) -> float:
@@ -423,6 +488,47 @@ class MailhogDocker(DockerTool):
 
     def extra_run_args(self) -> list[str]:
         return ["--platform", "linux/amd64"]
+
+    def disk_bytes(self) -> int | None:
+        return None
+
+
+class MaildevDocker(DockerTool):
+    image = "maildev/maildev:latest"
+    container_http = 1080
+    args = ["--mail-directory", "/data"]
+
+    def __init__(self, smtp_port: int, http_port: int):
+        super().__init__("maildev", smtp_port, http_port, MaildevApi)
+
+    def extra_run_args(self) -> list[str]:
+        return ["--user", "root"]
+
+
+class Smtp4devDocker(DockerTool):
+    image = "rnwood/smtp4dev:latest"
+    container_smtp = 25
+    container_http = 80
+    data_dir = "/smtp4dev"
+    keep_messages = 1_000_000
+
+    def __init__(self, smtp_port: int, http_port: int):
+        super().__init__("smtp4dev", smtp_port, http_port, Smtp4devApi)
+
+    def extra_run_args(self) -> list[str]:
+        return [
+            "-e", f"ServerOptions__NumberOfMessagesToKeep={self.keep_messages}",
+            "-e", f"ServerOptions__NumberOfSessionsToKeep={self.keep_messages}",
+        ]
+
+
+class MailcrabDocker(DockerTool):
+    image = "marlonb/mailcrab:latest"
+    container_http = 1080
+    persistent = False
+
+    def __init__(self, smtp_port: int, http_port: int):
+        super().__init__("mailcrab", smtp_port, http_port, MailcrabApi)
 
     def disk_bytes(self) -> int | None:
         return None
@@ -573,20 +679,18 @@ def time_requests(api: Api, paths: list[str]) -> dict:
 
 def http_scenario(tool, api: Api, stored: int) -> dict:
     deep = min(DEEP_OFFSET, max(0, stored - 50))
-    ids = []
-    for offset in range(0, stored, max(1, stored // GET_ID_POOL)):
-        ids.extend(api.ids(offset, 1))
-    results = {
-        "list_first": time_requests(api, [api.list(0)]),
-        "list_deep": time_requests(api, [api.list(deep)]),
-        "search_rare": time_requests(api, [api.search(RARE_TERM)]),
-        "search_common": time_requests(api, [api.search(COMMON_TERM)]),
-        "get_single": time_requests(api, [api.get(i) for i in ids]),
+    ids = api.sample_ids(stored)
+    scenarios = {
+        "list_first": [api.list(0)],
+        "list_deep": [api.list(deep)],
+        "search_rare": [api.search(RARE_TERM)],
+        "search_common": [api.search(COMMON_TERM)],
+        "get_single": [api.get(i) for i in ids],
     }
-    rare_hits = api.http.json("GET", api.search(RARE_TERM))
-    common_hits = api.http.json("GET", api.search(COMMON_TERM))
-    results["search_rare_total"] = rare_hits.get("messages_count", rare_hits.get("total"))
-    results["search_common_total"] = common_hits.get("messages_count", common_hits.get("total"))
+    results: dict = {name: time_requests(api, paths) for name, paths in scenarios.items() if None not in paths}
+    if (rare := api.search(RARE_TERM)) is not None:
+        results["search_rare_total"] = api.hits(api.http.json("GET", rare))
+        results["search_common_total"] = api.hits(api.http.json("GET", api.search(COMMON_TERM)))
     results["list_deep_offset"] = deep
     return results
 
@@ -617,7 +721,7 @@ def restart_scenario(tool, api: Api, stored: int) -> dict:
 
 def delete_all(tool, api: Api) -> dict:
     began = time.perf_counter()
-    status, body = api.http.request("DELETE", api.delete_all_path)
+    status, body = api.http.request(api.delete_all_method, api.delete_all_path)
     elapsed = time.perf_counter() - began
     remaining = api.count()
     return {"delete_all_s": round(elapsed, 3), "status": status, "remaining": remaining, "body": body[:120].decode("utf-8", "replace")}
@@ -633,6 +737,12 @@ def make_tool(args: argparse.Namespace) -> NativeRustmail | DockerTool:
         return MailpitDocker(smtp_port, http_port)
     if args.tool == "mailhog":
         return MailhogDocker(smtp_port, http_port)
+    if args.tool == "maildev":
+        return MaildevDocker(smtp_port, http_port)
+    if args.tool == "smtp4dev":
+        return Smtp4devDocker(smtp_port, http_port)
+    if args.tool == "mailcrab":
+        return MailcrabDocker(smtp_port, http_port)
     if args.tool == "rustmail-docker":
         return RustmailDocker(smtp_port, http_port)
     if args.tool == "rustmail-docker-glibc":
@@ -683,7 +793,7 @@ def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tool", required=True, choices=["rustmail", "mailpit", "mailhog", "rustmail-docker", "rustmail-docker-glibc"])
+    parser.add_argument("--tool", required=True, choices=sorted(DEFAULT_PORTS))
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--kind", choices=["small", "medium"], default="small")
     parser.add_argument("--count", type=int, default=100_000)

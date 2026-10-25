@@ -44,7 +44,9 @@ def main() -> None:
     for (tool, scenario), e in sorted(rows.items()):
         if "http" not in e:
             continue
-        cells = [f"{e['http'][k]['p50_ms']} / {e['http'][k]['p95_ms']} / {e['http'][k]['p99_ms']}" for k in ENDPOINTS]
+        cells = [
+            f"{h['p50_ms']} / {h['p95_ms']} / {h['p99_ms']}" if (h := e["http"].get(k)) else "not supported" for k in ENDPOINTS
+        ]
         print(f"| {tool} | " + " | ".join(cells) + f" | {e['delete']['delete_all_s']} | {fmt(e.get('disk_mb_after_delete'))} |")
     print("\n## Restart and idle memory\n")
     print("| tool | startup empty (s) | idle mem empty (MB) | mem before restart (MB) | restart → full count (s) | count after restart | idle mem after restart (MB) |")
