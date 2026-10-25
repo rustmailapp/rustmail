@@ -17,8 +17,9 @@ appended as JSON lines to `results/<tool>.jsonl` (gitignored; override with
 
   Defaults to `target-linux/release/rustmail`; override with `--linux-binary`.
 - Docker, with `axllent/mailpit:latest`, `mailhog/mailhog:latest` (amd64, emulated
-  on Apple Silicon) and `ghcr.io/rustmailapp/rustmail:latest` pulled, for the
-  `mailpit`, `mailhog`, `rustmail-docker` and `rustmail-docker-glibc` tools.
+  on Apple Silicon), `maildev/maildev:latest`, `rnwood/smtp4dev:latest`,
+  `marlonb/mailcrab:latest` and `ghcr.io/rustmailapp/rustmail:latest` pulled, for
+  the Docker tools.
 
 ## Ports
 
@@ -29,6 +30,9 @@ Defaults, override with `--smtp-port` / `--http-port`:
 | rustmail (native) / rustmail-docker / rustmail-docker-glibc | 9025 | 9026 |
 | mailpit | 9125 | 9126 |
 | mailhog | 9225 | 9226 |
+| maildev | 9325 | 9326 |
+| smtp4dev | 9425 | 9426 |
+| mailcrab | 9525 | 9526 |
 
 Never 1025/8025 — those are RustMail's own dev-server defaults.
 
@@ -39,8 +43,8 @@ python3 scripts/bench/bench.py --tool rustmail --scenario S1-8c --count 100000 -
 python3 scripts/bench/summarize.py > scripts/bench/results/summary.md
 ```
 
-`--tool` selects `rustmail`, `mailpit`, `mailhog`, `rustmail-docker` or
-`rustmail-docker-glibc`. `--count`, `--conns`, `--kind` (`small` or `medium`)
+`--tool` selects `rustmail`, `mailpit`, `mailhog`, `maildev`, `smtp4dev`,
+`mailcrab`, `rustmail-docker` or `rustmail-docker-glibc`. `--count`, `--conns`, `--kind` (`small` or `medium`)
 and `--binary` all have defaults; see `--help` for the full list.
 
 A comparative run across tools, matching the RustMail v0.7.0-era report:
@@ -58,13 +62,21 @@ python3 scripts/bench/bench.py --tool mailhog --scenario S2-8c --kind medium --c
 python3 scripts/bench/summarize.py > scripts/bench/results/summary.md
 ```
 
+## How each tool is configured
+
+- **Mailpit**: `--max 0 --database /data/mailpit.db`, so nothing is pruned and mail is on disk.
+- **MailHog**: defaults; it keeps mail in memory, so its restart loses everything.
+- **MailDev**: `--mail-directory /data`, which persists every message and reloads it on start. The container runs as root because the image's `node` user cannot write to a fresh named volume.
+- **smtp4dev**: `ServerOptions__NumberOfMessagesToKeep` and `ServerOptions__NumberOfSessionsToKeep` raised to 1 000 000; the default keeps 100 messages. SQLite under `/smtp4dev`.
+- **MailCrab**: defaults. It keeps mail in memory and has no count, paging or search endpoint, so the harness counts and samples ids from the full listing and records only the latency of getting one message.
+
 ## What is measured
 
 - Payloads are built before timing (`small` ≈ 2.1 KB multipart/alternative; `medium` ≈ 205 KB with a 150 KB random binary attachment, base64).
 - One forked process per SMTP connection, raw sockets, one persistent connection each, `MAIL`/`RCPT`/`DATA` without pipelining.
 - **Stored** throughput: the harness polls each tool's API total (`limit=1` list call) every 250 ms until it reaches the sent count; `stored_per_s = stored / (t_count_reached - t_start)`. `accepted_per_s` is the SMTP-side rate.
 - CPU and memory sampled every 1 s: native via `ps -o rss,time`; containers via the cgroup's `memory.stat anon` and `cpu.stat usage_usec` (anon ≈ RSS without file-backed pages). Native RSS on macOS includes resident mmapped SQLite pages, so `footprint` is also recorded for rustmail at the restart step.
-- `--http`: 200 sequential keep-alive GETs per endpoint after 5 warm-ups: list first page (50), list at offset 90 000, search rare term (10 hits), search common term (every message), get single message (50 ids spread over the mailbox); then `DELETE` all.
+- `--http`: 200 sequential keep-alive GETs per endpoint after 5 warm-ups: list first page (50), list at offset 90 000, search rare term (10 hits), search common term (every message), get single message (50 ids spread over the mailbox); then delete all. An endpoint the tool does not have is skipped and reported as "not supported".
 - `--restart`: stop and start the same storage (SIGTERM / `docker restart`), time until the API reports the full count, then idle memory after 10 s. MailHog stores in memory, so its restart loses everything.
 - Disk: size of `rustmail.db*` (native) or `du -sk /data` inside the container's named volume.
 
