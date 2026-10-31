@@ -126,8 +126,6 @@ RUSTMAIL_BUILD_VERSION=<new> cargo build -p rustmail-server
 
 Outside a tagged build the version comes from `git describe`, so a local binary reports its distance from the last release (`0.6.0-32-gff344a9-dirty`) rather than claiming to be one.
 
-The **Update AUR Package** job commits a refreshed `PKGBUILD` to the [`aur-rustmail`](https://github.com/rustmailapp/aur-rustmail) mirror — it does not reach `aur.archlinux.org`. Publishing from there needs an AUR account, and registration has been closed since June 2026, so the mirror moves forward while the published package does not. See the [installation docs](docs/getting-started/installation.md).
-
 ## Architecture
 
 See the [Architecture](https://docs.rustmail.app/architecture) page for crate layout, data flow, and design decisions.

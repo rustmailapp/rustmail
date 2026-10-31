@@ -20,23 +20,6 @@ brew install rustmailapp/rustmail/rustmail
 
 If you run RustMail as a service (`brew services start rustmail`), upgrading to 0.8 or 0.10 migrates the database unattended on the next restart. See [Upgrading](/getting-started/upgrading).
 
-## Arch Linux (AUR)
-
-::: warning Not published by us
-AUR account registration has been closed since June 2026, so we have no way to
-publish or update `rustmail-bin`. Whatever the command below installs is not a
-release we publish or keep current, and it will not track new versions.
-
-Use [Homebrew](#homebrew), [Docker](#docker), or the
-[pre-built binaries](#pre-built-binaries) instead.
-:::
-
-```sh
-yay -S rustmail-bin
-```
-
-Or with any AUR helper (`paru -S rustmail-bin`, `pacman -S rustmail-bin` via chaotic-aur, etc.).
-
 ## Pre-built Binaries
 
 Download from [GitHub Releases](https://github.com/rustmailapp/rustmail/releases/latest): Linux x86_64/aarch64/armv7 (glibc and musl builds), macOS (Intel + Apple Silicon).
