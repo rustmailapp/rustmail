@@ -82,7 +82,7 @@ Reference: https://docs.brew.sh/Acceptable-Formulae
 
 ## Future Channels (not planned yet)
 
-- **AUR** (Arch Linux): PKGBUILD, straightforward for Rust binaries
+- **AUR** (Arch Linux): blocked, AUR account registration has been closed since June 2026. The `rustmail-bin` name is unclaimed, so do not point users at it
 - **Nix**: nixpkgs PR, similar community process to Homebrew
 - **Scoop** (Windows): JSON manifest in a bucket repo
 - **Snap / Flatpak**: lower priority, Docker covers Linux well
