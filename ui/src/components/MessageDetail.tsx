@@ -389,7 +389,8 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
             onClick={() => starMessage(props.message.id, !starred())}
             class={ACTION_CLASS}
             classList={{
-              "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200": starred(),
+              "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200":
+                starred(),
               "text-zinc-500 dark:text-zinc-400 hover:text-amber-800 dark:hover:text-amber-400":
                 !starred(),
             }}
@@ -619,7 +620,7 @@ function HtmlPreview(props: {
             <iframe
               sandbox="allow-popups allow-popups-to-escape-sandbox"
               srcdoc={html()}
-              class="w-full h-full border-0 bg-white"
+              class="w-full h-full border-0 bg-white [color-scheme:light]"
               title="Email HTML preview"
             />
           </div>

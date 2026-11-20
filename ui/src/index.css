@@ -14,9 +14,12 @@
     0 0 0 1px color-mix(in oklab, var(--color-zinc-300) 40%, transparent),
     0 1px 2px color-mix(in oklab, var(--color-zinc-950) 4%, transparent),
     0 8px 24px -12px color-mix(in oklab, var(--color-zinc-950) 16%, transparent);
+  color-scheme: light;
+  background-color: var(--rm-canvas);
 }
 
 .dark {
+  color-scheme: dark;
   --rm-selection: color-mix(in oklch, var(--color-zinc-800) 80%, transparent);
   --rm-canvas: var(--color-zinc-950);
   --rm-panel: color-mix(
@@ -415,32 +418,6 @@
 }
 :is(.dark) .btn-destructive:hover {
   background-color: color-mix(in srgb, var(--color-red-950) 60%, transparent);
-}
-
-.rusted {
-  --color-orange-50: #faf2ec;
-  --color-orange-100: #f1ded0;
-  --color-orange-200: #e2bca0;
-  --color-orange-300: #cd9268;
-  --color-orange-400: #bd7647;
-  --color-orange-500: #b35a23;
-  --color-orange-600: #97481b;
-  --color-orange-700: #793816;
-  --color-orange-800: #5e2c14;
-  --color-orange-900: #4a2311;
-  --color-orange-950: #2c1308;
-
-  --color-zinc-50: #faf6f2;
-  --color-zinc-100: #f3ede6;
-  --color-zinc-200: #e6dccf;
-  --color-zinc-300: #d2c5b4;
-  --color-zinc-400: #a89784;
-  --color-zinc-500: #7a6c5b;
-  --color-zinc-600: #5a4d40;
-  --color-zinc-700: #443931;
-  --color-zinc-800: #2b241d;
-  --color-zinc-900: #1a1510;
-  --color-zinc-950: #0d0a07;
 }
 
 .rusted {
