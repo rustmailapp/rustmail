@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 use super::*;
 use crate::prepared::AttachmentStorage;
@@ -270,14 +270,20 @@ async fn migrated_snapshot(db: &Path) -> (Vec<MessageRow>, Vec<AttachmentRow>) {
 
 async fn scalar(db: &Path, sql: &str) -> i64 {
   let pool = legacy::open_plain(db).await;
-  let value: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+  let value: i64 = sqlx::query_scalar(AssertSqlSafe(sql))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
   pool.close().await;
   value
 }
 
 async fn text(db: &Path, sql: &str) -> Option<String> {
   let pool = legacy::open_plain(db).await;
-  let value: Option<String> = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+  let value: Option<String> = sqlx::query_scalar(AssertSqlSafe(sql))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
   pool.close().await;
   value
 }
@@ -969,12 +975,14 @@ const PREVIOUS_ORIGIN_DDL: &str = "CREATE TABLE migration_origin (id INTEGER PRI
 async fn previous_database(db: &Path, count: usize) -> (Vec<MessageRow>, Vec<AttachmentRow>) {
   let pool = legacy::open_plain(db).await;
   for statement in crate::schema::SCHEMA_1_DDL {
-    sqlx::query(statement).execute(&pool).await.unwrap();
+    sqlx::query(*statement).execute(&pool).await.unwrap();
   }
-  sqlx::query(&format!("PRAGMA user_version = {PREVIOUS_SCHEMA}"))
-    .execute(&pool)
-    .await
-    .unwrap();
+  sqlx::query(AssertSqlSafe(format!(
+    "PRAGMA user_version = {PREVIOUS_SCHEMA}"
+  )))
+  .execute(&pool)
+  .await
+  .unwrap();
   let mut messages = Vec::new();
   let mut attachments = Vec::new();
   for index in 0..count {
@@ -1215,7 +1223,7 @@ async fn an_incomplete_copy_left_by_0_9_is_rebuilt() {
   let copy = sidecar(&db, MIGRATING_SUFFIX);
   let pool = legacy::open_plain(&copy).await;
   for statement in crate::schema::SCHEMA_1_DDL {
-    sqlx::query(statement).execute(&pool).await.unwrap();
+    sqlx::query(*statement).execute(&pool).await.unwrap();
   }
   sqlx::query(PREVIOUS_ORIGIN_DDL)
     .execute(&pool)

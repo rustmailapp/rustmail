@@ -4,8 +4,8 @@
 
 use mail_parser::{MessageParser, MimeHeaders};
 use rustmail_storage::{MessageRepository, StorageError, initialize_database};
-use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 const CRLF: &str = "\r\n";
 const LF: &str = "\n";
@@ -676,9 +676,9 @@ async fn located_fixture(harness: &Harness, raw: &[u8], filename: &str) -> (Stri
 }
 
 async fn tamper(harness: &Harness, attachment_id: &str, assignment: &str) {
-  sqlx::query(&format!(
+  sqlx::query(AssertSqlSafe(format!(
     "UPDATE attachments SET {assignment} WHERE id = ?1"
-  ))
+  )))
   .bind(attachment_id)
   .execute(&harness.pool)
   .await

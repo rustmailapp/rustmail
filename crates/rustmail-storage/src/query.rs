@@ -44,7 +44,7 @@ pub enum PageStart {
 ///
 /// `alias` is the `messages` table alias of the statement being built.
 pub(crate) fn push_filter(
-  builder: &mut QueryBuilder<'_, Sqlite>,
+  builder: &mut QueryBuilder<Sqlite>,
   alias: &'static str,
   filter: &MessageFilter,
 ) {
@@ -73,7 +73,7 @@ pub(crate) fn push_filter(
 ///
 /// `rowid` names the column that carries arrival order in the statement.
 pub(crate) fn push_page(
-  builder: &mut QueryBuilder<'_, Sqlite>,
+  builder: &mut QueryBuilder<Sqlite>,
   rowid: &'static str,
   start: PageStart,
   limit: i64,

@@ -1,6 +1,6 @@
 //! Identifying an older database's contents without reading its bodies.
 
-use sqlx::SqliteConnection;
+use sqlx::{AssertSqlSafe, SqliteConnection};
 
 use crate::StorageError;
 
@@ -218,7 +218,7 @@ pub(crate) async fn fingerprint(
   let message_page = layout.message_page();
   let mut after = i64::MIN;
   loop {
-    let rows: Vec<MessageKey> = sqlx::query_as(&message_page)
+    let rows: Vec<MessageKey> = sqlx::query_as(AssertSqlSafe(message_page.as_str()))
       .bind(after)
       .bind(FINGERPRINT_PAGE_ROWS)
       .fetch_all(&mut *conn)
