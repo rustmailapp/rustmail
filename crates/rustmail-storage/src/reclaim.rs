@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 use tracing::{debug, info};
 
 use crate::StorageError;
@@ -159,9 +159,11 @@ pub(crate) async fn reclaim(
 /// it, both on the same connection and outside any transaction.
 async fn vacuum_step(writer: &SqlitePool) -> Result<i64, StorageError> {
   let mut conn = writer.acquire().await?;
-  sqlx::query(&format!("PRAGMA incremental_vacuum({RECLAIM_STEP_PAGES})"))
-    .execute(&mut *conn)
-    .await?;
+  sqlx::query(AssertSqlSafe(format!(
+    "PRAGMA incremental_vacuum({RECLAIM_STEP_PAGES})"
+  )))
+  .execute(&mut *conn)
+  .await?;
   Ok(
     sqlx::query_scalar("PRAGMA freelist_count")
       .fetch_one(&mut *conn)

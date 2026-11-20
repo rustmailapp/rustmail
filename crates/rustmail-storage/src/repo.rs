@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use sqlx::{QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
+use sqlx::{AssertSqlSafe, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::{debug, error};
@@ -558,7 +558,7 @@ impl MessageRepository {
     recipient: Option<&str>,
   ) -> Result<i64, StorageError> {
     let (sql, binds) = count_matching_statement(subject, sender, recipient);
-    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
+    let mut query = sqlx::query_as::<_, (i64,)>(AssertSqlSafe(sql));
     for b in &binds {
       query = query.bind(b);
     }
@@ -599,9 +599,9 @@ impl MessageRepository {
     message_id: &str,
     attachment_id: &str,
   ) -> Result<Attachment, StorageError> {
-    let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+    let row = sqlx::query_as::<_, AttachmentRow>(AssertSqlSafe(format!(
       "SELECT {ATTACHMENT_ROW_COLUMNS} FROM attachments a JOIN messages m ON m.seq = a.message_seq JOIN message_content c ON c.seq = m.seq WHERE a.id = ?1 AND m.id = ?2",
-    ))
+    )))
     .bind(attachment_id)
     .bind(message_id)
     .fetch_optional(&self.readers)
@@ -626,9 +626,9 @@ impl MessageRepository {
     message_id: &str,
     content_id: &str,
   ) -> Result<Attachment, StorageError> {
-    let row = sqlx::query_as::<_, AttachmentRow>(&format!(
+    let row = sqlx::query_as::<_, AttachmentRow>(AssertSqlSafe(format!(
       "SELECT {ATTACHMENT_ROW_COLUMNS} FROM messages m JOIN attachments a ON a.message_seq = m.seq JOIN message_content c ON c.seq = m.seq WHERE a.content_id = ?1 AND m.id = ?2 ORDER BY a.rowid LIMIT 1",
-    ))
+    )))
     .bind(content_id)
     .bind(message_id)
     .fetch_optional(&self.readers)
@@ -1043,11 +1043,7 @@ const SUMMARY_COLUMNS: &str = "m.id, m.sender, m.recipients, m.subject, m.size, 
 
 /// The listing behind [`MessageRepository::list_page`]: `messages` alone,
 /// newest first.
-fn list_statement(
-  filter: &MessageFilter,
-  start: PageStart,
-  limit: i64,
-) -> QueryBuilder<'static, Sqlite> {
+fn list_statement(filter: &MessageFilter, start: PageStart, limit: i64) -> QueryBuilder<Sqlite> {
   let mut builder = QueryBuilder::<Sqlite>::new(format!(
     "SELECT {SUMMARY_COLUMNS} FROM messages m WHERE 1=1"
   ));
@@ -1063,7 +1059,7 @@ fn search_statement(
   filter: &MessageFilter,
   start: PageStart,
   limit: i64,
-) -> QueryBuilder<'static, Sqlite> {
+) -> QueryBuilder<Sqlite> {
   let mut builder = QueryBuilder::<Sqlite>::new(format!(
     "SELECT {SUMMARY_COLUMNS} FROM messages_fts fts INNER JOIN messages m ON m.seq = fts.rowid WHERE messages_fts MATCH "
   ));
@@ -1075,7 +1071,7 @@ fn search_statement(
 
 /// The count behind [`MessageRepository::search_count_filtered`] when a
 /// filter is set.
-fn search_count_statement(quoted: String, filter: &MessageFilter) -> QueryBuilder<'static, Sqlite> {
+fn search_count_statement(quoted: String, filter: &MessageFilter) -> QueryBuilder<Sqlite> {
   let mut builder = QueryBuilder::<Sqlite>::new(
     "SELECT COUNT(*) FROM messages_fts fts INNER JOIN messages m ON m.seq = fts.rowid WHERE messages_fts MATCH ",
   );
@@ -1086,7 +1082,7 @@ fn search_count_statement(quoted: String, filter: &MessageFilter) -> QueryBuilde
 
 /// The count behind [`MessageRepository::count_filtered`] when a filter is
 /// set.
-fn count_statement(filter: &MessageFilter) -> QueryBuilder<'static, Sqlite> {
+fn count_statement(filter: &MessageFilter) -> QueryBuilder<Sqlite> {
   let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM messages m WHERE 1=1");
   push_filter(&mut builder, "m", filter);
   builder
@@ -1238,9 +1234,9 @@ mod tests {
   }
 
   async fn poison_subject(repo: &MessageRepository, subject: &str) {
-    sqlx::query(&format!(
+    sqlx::query(AssertSqlSafe(format!(
       "CREATE TRIGGER poison BEFORE INSERT ON messages WHEN NEW.subject = '{subject}' BEGIN SELECT RAISE(ABORT, 'poisoned'); END"
-    ))
+    )))
     .execute(&repo.writer)
     .await
     .unwrap();
@@ -2686,16 +2682,16 @@ mod tests {
     let mut statements = Vec::new();
     for filter in [MessageFilter::default(), every_filter()] {
       for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
-        statements.push(("list", list_statement(&filter, start, 50).into_sql()));
+        statements.push(("list", list_statement(&filter, start, 50).into_string()));
         statements.push((
           "search",
-          search_statement(quoted(), &filter, start, 50).into_sql(),
+          search_statement(quoted(), &filter, start, 50).into_string(),
         ));
       }
-      statements.push(("count", count_statement(&filter).into_sql()));
+      statements.push(("count", count_statement(&filter).into_string()));
       statements.push((
         "search count",
-        search_count_statement(quoted(), &filter).into_sql(),
+        search_count_statement(quoted(), &filter).into_string(),
       ));
     }
     let (count_matching, _) = count_matching_statement(Some("s"), Some("f"), Some("r"));
@@ -2710,10 +2706,11 @@ mod tests {
 
   /// Tables and aliases each `SCAN` or `SEARCH` step of `sql`'s plan reads.
   async fn tables_read(repo: &MessageRepository, sql: &str) -> Vec<String> {
-    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
-      .fetch_all(&repo.readers)
-      .await
-      .unwrap();
+    let rows: Vec<(i64, i64, i64, String)> =
+      sqlx::query_as(AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+        .fetch_all(&repo.readers)
+        .await
+        .unwrap();
     rows
       .into_iter()
       .filter_map(|(_, _, _, detail)| {
@@ -2744,7 +2741,7 @@ mod tests {
   }
 
   async fn column_set(repo: &MessageRepository, sql: &str) -> Vec<i64> {
-    sqlx::query_scalar(sql)
+    sqlx::query_scalar(AssertSqlSafe(sql))
       .fetch_all(&repo.writer)
       .await
       .unwrap()
@@ -2956,10 +2953,11 @@ mod tests {
   }
 
   async fn plan_of(repo: &MessageRepository, sql: &str) -> Vec<String> {
-    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
-      .fetch_all(&repo.readers)
-      .await
-      .unwrap();
+    let rows: Vec<(i64, i64, i64, String)> =
+      sqlx::query_as(AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+        .fetch_all(&repo.readers)
+        .await
+        .unwrap();
     rows.into_iter().map(|(_, _, _, detail)| detail).collect()
   }
 
@@ -2998,20 +2996,20 @@ mod tests {
     let statements = [
       (
         "list",
-        list_statement(&filter, PageStart::Offset(0), 50).into_sql(),
+        list_statement(&filter, PageStart::Offset(0), 50).into_string(),
       ),
       (
         "list before cursor",
-        list_statement(&filter, PageStart::Before(Cursor(1)), 50).into_sql(),
+        list_statement(&filter, PageStart::Before(Cursor(1)), 50).into_string(),
       ),
-      ("count", count_statement(&filter).into_sql()),
+      ("count", count_statement(&filter).into_string()),
       (
         "search",
-        search_statement(quoted(), &filter, PageStart::Offset(0), 50).into_sql(),
+        search_statement(quoted(), &filter, PageStart::Offset(0), 50).into_string(),
       ),
       (
         "search count",
-        search_count_statement(quoted(), &filter).into_sql(),
+        search_count_statement(quoted(), &filter).into_string(),
       ),
     ];
 
@@ -3036,7 +3034,7 @@ mod tests {
     let filter = tagged_a_or_b();
 
     for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
-      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_sql()).await;
+      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_string()).await;
       assert!(
         !sorts_for_order_by(&plan),
         "{start:?}: the tagged page sorts its matches: {plan:?}"
@@ -3050,7 +3048,7 @@ mod tests {
     let filter = only_unread();
 
     for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
-      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_sql()).await;
+      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_string()).await;
       assert!(
         plan
           .iter()
@@ -3072,7 +3070,7 @@ mod tests {
   async fn the_unread_count_reads_only_its_partial_index() {
     let repo = test_repo().await;
 
-    let plan = plan_of(&repo, &count_statement(&only_unread()).into_sql()).await;
+    let plan = plan_of(&repo, &count_statement(&only_unread()).into_string()).await;
 
     assert_eq!(
       plan,
@@ -3082,7 +3080,10 @@ mod tests {
   }
 
   async fn tag_pairs(repo: &MessageRepository, sql: &str) -> Vec<(String, i64)> {
-    sqlx::query_as(sql).fetch_all(&repo.writer).await.unwrap()
+    sqlx::query_as(AssertSqlSafe(sql))
+      .fetch_all(&repo.writer)
+      .await
+      .unwrap()
   }
 
   /// Asserts `message_tags` holds exactly the distinct `(tag, seq)` pairs of

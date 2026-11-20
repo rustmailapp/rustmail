@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use mail_parser::MessageParser;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
-use sqlx::{Connection, SqliteConnection};
+use sqlx::{AssertSqlSafe, Connection, SqliteConnection};
 use time::OffsetDateTime;
 use tracing::info;
 
@@ -119,9 +119,9 @@ pub(crate) async fn read_origin(
   } else {
     "?1, ?2"
   };
-  let row: Option<(String, i64, i64, i64)> = sqlx::query_as(&format!(
+  let row: Option<(String, i64, i64, i64)> = sqlx::query_as(AssertSqlSafe(format!(
     "SELECT source_fingerprint, last_source_seq, {columns} FROM migration_origin WHERE id = 1"
-  ))
+  )))
   .bind(ORIGIN_DEFAULT_SOURCE_SCHEMA)
   .bind(ORIGIN_DEFAULT_TARGET_SCHEMA)
   .fetch_optional(&mut *conn)
@@ -186,7 +186,7 @@ impl Target {
     let mut conn = SqliteConnection::connect_with(&target_options(path, options)).await?;
     let mut txn = conn.begin_with("BEGIN IMMEDIATE").await?;
     for statement in SCHEMA_DDL {
-      sqlx::query(statement).execute(&mut *txn).await?;
+      sqlx::query(*statement).execute(&mut *txn).await?;
     }
     sqlx::query(MIGRATION_ORIGIN_DDL).execute(&mut *txn).await?;
     sqlx::query(
@@ -216,10 +216,12 @@ impl Target {
     path: &Path,
     source: &Path,
   ) -> Result<Self, StorageError> {
-    sqlx::query(&format!("ATTACH DATABASE ?1 AS {SOURCE_SCHEMA}"))
-      .bind(source.to_string_lossy().into_owned())
-      .execute(&mut conn)
-      .await?;
+    sqlx::query(AssertSqlSafe(format!(
+      "ATTACH DATABASE ?1 AS {SOURCE_SCHEMA}"
+    )))
+    .bind(source.to_string_lossy().into_owned())
+    .execute(&mut conn)
+    .await?;
     Ok(Self {
       conn,
       path: path.to_path_buf(),
@@ -242,7 +244,11 @@ impl Target {
   }
 
   async fn scalar(&mut self, sql: &str) -> Result<i64, StorageError> {
-    Ok(sqlx::query_scalar(sql).fetch_one(&mut self.conn).await?)
+    Ok(
+      sqlx::query_scalar(AssertSqlSafe(sql))
+        .fetch_one(&mut self.conn)
+        .await?,
+    )
   }
 
   /// Copies every source message after the origin's `last_source_seq`, one
@@ -290,7 +296,7 @@ impl Target {
         "SELECT seq, size FROM {SOURCE_SCHEMA}.messages WHERE seq > ?1 ORDER BY seq LIMIT ?2"
       ),
     };
-    let rows: Vec<(i64, i64)> = sqlx::query_as(&sizes)
+    let rows: Vec<(i64, i64)> = sqlx::query_as(AssertSqlSafe(sizes))
       .bind(after)
       .bind(options.batch_messages)
       .fetch_all(&mut self.conn)
@@ -367,7 +373,7 @@ impl Target {
       ),
     };
     let mut txn = self.conn.begin().await?;
-    sqlx::query(&messages_sql)
+    sqlx::query(AssertSqlSafe(messages_sql))
       .bind(after)
       .bind(batch.last_seq)
       .execute(&mut *txn)
@@ -379,17 +385,17 @@ impl Target {
         .execute(&mut *txn)
         .await?;
     }
-    sqlx::query(&fts_sql)
+    sqlx::query(AssertSqlSafe(fts_sql))
       .bind(after)
       .bind(batch.last_seq)
       .execute(&mut *txn)
       .await?;
     if let SourceLayout::Previous = layout {
-      sqlx::query(&format!(
+      sqlx::query(AssertSqlSafe(format!(
         "INSERT INTO attachments (id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content) \
          SELECT id, message_seq, filename, content_type, content_id, size, raw_offset, raw_len, transfer_encoding, content \
          FROM {SOURCE_SCHEMA}.attachments WHERE message_seq > ?1 AND message_seq <= ?2 ORDER BY rowid"
-      ))
+      )))
       .bind(after)
       .bind(batch.last_seq)
       .execute(&mut *txn)
@@ -444,7 +450,7 @@ impl Target {
         "SELECT seq, raw FROM {SOURCE_SCHEMA}.message_content WHERE seq > ?1 AND seq <= ?2 ORDER BY seq"
       ),
     };
-    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(&sources)
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(AssertSqlSafe(sources))
       .bind(after)
       .bind(last_seq)
       .fetch_all(&mut self.conn)
@@ -483,11 +489,11 @@ impl Target {
     if !has_attachments_table {
       return Ok(Vec::new());
     }
-    let rows: Vec<LegacyAttachmentRow> = sqlx::query_as(&format!(
+    let rows: Vec<LegacyAttachmentRow> = sqlx::query_as(AssertSqlSafe(format!(
       "SELECT m.rowid AS seq, a.id, a.filename, a.content_type, a.content_id, a.size, a.content \
        FROM {SOURCE_SCHEMA}.messages m JOIN {SOURCE_SCHEMA}.attachments a ON a.message_id = m.id \
        WHERE m.rowid > ?1 AND m.rowid <= ?2 ORDER BY m.rowid, a.rowid"
-    ))
+    )))
     .bind(after)
     .bind(last_seq)
     .fetch_all(&mut self.conn)
@@ -505,9 +511,9 @@ impl Target {
       }
     }
     for message in &mut messages {
-      message.raw = sqlx::query_scalar(&format!(
+      message.raw = sqlx::query_scalar(AssertSqlSafe(format!(
         "SELECT raw FROM {SOURCE_SCHEMA}.messages WHERE rowid = ?1"
-      ))
+      )))
       .bind(message.seq)
       .fetch_one(&mut self.conn)
       .await?;
@@ -684,11 +690,13 @@ impl Target {
       .bind(&completed_at)
       .execute(&mut *txn)
       .await?;
-    sqlx::query(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
-      .execute(&mut *txn)
-      .await?;
+    sqlx::query(AssertSqlSafe(format!(
+      "PRAGMA user_version = {SCHEMA_VERSION}"
+    )))
+    .execute(&mut *txn)
+    .await?;
     txn.commit().await?;
-    sqlx::query(&format!("DETACH DATABASE {SOURCE_SCHEMA}"))
+    sqlx::query(AssertSqlSafe(format!("DETACH DATABASE {SOURCE_SCHEMA}")))
       .execute(&mut self.conn)
       .await?;
     sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")

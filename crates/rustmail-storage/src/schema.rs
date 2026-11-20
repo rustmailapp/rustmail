@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use sqlx::sqlite::{SqliteAutoVacuum, SqliteConnectOptions};
-use sqlx::{Connection, SqliteConnection, SqlitePool};
+use sqlx::{AssertSqlSafe, Connection, SqliteConnection, SqlitePool};
 
 use crate::StorageError;
 
@@ -304,11 +304,13 @@ async fn create_schema(conn: &mut SqliteConnection) -> Result<(), StorageError> 
     return Ok(());
   }
   for statement in SCHEMA_DDL {
-    sqlx::query(statement).execute(&mut *txn).await?;
+    sqlx::query(*statement).execute(&mut *txn).await?;
   }
-  sqlx::query(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))
-    .execute(&mut *txn)
-    .await?;
+  sqlx::query(AssertSqlSafe(format!(
+    "PRAGMA user_version = {SCHEMA_VERSION}"
+  )))
+  .execute(&mut *txn)
+  .await?;
   txn.commit().await?;
   Ok(())
 }
@@ -567,13 +569,16 @@ mod tests {
       .await
       .unwrap();
     for statement in statements {
-      sqlx::query(statement).execute(&pool).await.unwrap();
+      sqlx::query(AssertSqlSafe(*statement))
+        .execute(&pool)
+        .await
+        .unwrap();
     }
     pool.close().await;
   }
 
   async fn pragma(pool: &SqlitePool, name: &str) -> i64 {
-    sqlx::query_scalar(&format!("PRAGMA {name}"))
+    sqlx::query_scalar(AssertSqlSafe(format!("PRAGMA {name}")))
       .fetch_one(pool)
       .await
       .unwrap()
@@ -584,10 +589,11 @@ mod tests {
   }
 
   async fn query_plan(pool: &SqlitePool, sql: &str) -> String {
-    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
-      .fetch_all(pool)
-      .await
-      .unwrap();
+    let rows: Vec<(i64, i64, i64, String)> =
+      sqlx::query_as(AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+        .fetch_all(pool)
+        .await
+        .unwrap();
     rows
       .into_iter()
       .map(|(_, _, _, detail)| detail)

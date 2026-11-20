@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
+use sqlx::AssertSqlSafe;
 use tokio::io::{
   AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, Lines,
 };
@@ -1582,10 +1583,13 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
     .execute(&pool)
     .await
     .unwrap();
-  sqlx::query(&format!("PRAGMA user_version = {}", SCHEMA_VERSION + 1))
-    .execute(&pool)
-    .await
-    .unwrap();
+  sqlx::query(AssertSqlSafe(format!(
+    "PRAGMA user_version = {}",
+    SCHEMA_VERSION + 1
+  )))
+  .execute(&pool)
+  .await
+  .unwrap();
   pool.close().await;
   let bytes_before = std::fs::read(&db_path).unwrap();
 
@@ -1877,7 +1881,10 @@ async fn query_ids(db_path: &std::path::Path) -> Vec<String> {
 
 async fn query_i64(db_path: &std::path::Path, sql: &str) -> i64 {
   let pool = legacy_v0_7_0::open_plain(db_path).await;
-  let value: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+  let value: i64 = sqlx::query_scalar(AssertSqlSafe(sql))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
   pool.close().await;
   value
 }

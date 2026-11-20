@@ -11,8 +11,8 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use mail_parser::{MessageParser, MimeHeaders, PartType};
-use sqlx::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 pub const V0_7_0_MESSAGES: &str = r#"
         CREATE TABLE IF NOT EXISTS messages (
@@ -115,13 +115,15 @@ pub async fn initialize_as_v0_7_0(pool: &SqlitePool) -> Result<(), sqlx::Error> 
         .fetch_optional(pool)
         .await?;
     if exists.is_none() {
-      sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {definition}"))
-        .execute(pool)
-        .await?;
+      sqlx::query(AssertSqlSafe(format!(
+        "ALTER TABLE {table} ADD COLUMN {definition}"
+      )))
+      .execute(pool)
+      .await?;
     }
   }
   for statement in V0_7_0_AFTER_COLUMNS {
-    sqlx::query(statement).execute(pool).await?;
+    sqlx::query(*statement).execute(pool).await?;
   }
   Ok(())
 }
