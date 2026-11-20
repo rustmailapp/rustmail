@@ -22,7 +22,7 @@ export default function Header() {
         <img src="/logo.webp" alt="" class="size-8 rounded-md" />
       </button>
       <div class="min-w-0 flex items-baseline gap-2">
-        <h1 class="font-brand text-lg font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-300 dark:to-white bg-clip-text text-transparent">
+        <h1 class="font-brand text-lg font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-800 dark:to-white bg-clip-text text-transparent">
           RustMail
         </h1>
         <span class="text-xs tabular-nums text-zinc-500 dark:text-zinc-400 truncate">
