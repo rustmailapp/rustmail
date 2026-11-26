@@ -444,3 +444,8 @@ export function exportUrl(messageId: string, format: "eml" | "json"): string {
 export function attachmentUrl(messageId: string, attachmentId: string): string {
   return `${BASE}/messages/${enc(messageId)}/attachments/${enc(attachmentId)}`;
 }
+
+/** Where a message's inline part with Content-ID `cid` is served. */
+export function inlineUrl(messageId: string, cid: string): string {
+  return `${BASE}/messages/${enc(messageId)}/inline/${enc(cid)}`;
+}

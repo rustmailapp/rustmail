@@ -8,7 +8,7 @@ import {
 } from "solid-js";
 import Modal from "./Modal";
 import Kbd from "./Kbd";
-import { confirm } from "./ConfirmDialog";
+import { askToClearInbox } from "./clearInbox";
 import { confirmRelease } from "./MessageDetail";
 import {
   availableCommands,
@@ -21,8 +21,6 @@ import type { MessageSummary } from "../lib/types";
 import {
   allTags,
   clearFilters,
-  clearInbox,
-  clearInboxPrompt,
   deleteSelected,
   filteredMessages,
   filters,
@@ -99,11 +97,7 @@ const actions: CommandActions = {
   toggleFilter,
   toggleTagFilter,
   clearFilters,
-  clearInbox: () => {
-    void confirm(clearInboxPrompt()).then(async (ok) => {
-      if (ok) await clearInbox();
-    });
-  },
+  clearInbox: () => void askToClearInbox(),
   setTheme,
   setPalette,
   setRusted,

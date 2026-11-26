@@ -4,10 +4,8 @@ import FilterBar from "./components/FilterBar";
 import Inbox from "./components/Inbox";
 import MessageDetail from "./components/MessageDetail";
 import Settings from "./components/Settings";
-import ConfirmDialog, {
-  confirm,
-  confirmOpen,
-} from "./components/ConfirmDialog";
+import ConfirmDialog, { confirmOpen } from "./components/ConfirmDialog";
+import { askToClearInbox } from "./components/clearInbox";
 import UndoToast from "./components/UndoToast";
 import Notices from "./components/Notices";
 import StatusBar from "./components/StatusBar";
@@ -22,8 +20,6 @@ import {
   selectedId,
   setSelectedId,
   starMessage,
-  clearInbox,
-  clearInboxPrompt,
   moveSelection,
   deleteSelected,
   flushPendingDelete,
@@ -97,9 +93,7 @@ export default function App() {
       }
       case "D": {
         if (total() === 0) break;
-        confirm(clearInboxPrompt()).then(async (ok) => {
-          if (ok) await clearInbox();
-        });
+        void askToClearInbox();
         break;
       }
       case "s": {

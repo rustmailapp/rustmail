@@ -1,11 +1,5 @@
-import { createSignal, onCleanup, Show } from "solid-js";
-import {
-  COPIED_FEEDBACK_MS,
-  MANUAL_COPY_HINT,
-  MANUAL_COPY_HINT_MS,
-  writeClipboard,
-  type CopyFeedback,
-} from "../lib/clipboard";
+import { Show } from "solid-js";
+import { createCopy, MANUAL_COPY_HINT } from "../lib/clipboard";
 import { CopyIcon } from "./icons";
 
 /**
@@ -20,25 +14,10 @@ export default function CopyButton(props: {
   source: () => HTMLElement | undefined;
   showText?: boolean;
 }) {
-  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  onCleanup(() => clearTimeout(timer));
-
-  function show(kind: CopyFeedback, durationMs: number): void {
-    setFeedback(kind);
-    clearTimeout(timer);
-    timer = setTimeout(() => setFeedback(null), durationMs);
-  }
-
-  async function copy(): Promise<void> {
-    if (await writeClipboard(props.text)) {
-      show("copied", COPIED_FEEDBACK_MS);
-      return;
-    }
-    const source = props.source();
-    if (source) window.getSelection()?.selectAllChildren(source);
-    show("manual", MANUAL_COPY_HINT_MS);
-  }
+  const { feedback, copy } = createCopy(
+    () => props.text,
+    () => props.source(),
+  );
 
   return (
     <>

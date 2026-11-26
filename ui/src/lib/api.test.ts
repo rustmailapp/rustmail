@@ -5,6 +5,7 @@ import {
   deleteAllMessages,
   getInfo,
   getMessage,
+  inlineUrl,
   listMessages,
   RELEASE_REQUEST_TIMEOUT_MS,
   ReleaseError,
@@ -540,5 +541,13 @@ describe("release", () => {
       code: null,
       recorded: null,
     });
+  });
+});
+
+describe("inline part URL", () => {
+  it("encodes the message id and the Content-ID", () => {
+    expect(inlineUrl("msg/1", "logo@example.test <x>")).toBe(
+      "/api/v1/messages/msg%2F1/inline/logo%40example.test%20%3Cx%3E",
+    );
   });
 });

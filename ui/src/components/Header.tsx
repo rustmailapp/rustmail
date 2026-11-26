@@ -1,13 +1,8 @@
 import { Show } from "solid-js";
-import {
-  clearInbox,
-  clearInboxPrompt,
-  total,
-  visibleMessages,
-} from "../stores/messages";
+import { total, visibleMessages } from "../stores/messages";
 import { toggleSettings } from "../stores/settings";
 import { registerLogoClick } from "../stores/rusted";
-import { confirm } from "./ConfirmDialog";
+import { askToClearInbox } from "./clearInbox";
 import { GearIcon, TrashIcon } from "./icons";
 import Tooltip from "./Tooltip";
 
@@ -61,10 +56,7 @@ export default function Header() {
                 type="button"
                 aria-label="Clear all"
                 aria-describedby={trigger.describedBy}
-                onClick={async () => {
-                  const ok = await confirm(clearInboxPrompt());
-                  if (ok) await clearInbox();
-                }}
+                onClick={() => void askToClearInbox()}
                 class={`${ICON_BUTTON_CLASS} hover:text-red-600 focus-visible:text-red-600 dark:hover:text-red-400 dark:focus-visible:text-red-400`}
               >
                 <TrashIcon class="size-4" />
