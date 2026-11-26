@@ -247,6 +247,17 @@ pub enum MigrationRefusal {
     /// The database.
     database: PathBuf,
   },
+  /// An older rustmail wrote to the database between the end of the
+  /// migration copy and the swap. The swap was undone; nothing was lost.
+  #[error(
+    "{} was written to while its migrated copy was being swapped in, so the swap was undone \
+     and the database is as it was; stop every older rustmail using it and restart to migrate it again",
+    .database.display()
+  )]
+  SourceChangedDuringSwap {
+    /// The database.
+    database: PathBuf,
+  },
   /// Any other combination of database, backups and migration copy.
   #[error(
     "cannot tell how to open {}: the database is {}, the backups beside it are {}, and the \

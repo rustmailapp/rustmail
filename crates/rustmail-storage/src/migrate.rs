@@ -130,7 +130,16 @@ pub(crate) struct MigrationOptions {
   pub(crate) batch_raw_bytes: i64,
   /// Caps the copy's page count, so a test can make it run out of space.
   pub(crate) target_max_pages: Option<u64>,
+  /// Runs on the database path after the source lock is released and before
+  /// the swap, so a test can write to the source in that window.
+  #[cfg(test)]
+  pub(crate) before_swap: Option<SwapHook>,
 }
+
+/// What [`MigrationOptions::before_swap`] runs.
+#[cfg(test)]
+pub(crate) type SwapHook =
+  fn(PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
 
 impl Default for MigrationOptions {
   fn default() -> Self {
@@ -138,6 +147,8 @@ impl Default for MigrationOptions {
       batch_messages: BATCH_MAX_MESSAGES,
       batch_raw_bytes: BATCH_MAX_RAW_BYTES,
       target_max_pages: None,
+      #[cfg(test)]
+      before_swap: None,
     }
   }
 }
@@ -725,8 +736,12 @@ enum Start {
 
 /// How far a locked run got.
 enum Built {
-  Swappable(build::AttachmentCounts, u64),
-  Paused { migrated: u64, total: u64 },
+  /// The copy matches the source, whose fingerprint was this under the lock.
+  Swappable(build::AttachmentCounts, u64, String),
+  Paused {
+    migrated: u64,
+    total: u64,
+  },
 }
 
 /// One migration run of an older database.
@@ -778,7 +793,7 @@ impl<'a> Migration<'a> {
     let mut source = Source::lock(&self.paths.db).await?;
     let built = self.build_locked(&mut source, copy, should_stop).await;
     let released = source.release().await;
-    let (counts, messages) = match built? {
+    let (counts, messages, fingerprint) = match built? {
       Built::Paused { migrated, total } => {
         released?;
         info!(
@@ -791,10 +806,14 @@ impl<'a> Migration<'a> {
         );
         return Ok(Preparation::Paused { migrated, total });
       }
-      Built::Swappable(counts, messages) => (counts, messages),
+      Built::Swappable(counts, messages, fingerprint) => (counts, messages, fingerprint),
     };
     released?;
-    self.swap().await?;
+    #[cfg(test)]
+    if let Some(hook) = self.options.before_swap {
+      hook(self.paths.db.clone()).await;
+    }
+    self.swap(&fingerprint).await?;
     let duration = self.started.elapsed();
     info!(
       event = "storage_migration",
@@ -885,7 +904,7 @@ impl<'a> Migration<'a> {
           Some(counts) => counts,
           None => self.completed_counts().await?,
         };
-        return Ok(Built::Swappable(counts, print.messages));
+        return Ok(Built::Swappable(counts, print.messages, print.fingerprint));
       }
       warn!(
         event = "storage_migration",
@@ -997,7 +1016,13 @@ impl<'a> Migration<'a> {
   }
 
   /// Renames the source database to the backup and the copy into its place.
-  async fn swap(&self) -> Result<(), StorageError> {
+  ///
+  /// The source lock is released before the renames, so an older rustmail on
+  /// the same file can commit and close in between. The backup is therefore
+  /// fingerprinted again once it is in place; if it is no longer the database
+  /// the copy was made from, both renames are undone and the swap is refused,
+  /// so the next start rebuilds the copy instead of losing that write.
+  async fn swap(&self, fingerprint: &str) -> Result<(), StorageError> {
     refuse_open_files(self.paths, &[&self.paths.db, &self.paths.migrating]).await?;
     if exists(&self.backup).await? {
       return Err(
@@ -1013,6 +1038,17 @@ impl<'a> Migration<'a> {
     rename(&self.paths.db, &self.backup).await?;
     rename(&self.paths.migrating, &self.paths.db).await?;
     sync_parent(&self.paths.db).await?;
+    if fingerprint_of(&self.backup, self.source).await? != fingerprint {
+      rename(&self.paths.db, &self.paths.migrating).await?;
+      rename(&self.backup, &self.paths.db).await?;
+      sync_parent(&self.paths.db).await?;
+      return Err(
+        MigrationRefusal::SourceChangedDuringSwap {
+          database: self.paths.db.clone(),
+        }
+        .into(),
+      );
+    }
     info!(
       event = "storage_migration",
       phase = "swap",
