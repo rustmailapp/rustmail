@@ -14,7 +14,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 477
+content-length: 519
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -36,7 +36,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -53,7 +55,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 476
+content-length: 518
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -75,7 +77,9 @@ body-json:
   "is_read": false,
   "is_starred": true,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -92,7 +96,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 490
+content-length: 532
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -117,7 +121,9 @@ body-json:
     "alpha",
     "beta"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -134,7 +140,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 476
+content-length: 518
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -156,7 +162,9 @@ body-json:
   "is_read": true,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -173,7 +181,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 476
+content-length: 518
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -195,7 +203,9 @@ body-json:
   "is_read": true,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -212,7 +222,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 476
+content-length: 518
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -234,7 +244,9 @@ body-json:
   "is_read": true,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> PATCH /api/v1/messages/{msg:welcome}
@@ -251,7 +263,7 @@ body: (empty)
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 487
+content-length: 529
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -276,7 +288,9 @@ body-json:
     "dup",
     "dup"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 ## rejected updates
@@ -404,7 +418,7 @@ body-json:
 >>> GET /api/v1/messages/{msg:welcome}
 <<< 200 OK
 cache-control: no-store
-content-length: 487
+content-length: 529
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -429,7 +443,9 @@ body-json:
     "dup",
     "dup"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 ## filters see the update
@@ -437,7 +453,7 @@ body-json:
 >>> GET /api/v1/messages?tag=dup
 <<< 200 OK
 cache-control: no-store
-content-length: 306
+content-length: 348
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -457,6 +473,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",

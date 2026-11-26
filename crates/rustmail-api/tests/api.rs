@@ -2259,3 +2259,95 @@ async fn a_strong_if_none_match_matches_the_weak_ui_shell_etag() {
 
   assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
 }
+
+#[tokio::test]
+async fn a_message_never_released_reports_null_release_fields() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@test.com",
+      &["b@test.com".to_string()],
+      &raw_email("Never released", "a@test.com", "b@test.com"),
+    )
+    .await
+    .unwrap();
+
+  let list = json_body(
+    app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/api/v1/messages")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+  let detail = json_body(
+    app
+      .oneshot(
+        Request::builder()
+          .uri(format!("/api/v1/messages/{}", summary.id))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+
+  for message in [&list["messages"][0], &detail] {
+    assert_eq!(message["released_at"], Value::Null);
+    assert_eq!(message["release_outcome"], Value::Null);
+  }
+}
+
+#[tokio::test]
+async fn a_recorded_release_is_reported_by_the_list_and_the_detail() {
+  let (app, repo, _) = setup().await;
+  let summary = repo
+    .insert(
+      "a@test.com",
+      &["b@test.com".to_string()],
+      &raw_email("Released", "a@test.com", "b@test.com"),
+    )
+    .await
+    .unwrap();
+  let release = repo
+    .record_release(&summary.id, rustmail_storage::ReleaseOutcome::Sent)
+    .await
+    .unwrap();
+
+  let list = json_body(
+    app
+      .clone()
+      .oneshot(
+        Request::builder()
+          .uri("/api/v1/messages")
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+  let detail = json_body(
+    app
+      .oneshot(
+        Request::builder()
+          .uri(format!("/api/v1/messages/{}", summary.id))
+          .body(Body::empty())
+          .unwrap(),
+      )
+      .await
+      .unwrap(),
+  )
+  .await;
+
+  for message in [&list["messages"][0], &detail] {
+    assert_eq!(message["released_at"], release.released_at.as_str());
+    assert_eq!(message["release_outcome"], "sent");
+  }
+}

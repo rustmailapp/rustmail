@@ -9,11 +9,16 @@ use crate::StorageError;
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Schema version this binary reads and writes, kept in `PRAGMA user_version`.
 ///
-/// Schema 2 keeps each message's metadata in `messages` and only its raw
+/// Schema 3 keeps each message's metadata in `messages` and only its raw
 /// source, compressed, in `message_content`; the bodies are parsed from it on
-/// read. Listing, counting and searching never read the raw source. A file
-/// with a higher version was written by a newer rustmail and is refused.
-pub const SCHEMA_VERSION: i64 = 2;
+/// read. Listing, counting and searching never read the raw source. It adds
+/// to schema 2 the last release of each message, `released_at` and
+/// `release_outcome`. A file with a higher version was written by a newer
+/// rustmail and is refused.
+pub const SCHEMA_VERSION: i64 = 3;
+/// `user_version` of the schema rustmail 0.10 writes, which
+/// [`crate::prepare_database_file`] migrates.
+pub(crate) const COMPRESSED_SCHEMA_VERSION: i64 = 2;
 /// `user_version` of the schema rustmail 0.8 and 0.9 write, which
 /// [`crate::prepare_database_file`] migrates.
 pub(crate) const PREVIOUS_SCHEMA_VERSION: i64 = 1;
@@ -51,7 +56,7 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// file at its high-water size forever.
 const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 
-/// Statements that create schema 2 in an empty file, in order.
+/// Statements that create schema 3 in an empty file, in order.
 ///
 /// `messages` holds only what a listing reads, so a list, count or filter
 /// never walks a message's content. `message_content.raw` is the RFC 5322
@@ -80,8 +85,14 @@ const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 /// decoded on request; an inline one keeps its decoded `content`, because
 /// serving it from the source could not be proven to reproduce the parser's
 /// output.
+///
+/// The release columns are added by the same [`RELEASE_COLUMNS_DDL`] the
+/// migration from schema 2 runs, so a created file and a migrated one hold
+/// the same `messages` table.
 pub(crate) const SCHEMA_DDL: &[&str] = &[
   MESSAGES_DDL,
+  RELEASED_AT_DDL,
+  RELEASE_OUTCOME_DDL,
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
   "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
@@ -109,6 +120,19 @@ pub(crate) const SCHEMA_DDL: &[&str] = &[
   MESSAGE_TAGS_INSERT_TRIGGER_DDL,
   MESSAGE_TAGS_UPDATE_TRIGGER_DDL,
 ];
+
+/// Statements that turn a schema-2 `messages` table into the schema-3 one.
+///
+/// `released_at` is when the message was last released, in UTC, and
+/// `release_outcome` what that release ended with: `sent` once a relay
+/// accepted it, `unknown` when the relay may have it. Both stay `NULL` until
+/// a release reaches the relay.
+pub(crate) const RELEASE_COLUMNS_DDL: &[&str] = &[RELEASED_AT_DDL, RELEASE_OUTCOME_DDL];
+
+const RELEASED_AT_DDL: &str = "ALTER TABLE messages ADD COLUMN released_at TEXT";
+
+const RELEASE_OUTCOME_DDL: &str = "ALTER TABLE messages ADD COLUMN release_outcome TEXT \
+  CHECK (release_outcome IN ('sent', 'unknown'))";
 
 /// Statements that created schema 1, which rustmail 0.8 and 0.9 write.
 ///
@@ -274,9 +298,10 @@ enum Layout {
 /// | 0 | no tables | schema 2 is created |
 /// | 0 | a `messages` table with a `raw` column | [`StorageError::LegacySchema`] |
 /// | 1 | a `message_content` table with a `text_body` column | [`StorageError::LegacySchema`] |
-/// | 0 or 1 | anything else | [`StorageError::UnrecognizedSchema`] |
-/// | 2 | – | opened |
-/// | > 2 | – | [`StorageError::NewerSchema`] |
+/// | 2 | a `message_content` table without a `text_body` column | [`StorageError::LegacySchema`] |
+/// | 0, 1 or 2 | anything else | [`StorageError::UnrecognizedSchema`] |
+/// | 3 | – | opened |
+/// | > 3 | – | [`StorageError::NewerSchema`] |
 ///
 /// Creating the schema is one `IMMEDIATE` transaction whose last statement sets
 /// `user_version`, so a crash midway leaves an empty file, and a second
@@ -319,11 +344,13 @@ async fn inspect_layout(conn: &mut SqliteConnection) -> Result<Layout, StorageEr
   match probe(conn).await? {
     FileSchema::Empty => Ok(Layout::Empty),
     FileSchema::Current => Ok(Layout::Current),
-    FileSchema::Legacy | FileSchema::Previous => Err(StorageError::LegacySchema {
-      database: database_name(conn).await?,
-      found: probe_version(conn).await?,
-      supported: SCHEMA_VERSION,
-    }),
+    FileSchema::Legacy | FileSchema::Previous | FileSchema::Compressed => {
+      Err(StorageError::LegacySchema {
+        database: database_name(conn).await?,
+        found: probe_version(conn).await?,
+        supported: SCHEMA_VERSION,
+      })
+    }
   }
 }
 
@@ -337,6 +364,9 @@ pub(crate) enum FileSchema {
   /// Schema 1: parsed bodies and uncompressed raw source in
   /// `message_content`, written by rustmail 0.8 and 0.9.
   Previous,
+  /// Schema 2: compressed raw source only in `message_content` and no
+  /// release columns, written by rustmail 0.10.
+  Compressed,
   /// [`SCHEMA_VERSION`].
   Current,
 }
@@ -385,6 +415,10 @@ pub(crate) async fn probe(conn: &mut SqliteConnection) -> Result<FileSchema, Sto
   .await?;
   if found == PREVIOUS_SCHEMA_VERSION && has_previous_content {
     return Ok(FileSchema::Previous);
+  }
+  let has_content_table = tables.iter().any(|table| table == "message_content");
+  if found == COMPRESSED_SCHEMA_VERSION && has_content_table && !has_previous_content {
+    return Ok(FileSchema::Compressed);
   }
   Err(StorageError::UnrecognizedSchema {
     database: database_name(conn).await?,
@@ -664,8 +698,8 @@ mod tests {
     assert_eq!(
       error.to_string(),
       format!(
-        "{database} is schema 3, written by a newer rustmail; \
-         this binary supports schema 2. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
+        "{database} is schema {NEWER_SCHEMA}, written by a newer rustmail; \
+         this binary supports schema {SCHEMA_VERSION}. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
       )
     );
   }
@@ -729,6 +763,26 @@ mod tests {
       panic!("expected LegacySchema, got {error:?}");
     };
     assert_eq!(found, PREVIOUS_SCHEMA_VERSION);
+  }
+
+  #[tokio::test]
+  async fn a_schema_2_database_is_refused_untouched() {
+    let (_guard, path) = scratch_database("compressed-schema");
+    let mut statements: Vec<String> = SCHEMA_DDL
+      .iter()
+      .filter(|ddl| !RELEASE_COLUMNS_DDL.contains(ddl))
+      .map(|ddl| ddl.to_string())
+      .collect();
+    statements.push(format!("PRAGMA user_version = {COMPRESSED_SCHEMA_VERSION}"));
+    let statements: Vec<&str> = statements.iter().map(String::as_str).collect();
+    run_on_plain_file(&path, &statements).await;
+
+    let error = assert_refused_untouched(&path).await;
+
+    let StorageError::LegacySchema { found, .. } = error else {
+      panic!("expected LegacySchema, got {error:?}");
+    };
+    assert_eq!(found, COMPRESSED_SCHEMA_VERSION);
   }
 
   #[tokio::test]
@@ -806,7 +860,7 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn a_schema_1_file_reopens_without_change() {
+  async fn a_current_file_reopens_without_change() {
     let (_guard, path) = scratch_database("reopen-schema");
     let pool = open_tuned(&path).await;
     initialize_database(&pool).await.unwrap();

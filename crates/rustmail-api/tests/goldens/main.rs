@@ -677,6 +677,9 @@ async fn release_to_a_relay_that_drops_the_connection(backend: Backend) {
   .await
   .expect("release did not give up on the dropped connection");
   assert_eq!(release.status, StatusCode::BAD_GATEWAY);
+  t.section("a release the relay never took is not recorded");
+  t.send(Req::get(format!("{API}/messages/{}", fx.id("welcome"))))
+    .await;
 
   let verbs = tokio::time::timeout(RELEASE_TIMEOUT, relay)
     .await

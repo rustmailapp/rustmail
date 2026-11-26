@@ -1624,9 +1624,10 @@ async fn serve_refuses_a_database_from_a_newer_schema() {
     "stderr does not name the database: {stderr}"
   );
   assert!(
-    stderr.contains(
-      "rustmail.db is schema 3, written by a newer rustmail; this binary supports schema 2. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary."
-    ),
+    stderr.contains(&format!(
+      "rustmail.db is schema {}, written by a newer rustmail; this binary supports schema {SCHEMA_VERSION}. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary.",
+      SCHEMA_VERSION + 1
+    )),
     "unexpected stderr: {stderr}"
   );
   assert_eq!(std::fs::read(&db_path).unwrap(), bytes_before);
@@ -1765,7 +1766,7 @@ async fn serve_exits_while_another_process_holds_the_migration_lock() {
 
 const RESTORE_SUBJECTS: [&str; 2] = ["before one", "before two"];
 const POST_MIGRATION_SUBJECT: &str = "after the migration";
-const KEPT_INFIX: &str = ".schema2-";
+const KEPT_INFIX: &str = ".schema3-";
 
 /// Writes a legacy database with rustmail v0.7.0's own statements and
 /// returns its message ids in arrival order.
@@ -1917,7 +1918,7 @@ async fn restore_backup_puts_the_v0_7_0_mailbox_back_and_serve_migrates_it_again
     String::from_utf8_lossy(&output.stderr)
   );
   let kept = kept_schema_2_files(&db_path);
-  assert_eq!(kept.len(), 1, "expected one kept schema-2 file: {kept:?}");
+  assert_eq!(kept.len(), 1, "expected one kept schema-3 file: {kept:?}");
   let kept = &kept[0];
   for expected in [
     format!("Restored {} to {}.", backup.display(), db_path.display()),

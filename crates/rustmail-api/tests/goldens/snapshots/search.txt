@@ -3,7 +3,7 @@
 >>> GET /api/v1/messages?q=planning
 <<< 200 OK
 cache-control: no-store
-content-length: 1092
+content-length: 1260
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -23,6 +23,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 7350,
       "subject": "Nested related with cid images",
@@ -39,6 +41,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -56,6 +60,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "news@example.org",
       "size": 331,
       "subject": "Weekly digest: Rust tips",
@@ -72,6 +78,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",
@@ -85,7 +93,7 @@ body-json:
 >>> GET /api/v1/messages?q=welcome
 <<< 200 OK
 cache-control: no-store
-content-length: 295
+content-length: 337
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -105,6 +113,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",
@@ -118,7 +128,7 @@ body-json:
 >>> GET /api/v1/messages?q=alice@example.com
 <<< 200 OK
 cache-control: no-store
-content-length: 295
+content-length: 337
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -138,6 +148,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",
@@ -151,7 +163,7 @@ body-json:
 >>> GET /api/v1/messages?q=bob@example.test
 <<< 200 OK
 cache-control: no-store
-content-length: 5952
+content-length: 6918
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -171,6 +183,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 10469086,
       "subject": "Ten mebibytes with a seven megabyte attachment",
@@ -185,6 +199,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 541,
       "subject": "Malformed base64",
@@ -199,6 +215,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 467,
       "subject": "Attachment with no Content-Type",
@@ -213,6 +231,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 456,
       "subject": "Digest whose parts have no Content-Type",
@@ -227,6 +247,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 748,
       "subject": "Forwarded message in base64",
@@ -241,6 +263,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 645,
       "subject": "Forwarded message inline",
@@ -255,6 +279,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 7350,
       "subject": "Nested related with cid images",
@@ -271,6 +297,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1490,
       "subject": "Text attachments in several charsets",
@@ -287,6 +315,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1605,
       "subject": "Binary and 8bit transfer encodings",
@@ -301,6 +331,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2175,
       "subject": "Quoted-printable octet-stream",
@@ -315,6 +347,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1759,
       "subject": "Base64 with stray non-alphabet bytes",
@@ -329,6 +363,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2067,
       "subject": "Base64 with trailing whitespace",
@@ -343,6 +379,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2092,
       "subject": "Base64 with LF-only line endings",
@@ -357,6 +395,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2498,
       "subject": "Base64 on a single line",
@@ -371,6 +411,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -387,6 +429,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "empty@example.com",
       "size": 160,
       "subject": "Headers only",
@@ -401,6 +445,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "quiet@example.com",
       "size": 205,
       "subject": null,
@@ -417,6 +463,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "relay@example.net",
       "size": 461,
       "subject": "A subject folded across two lines",
@@ -431,6 +479,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "sender@example.com",
       "size": 719,
       "subject": "Signed and sealed",
@@ -445,6 +495,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -462,6 +514,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "chef@example.fr",
       "size": 327,
       "subject": "Café crème",
@@ -476,6 +530,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "news@example.org",
       "size": 331,
       "subject": "Weekly digest: Rust tips",
@@ -492,6 +548,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",
@@ -505,7 +563,7 @@ body-json:
 >>> GET /api/v1/messages?q=carol
 <<< 200 OK
 cache-control: no-store
-content-length: 586
+content-length: 670
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -525,6 +583,8 @@ body-json:
       "recipients": [
         "Carol@Example.Test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "promo@example.org",
       "size": 245,
       "subject": "Discount 100% off_now",
@@ -540,6 +600,8 @@ body-json:
         "carol@example.test",
         "dave@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "shop@example.net",
       "size": 460,
       "subject": "Your receipt #4471",
@@ -556,7 +618,7 @@ body-json:
 >>> GET /api/v1/messages?q=receipt
 <<< 200 OK
 cache-control: no-store
-content-length: 335
+content-length: 377
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -577,6 +639,8 @@ body-json:
         "carol@example.test",
         "dave@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "shop@example.net",
       "size": 460,
       "subject": "Your receipt #4471",
@@ -593,7 +657,7 @@ body-json:
 >>> GET /api/v1/messages?q=4471
 <<< 200 OK
 cache-control: no-store
-content-length: 335
+content-length: 377
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -614,6 +678,8 @@ body-json:
         "carol@example.test",
         "dave@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "shop@example.net",
       "size": 460,
       "subject": "Your receipt #4471",
@@ -630,7 +696,7 @@ body-json:
 >>> GET /api/v1/messages?q=Caf%C3%A9
 <<< 200 OK
 cache-control: no-store
-content-length: 292
+content-length: 334
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -650,6 +716,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "chef@example.fr",
       "size": 327,
       "subject": "Café crème",
@@ -663,7 +731,7 @@ body-json:
 >>> GET /api/v1/messages?q=attached
 <<< 200 OK
 cache-control: no-store
-content-length: 1134
+content-length: 1302
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -683,6 +751,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 10469086,
       "subject": "Ten mebibytes with a seven megabyte attachment",
@@ -697,6 +767,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1490,
       "subject": "Text attachments in several charsets",
@@ -713,6 +785,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -729,6 +803,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -745,7 +821,7 @@ body-json:
 >>> GET /api/v1/messages?q=base64
 <<< 200 OK
 cache-control: no-store
-content-length: 1848
+content-length: 2142
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -765,6 +841,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 541,
       "subject": "Malformed base64",
@@ -779,6 +857,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 748,
       "subject": "Forwarded message in base64",
@@ -793,6 +873,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1759,
       "subject": "Base64 with stray non-alphabet bytes",
@@ -807,6 +889,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2067,
       "subject": "Base64 with trailing whitespace",
@@ -821,6 +905,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2092,
       "subject": "Base64 with LF-only line endings",
@@ -835,6 +921,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 2498,
       "subject": "Base64 on a single line",
@@ -849,6 +937,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -864,7 +954,7 @@ body-json:
 >>> GET /api/v1/messages?q=digest
 <<< 200 OK
 cache-control: no-store
-content-length: 583
+content-length: 667
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -884,6 +974,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 456,
       "subject": "Digest whose parts have no Content-Type",
@@ -898,6 +990,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "news@example.org",
       "size": 331,
       "subject": "Weekly digest: Rust tips",
@@ -913,7 +1007,7 @@ body-json:
 >>> GET /api/v1/messages?q=forwarded
 <<< 200 OK
 cache-control: no-store
-content-length: 559
+content-length: 643
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -933,6 +1027,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 748,
       "subject": "Forwarded message in base64",
@@ -947,6 +1043,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 645,
       "subject": "Forwarded message inline",
@@ -960,7 +1058,7 @@ body-json:
 >>> GET /api/v1/messages?q=Discount%20100%25
 <<< 200 OK
 cache-control: no-store
-content-length: 305
+content-length: 347
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -980,6 +1078,8 @@ body-json:
       "recipients": [
         "Carol@Example.Test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "promo@example.org",
       "size": 245,
       "subject": "Discount 100% off_now",
@@ -993,7 +1093,7 @@ body-json:
 >>> GET /api/v1/messages?q=off_now
 <<< 200 OK
 cache-control: no-store
-content-length: 305
+content-length: 347
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1013,6 +1113,8 @@ body-json:
       "recipients": [
         "Carol@Example.Test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "promo@example.org",
       "size": 245,
       "subject": "Discount 100% off_now",
@@ -1026,7 +1128,7 @@ body-json:
 >>> GET /api/v1/messages?q=folded
 <<< 200 OK
 cache-control: no-store
-content-length: 315
+content-length: 357
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1046,6 +1148,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "relay@example.net",
       "size": 461,
       "subject": "A subject folded across two lines",
@@ -1135,7 +1239,7 @@ body-json:
 >>> GET /api/v1/messages?q=planning&starred=true
 <<< 200 OK
 cache-control: no-store
-content-length: 588
+content-length: 672
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1155,6 +1259,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 7350,
       "subject": "Nested related with cid images",
@@ -1171,6 +1277,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -1187,7 +1295,7 @@ body-json:
 >>> GET /api/v1/messages?q=planning&unread=true
 <<< 200 OK
 cache-control: no-store
-content-length: 851
+content-length: 977
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1207,6 +1315,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 7350,
       "subject": "Nested related with cid images",
@@ -1223,6 +1333,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -1240,6 +1352,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "news@example.org",
       "size": 331,
       "subject": "Weekly digest: Rust tips",
@@ -1255,7 +1369,7 @@ body-json:
 >>> GET /api/v1/messages?q=attached&has_attachments=true
 <<< 200 OK
 cache-control: no-store
-content-length: 865
+content-length: 991
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1275,6 +1389,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 10469086,
       "subject": "Ten mebibytes with a seven megabyte attachment",
@@ -1289,6 +1405,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1490,
       "subject": "Text attachments in several charsets",
@@ -1305,6 +1423,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -1320,7 +1440,7 @@ body-json:
 >>> GET /api/v1/messages?q=attached&tag=work
 <<< 200 OK
 cache-control: no-store
-content-length: 856
+content-length: 982
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1340,6 +1460,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1490,
       "subject": "Text attachments in several charsets",
@@ -1356,6 +1478,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -1372,6 +1496,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -1388,7 +1514,7 @@ body-json:
 >>> GET /api/v1/messages?q=Invoice&tag=urgent&starred=true
 <<< 200 OK
 cache-control: no-store
-content-length: 323
+content-length: 365
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1408,6 +1534,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -1424,7 +1552,7 @@ body-json:
 >>> GET /api/v1/messages?q=planning&offset=1&limit=1
 <<< 200 OK
 cache-control: no-store
-content-length: 346
+content-length: 388
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1444,6 +1572,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -1462,7 +1592,7 @@ body-json:
 >>> GET /api/v1/messages?q=attached&limit=3
 <<< 200 OK
 cache-control: no-store
-content-length: 888
+content-length: 1014
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1482,6 +1612,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 10469086,
       "subject": "Ten mebibytes with a seven megabyte attachment",
@@ -1496,6 +1628,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 1490,
       "subject": "Text attachments in several charsets",
@@ -1512,6 +1646,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 3252,
       "subject": "Base64 wrapped at 76 with CRLF",
@@ -1527,7 +1663,7 @@ body-json:
 >>> GET /api/v1/messages?q=attached&limit=3&before={msg:base64_crlf76}
 <<< 200 OK
 cache-control: no-store
-content-length: 322
+content-length: 364
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1547,6 +1683,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",

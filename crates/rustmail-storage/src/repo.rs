@@ -10,7 +10,9 @@ use ulid::Ulid;
 use crate::content::{Bodies, decompress, decompress_prefix};
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::locator::TransferEncoding;
-use crate::models::{Attachment, AttachmentSummary, Message, MessageSummary};
+use crate::models::{
+  Attachment, AttachmentSummary, Message, MessageSummary, Release, ReleaseOutcome,
+};
 use crate::prepared::{AttachmentStorage, PreparedMessage};
 use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page};
 use crate::reclaim::{
@@ -369,7 +371,7 @@ impl MessageRepository {
   /// [`StorageError::ContentCorrupt`] if its stored source is damaged.
   pub async fn get(&self, id: &str) -> Result<Message, StorageError> {
     let row = sqlx::query_as::<_, MessageRow>(
-      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at, c.raw FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+      "SELECT m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at, m.released_at, m.release_outcome, c.raw FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
     )
     .bind(id)
     .fetch_optional(&self.readers)
@@ -412,6 +414,40 @@ impl MessageRepository {
       return Err(StorageError::NotFound(id.to_string()));
     }
     Ok(())
+  }
+
+  /// Records a release of message `id` that ended with `outcome`, now, and
+  /// returns the release the message then holds.
+  ///
+  /// A `sent` release replaces whatever was recorded. An `unknown` one
+  /// replaces only an earlier `unknown`, so a release the relay confirmed is
+  /// never hidden behind a later one that may not have been delivered.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id.
+  pub async fn record_release(
+    &self,
+    id: &str,
+    outcome: ReleaseOutcome,
+  ) -> Result<Release, StorageError> {
+    let released_at = format_iso8601(OffsetDateTime::now_utc());
+    let recorded = retry_on_lock(|| async {
+      let recorded = sqlx::query_as::<_, Release>(
+        "UPDATE messages SET \
+           released_at = CASE WHEN ?2 = 'unknown' AND release_outcome = 'sent' THEN released_at ELSE ?1 END, \
+           release_outcome = CASE WHEN ?2 = 'unknown' AND release_outcome = 'sent' THEN release_outcome ELSE ?2 END \
+         WHERE id = ?3 RETURNING released_at, release_outcome",
+      )
+      .bind(&released_at)
+      .bind(outcome.as_str())
+      .bind(id)
+      .fetch_optional(&self.writer)
+      .await?;
+      Ok(recorded)
+    })
+    .await?;
+    recorded.ok_or_else(|| StorageError::NotFound(id.to_string()))
   }
 
   /// Deletes a single message, its FTS5 index entry, its content and its
@@ -905,6 +941,8 @@ async fn insert_rows_in(
       is_starred: false,
       tags: "[]".to_string(),
       created_at: now,
+      released_at: None,
+      release_outcome: None,
     },
   ))
 }
@@ -926,6 +964,8 @@ struct MessageRow {
   is_starred: bool,
   tags: String,
   created_at: String,
+  released_at: Option<String>,
+  release_outcome: Option<ReleaseOutcome>,
   raw: Vec<u8>,
 }
 
@@ -946,6 +986,8 @@ impl MessageRow {
       is_starred: self.is_starred,
       tags: self.tags,
       created_at: self.created_at,
+      released_at: self.released_at,
+      release_outcome: self.release_outcome,
     })
   }
 }
@@ -1039,7 +1081,7 @@ impl AttachmentRow {
 }
 
 /// Columns of a [`MessageSummary`], read from `messages` aliased `m`.
-const SUMMARY_COLUMNS: &str = "m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at";
+const SUMMARY_COLUMNS: &str = "m.id, m.sender, m.recipients, m.subject, m.size, m.has_attachments, m.is_read, m.is_starred, m.tags, m.created_at, m.released_at, m.release_outcome";
 
 /// The listing behind [`MessageRepository::list_page`]: `messages` alone,
 /// newest first.
@@ -1165,6 +1207,117 @@ mod tests {
       subject
     )
     .into_bytes()
+  }
+
+  async fn released_message(repo: &MessageRepository) -> String {
+    repo
+      .insert(
+        "a@test.com",
+        &["b@test.com".to_string()],
+        &raw_email("Release me", "a@test.com", "b@test.com"),
+      )
+      .await
+      .unwrap()
+      .id
+  }
+
+  async fn listed_release(
+    repo: &MessageRepository,
+    id: &str,
+  ) -> (Option<String>, Option<ReleaseOutcome>) {
+    let listed = repo.list(10, 0).await.unwrap();
+    let summary = listed.iter().find(|summary| summary.id == id).unwrap();
+    (summary.released_at.clone(), summary.release_outcome)
+  }
+
+  #[tokio::test]
+  async fn a_message_never_released_reads_without_a_release() {
+    let repo = test_repo().await;
+    let id = released_message(&repo).await;
+
+    let message = repo.get(&id).await.unwrap();
+
+    assert_eq!(message.released_at, None);
+    assert_eq!(message.release_outcome, None);
+    assert_eq!(listed_release(&repo, &id).await, (None, None));
+  }
+
+  #[tokio::test]
+  async fn a_recorded_release_is_read_back_by_get_and_list() {
+    let repo = test_repo().await;
+    let id = released_message(&repo).await;
+
+    let release = repo
+      .record_release(&id, ReleaseOutcome::Unknown)
+      .await
+      .unwrap();
+
+    assert_eq!(release.release_outcome, ReleaseOutcome::Unknown);
+    assert!(
+      release.released_at.ends_with('Z'),
+      "released_at should be a UTC timestamp, got {}",
+      release.released_at
+    );
+    let message = repo.get(&id).await.unwrap();
+    assert_eq!(
+      message.released_at.as_deref(),
+      Some(release.released_at.as_str())
+    );
+    assert_eq!(message.release_outcome, Some(ReleaseOutcome::Unknown));
+    assert_eq!(
+      listed_release(&repo, &id).await,
+      (Some(release.released_at), Some(ReleaseOutcome::Unknown))
+    );
+  }
+
+  #[tokio::test]
+  async fn a_sent_release_replaces_an_unknown_one() {
+    let repo = test_repo().await;
+    let id = released_message(&repo).await;
+    repo
+      .record_release(&id, ReleaseOutcome::Unknown)
+      .await
+      .unwrap();
+
+    let release = repo
+      .record_release(&id, ReleaseOutcome::Sent)
+      .await
+      .unwrap();
+
+    assert_eq!(release.release_outcome, ReleaseOutcome::Sent);
+    assert_eq!(
+      repo.get(&id).await.unwrap().release_outcome,
+      Some(ReleaseOutcome::Sent)
+    );
+  }
+
+  #[tokio::test]
+  async fn an_unknown_release_keeps_an_earlier_sent_one() {
+    let repo = test_repo().await;
+    let id = released_message(&repo).await;
+    let sent = repo
+      .record_release(&id, ReleaseOutcome::Sent)
+      .await
+      .unwrap();
+
+    let after = repo
+      .record_release(&id, ReleaseOutcome::Unknown)
+      .await
+      .unwrap();
+
+    assert_eq!(after, sent);
+  }
+
+  #[tokio::test]
+  async fn recording_a_release_of_a_missing_message_is_not_found() {
+    let repo = test_repo().await;
+
+    let error = repo
+      .record_release("01ARZ3NDEKTSV4RRFFQ69G5FAV", ReleaseOutcome::Sent)
+      .await
+      .unwrap_err();
+
+    assert!(matches!(error, StorageError::NotFound(_)), "got {error:?}");
   }
 
   #[tokio::test]

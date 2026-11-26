@@ -8,6 +8,7 @@ use super::*;
 use crate::prepared::AttachmentStorage;
 use crate::{MessageRepository, PreparedMessage, connect_options, initialize_database};
 
+mod compressed;
 #[path = "../../tests/common/legacy_v0_7_0.rs"]
 mod legacy;
 mod restore;
@@ -585,7 +586,7 @@ async fn a_copy_stores_a_fingerprint_rustmail_0_9_does_not_match() {
     .unwrap();
 
   let stored = stored_fingerprint(&sidecar(&db, MIGRATING_SUFFIX)).await;
-  assert_eq!(stored, Some(format!("schema2:{bare}")));
+  assert_eq!(stored, Some(format!("schema3:{bare}")));
 }
 
 #[tokio::test]
@@ -612,7 +613,7 @@ async fn a_copy_paused_by_0_10_0_is_qualified_and_resumed_where_it_stopped() {
   );
   assert_eq!(
     stored_fingerprint(&copy).await,
-    Some(format!("schema2:{bare}"))
+    Some(format!("schema3:{bare}"))
   );
   let Preparation::Ready(Some(_)) = prepare_with(&db, &small_batches(), &never).await.unwrap()
   else {
@@ -784,7 +785,7 @@ async fn a_complete_copy_left_by_0_10_0_is_swapped_without_rebuilding() {
   );
   assert_eq!(
     stored_fingerprint(&db).await,
-    Some(format!("schema2:{bare}"))
+    Some(format!("schema3:{bare}"))
   );
 }
 

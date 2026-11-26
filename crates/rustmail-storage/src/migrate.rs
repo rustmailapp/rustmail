@@ -1,12 +1,14 @@
 //! Migrating an older database file to the current schema at startup.
 //!
 //! The older file is never written. The current schema is built beside it
-//! in `<db>.migrating`, in committed batches that a later start resumes,
-//! while a write transaction on the older file keeps older rustmail versions
-//! out. Once the copy is verified the files are swapped: the older file
-//! becomes the backup, `<db>.schema0.bak` for a schema-0 file (rustmail 0.7
-//! and earlier) or `<db>.schema1.bak` for a schema-1 file (0.8 and 0.9), and
-//! the copy becomes `<db>`.
+//! in `<db>.migrating`, while a write transaction on the older file keeps
+//! older rustmail versions out: from schema 0 or 1 in committed batches that
+//! a later start resumes, from schema 2 as one snapshot that is then altered
+//! (see `upgrade`). Once the copy is verified the files are swapped: the
+//! older file becomes the backup, `<db>.schema0.bak` for a schema-0 file
+//! (rustmail 0.7 and earlier), `<db>.schema1.bak` for a schema-1 file (0.8
+//! and 0.9) or `<db>.schema2.bak` for a schema-2 file (0.10), and the copy
+//! becomes `<db>`.
 //!
 //! Every start of a file database goes through [`prepare_database_file`],
 //! which takes `<db>.migration-lock` before it looks at any file and
@@ -17,11 +19,11 @@
 //! |---|---|---|---|
 //! | absent or empty | none | absent | fresh: nothing to do |
 //! | current | any | absent | open; every backup is logged |
-//! | schema 0 or 1 | absent | absent | migrate |
-//! | schema 0 or 1 | absent | incomplete | resume if made from this `db`, else restart |
-//! | schema 0 or 1 | absent | complete | swap if made from this `db`, else restart |
+//! | schema 0, 1 or 2 | absent | absent | migrate |
+//! | schema 0, 1 or 2 | absent | incomplete | resume if made from this `db`, else restart |
+//! | schema 0, 1 or 2 | absent | complete | swap if made from this `db`, else restart |
 //! | absent | present | complete | finish the swap if made from the backup, else refuse |
-//! | schema 0 or 1 | present | any | refuse: ambiguous |
+//! | schema 0, 1 or 2 | present | any | refuse: ambiguous |
 //! | current | any | present | refuse: stray copy |
 //! | anything else | | | refuse |
 //!
@@ -30,7 +32,9 @@
 //! beside the database it was made from is in the old layout, so it is
 //! rebuilt whether or not they finished it; one they finished and were
 //! swapping in when they stopped is swapped in, after the same check, and
-//! the result is then migrated on in the same call.
+//! the result is then migrated on in the same call. The same holds for a
+//! schema-2 copy rustmail 0.10 left: a complete one it was swapping in is
+//! swapped in and migrated on, any other is rebuilt.
 //!
 //! A copy stores its fingerprint qualified by the schema it is built at,
 //! which rustmail 0.8, 0.9 and 0.10.0 never match: beside a schema-0 file
@@ -39,7 +43,7 @@
 //! it still matches, and is qualified before it is resumed or swapped in.
 //!
 //! [`restore_backup`] undoes a migration under the same lock: it moves the
-//! current `db` to `<db>.schema2-<UTC timestamp>` and the backup it was made
+//! current `db` to `<db>.schema3-<UTC timestamp>` and the backup it was made
 //! from back to `db`, which the next start then migrates again. The kept
 //! file is none of the files above, so it never changes which state a start
 //! sees.
@@ -49,6 +53,7 @@ mod fingerprint;
 mod restore;
 #[cfg(test)]
 mod tests;
+mod upgrade;
 
 use std::fs::{File, Metadata, OpenOptions, TryLockError};
 use std::io;
@@ -61,7 +66,10 @@ use tracing::{error, info, warn};
 use ulid::Ulid;
 
 use crate::error::{MigrationRefusal, SQLITE_FULL, StorageError};
-use crate::schema::{BUSY_TIMEOUT, FileSchema, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION, probe};
+use crate::schema::{
+  BUSY_TIMEOUT, COMPRESSED_SCHEMA_VERSION, FileSchema, PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION,
+  probe,
+};
 use build::{CopyOutcome, Origin, Target, qualify_origin, read_origin};
 use fingerprint::{SourceLayout, SourcePrint, SourceSchema, fingerprint};
 pub use restore::{RestoreReport, restore_backup};
@@ -85,6 +93,8 @@ const MIGRATING_SUFFIX: &str = ".migrating";
 const LEGACY_BACKUP_SUFFIX: &str = ".schema0.bak";
 /// Backup suffix of a schema-1 database, before its migration.
 const PREVIOUS_BACKUP_SUFFIX: &str = ".schema1.bak";
+/// Backup suffix of a schema-2 database, before its migration.
+const COMPRESSED_BACKUP_SUFFIX: &str = ".schema2.bak";
 const WAL_SUFFIX: &str = "-wal";
 const SHM_SUFFIX: &str = "-shm";
 const JOURNAL_SUFFIX: &str = "-journal";
@@ -166,15 +176,17 @@ impl Paths {
       match schema {
         SourceSchema::Legacy => LEGACY_BACKUP_SUFFIX,
         SourceSchema::Previous => PREVIOUS_BACKUP_SUFFIX,
+        SourceSchema::Compressed => COMPRESSED_BACKUP_SUFFIX,
       },
     )
   }
 
   /// Every backup a migration may have left, oldest schema first.
-  fn backups(&self) -> [PathBuf; 2] {
+  fn backups(&self) -> [PathBuf; 3] {
     [
       self.backup(SourceSchema::Legacy),
       self.backup(SourceSchema::Previous),
+      self.backup(SourceSchema::Compressed),
     ]
   }
 }
@@ -320,7 +332,8 @@ impl DbState {
       Self::Empty => "empty",
       Self::Older(SourceSchema::Legacy) => "schema 0",
       Self::Older(SourceSchema::Previous) => "schema 1",
-      Self::Current => "schema 2",
+      Self::Older(SourceSchema::Compressed) => "schema 2",
+      Self::Current => "schema 3",
     }
   }
 }
@@ -526,6 +539,7 @@ async fn inspect_db_with(
     FileSchema::Empty => DbState::Empty,
     FileSchema::Legacy => DbState::Older(SourceSchema::Legacy),
     FileSchema::Previous => DbState::Older(SourceSchema::Previous),
+    FileSchema::Compressed => DbState::Older(SourceSchema::Compressed),
     FileSchema::Current => DbState::Current,
   })
 }
@@ -546,7 +560,13 @@ async fn inspect_copy(path: &Path) -> Result<CopyState, StorageError> {
   conn.close().await?;
   let (version, origin) = read?;
   Ok(
-    if version == SCHEMA_VERSION || version == PREVIOUS_SCHEMA_VERSION {
+    if [
+      SCHEMA_VERSION,
+      COMPRESSED_SCHEMA_VERSION,
+      PREVIOUS_SCHEMA_VERSION,
+    ]
+    .contains(&version)
+    {
       CopyState::Complete {
         schema: version,
         origin,
@@ -914,6 +934,9 @@ impl<'a> Migration<'a> {
     print: &SourcePrint,
     should_stop: &(dyn Fn() -> bool + Send + Sync),
   ) -> Result<Option<build::AttachmentCounts>, StorageError> {
+    if self.source == SourceSchema::Compressed {
+      return self.upgrade(print).await.map(Some);
+    }
     let mut target = if fresh {
       let db = self.paths.db.clone();
       let migrating = self.paths.migrating.clone();
@@ -955,6 +978,17 @@ impl<'a> Migration<'a> {
         Err(error)
       }
     }
+  }
+
+  /// Builds the copy of a schema-2 database from scratch: it is one
+  /// snapshot, so there is nothing to resume.
+  async fn upgrade(&self, print: &SourcePrint) -> Result<build::AttachmentCounts, StorageError> {
+    remove_copy(self.paths).await?;
+    let db = self.paths.db.clone();
+    let migrating = self.paths.migrating.clone();
+    blocking(move || create_with_mode(&migrating, mode_of(&db)?).map(drop)).await?;
+    info!(event = "storage_migration", phase = "copy", migration_id = %self.id, "Copying the database to add the release columns");
+    upgrade::build(&self.paths.migrating, &self.paths.db, print, self.options).await
   }
 
   async fn copied_messages(&self) -> Result<u64, StorageError> {
