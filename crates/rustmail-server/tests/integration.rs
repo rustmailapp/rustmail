@@ -1,3 +1,9 @@
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;

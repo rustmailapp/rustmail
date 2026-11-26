@@ -20,13 +20,13 @@ pub async fn run(host: &str, port: u16) -> Result<()> {
 }
 
 async fn run_app(terminal: &mut ratatui::DefaultTerminal, host: &str, port: u16) -> Result<()> {
-  execute!(std::io::stdout(), EnableMouseCapture)?;
-
   let base_url = format!("http://{}:{}", host, port);
   let ws_url = format!("ws://{}:{}/api/v1/ws", host, port);
 
   let (mut events, event_tx) = event::create_event_handler();
-  let mut app = App::new(base_url, ws_url, event_tx);
+  let mut app = App::new(base_url, ws_url, event_tx)?;
+
+  execute!(std::io::stdout(), EnableMouseCapture)?;
   let result = app.run(terminal, &mut events).await;
 
   let _ = execute!(std::io::stdout(), DisableMouseCapture);

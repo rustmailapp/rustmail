@@ -12,6 +12,12 @@
 //! migrates that file. Identical snapshots prove the migration keeps ids,
 //! cursors, search and downloads.
 
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 mod contract;
 mod corpus;
 mod golden;

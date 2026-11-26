@@ -1,3 +1,9 @@
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use rustmail_api::{AppState, Hostname, Origin, ServerInfo, WsEvent, WsFrame, router};

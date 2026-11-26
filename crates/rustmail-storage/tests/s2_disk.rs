@@ -9,6 +9,12 @@
 //! run `cargo test -p rustmail-storage --test s2_disk -- --nocapture` to see
 //! it.
 
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 use rustmail_storage::{MessageRepository, connect_options, initialize_database};
 use sqlx::sqlite::SqlitePoolOptions;
 use ulid::Ulid;

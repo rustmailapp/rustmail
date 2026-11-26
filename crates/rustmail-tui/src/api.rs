@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,14 +69,14 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-  pub fn new(base_url: String) -> Self {
+  pub fn new(base_url: String) -> Result<Self> {
     let client = reqwest::Client::builder()
       .timeout(REQUEST_TIMEOUT)
       .connect_timeout(Duration::from_secs(5))
       .build()
-      .expect("failed to build HTTP client");
+      .context("failed to build the HTTP client for the TUI")?;
 
-    Self { client, base_url }
+    Ok(Self { client, base_url })
   }
 
   pub async fn list_messages(
