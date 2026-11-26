@@ -42,6 +42,7 @@ rustmail-api = { workspace = true }
 rustmail-tui = { workspace = true, optional = true }
 
 [dev-dependencies]
+rustmail-storage = { workspace = true, features = ["test-util"] }
 rustmail-smtp = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["test-util"] }
 reqwest = { workspace = true }

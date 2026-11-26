@@ -29,6 +29,7 @@ mail-parser = { workspace = true }
 rustmail-storage = { workspace = true }
 
 [dev-dependencies]
+rustmail-storage = { workspace = true, features = ["test-util"] }
 rustmail-smtp = { workspace = true }
 rustls = { workspace = true }
 tokio-rustls = { workspace = true }

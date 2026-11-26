@@ -2589,6 +2589,7 @@ name = "rustmail-storage"
 version = "0.0.0"
 dependencies = [
  "mail-parser",
+ "rustmail-storage",
  "serde",
  "serde_json",
  "sqlx",
