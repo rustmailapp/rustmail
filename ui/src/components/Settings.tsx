@@ -181,10 +181,10 @@ function AppearanceTab() {
                 aria-hidden="true"
                 class="flex h-5 w-full overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-700"
               >
-                <span class="flex-1 bg-zinc-950" />
-                <span class="flex-1 bg-zinc-800" />
+                <span class="flex-1 bg-zinc-100 dark:bg-zinc-950" />
+                <span class="flex-1 bg-white dark:bg-zinc-900" />
                 <span class="flex-1 bg-orange-500" />
-                <span class="palette-glow flex-1 bg-white dark:bg-zinc-950" />
+                <span class="flex-1 bg-zinc-800 dark:bg-zinc-200" />
               </span>
               {option.label}
             </button>

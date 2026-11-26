@@ -3,13 +3,22 @@ import { createSignal } from "solid-js";
 /** Every palette the app ships, in picker order. */
 const PALETTES = [
   { id: "rustmail", label: "RustMail" },
-  { id: "ember", label: "Ember" },
-  { id: "copper", label: "Copper & Teal" },
-  { id: "dawn", label: "Dawn" },
-  { id: "classic", label: "Classic" },
+  { id: "graphite", label: "Graphite" },
+  { id: "tide", label: "Tide" },
 ] as const;
 
 type Palette = (typeof PALETTES)[number]["id"];
+
+/**
+ * Retired palette ids and the palette that replaces each one. The boot script
+ * in `public/theme-boot.js` applies the same map before the bundle loads.
+ */
+const RETIRED_PALETTES: Readonly<Record<string, Palette>> = {
+  copper: "tide",
+  classic: "graphite",
+  ember: "graphite",
+  dawn: "rustmail",
+};
 
 const STORAGE_KEY = "rustmail-palette";
 const DEFAULT_PALETTE: Palette = "rustmail";
@@ -20,7 +29,13 @@ function isPalette(value: string | null): value is Palette {
 
 function getInitialPalette(): Palette {
   const stored = localStorage.getItem(STORAGE_KEY);
-  return isPalette(stored) ? stored : DEFAULT_PALETTE;
+  if (isPalette(stored)) return stored;
+  if (stored !== null && Object.hasOwn(RETIRED_PALETTES, stored)) {
+    const replacement = RETIRED_PALETTES[stored];
+    localStorage.setItem(STORAGE_KEY, replacement);
+    return replacement;
+  }
+  return DEFAULT_PALETTE;
 }
 
 const [palette, setPaletteSignal] = createSignal<Palette>(getInitialPalette());
