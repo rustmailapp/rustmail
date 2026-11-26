@@ -62,7 +62,7 @@ export default function ConfirmDialog() {
       return;
     }
     e.preventDefault();
-    close(true);
+    if (!e.repeat) close(true);
   }
 
   onMount(() => document.addEventListener("keydown", onKeyDown, true));
