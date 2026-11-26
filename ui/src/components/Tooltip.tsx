@@ -89,7 +89,7 @@ export default function Tooltip(props: {
     trigger = element;
     element.addEventListener("pointerenter", showSoon);
     element.addEventListener("pointerleave", hide);
-    element.addEventListener("pointerdown", hide);
+    element.addEventListener("click", hide);
     element.addEventListener("focus", showOnKeyboardFocus);
     element.addEventListener("blur", hide);
   }
@@ -99,7 +99,7 @@ export default function Tooltip(props: {
     if (!trigger) return;
     trigger.removeEventListener("pointerenter", showSoon);
     trigger.removeEventListener("pointerleave", hide);
-    trigger.removeEventListener("pointerdown", hide);
+    trigger.removeEventListener("click", hide);
     trigger.removeEventListener("focus", showOnKeyboardFocus);
     trigger.removeEventListener("blur", hide);
   });

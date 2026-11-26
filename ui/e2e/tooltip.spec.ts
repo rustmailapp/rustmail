@@ -82,3 +82,18 @@ test("clears the inbox from the icon button", async ({ page }) => {
   await expect(page.locator('[role="option"]')).toHaveCount(0);
   await expect(clearAll(page)).toHaveCount(0);
 });
+
+test("hides the tooltip when the button is pressed from the keyboard", async ({
+  page,
+}) => {
+  await openInbox(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  const tooltip = page.getByRole("tooltip", { name: /Clear inbox/ });
+  await expect(tooltip).toBeVisible();
+
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByText("Clear all messages")).toBeVisible();
+  await expect(tooltip).toBeHidden();
+});
