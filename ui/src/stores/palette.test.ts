@@ -59,27 +59,46 @@ describe("palette", () => {
   });
 
   it("restores a stored palette", async () => {
-    const { palette } = await loadStore("dawn");
+    const { palette } = await loadStore("tide");
 
-    expect(palette()).toBe("dawn");
-    expect(root.dataset.palette).toBe("dawn");
+    expect(palette()).toBe("tide");
+    expect(root.dataset.palette).toBe("tide");
+  });
+
+  it.each([
+    ["copper", "tide"],
+    ["classic", "graphite"],
+    ["ember", "graphite"],
+    ["dawn", "rustmail"],
+  ])("migrates the retired %s palette to %s", async (retired, replacement) => {
+    const { palette } = await loadStore(retired);
+
+    expect(palette()).toBe(replacement);
+    expect(root.dataset.palette).toBe(replacement);
+    expect(storage.get(STORAGE_KEY)).toBe(replacement);
+  });
+
+  it("leaves an unknown stored value in storage", async () => {
+    await loadStore("neon");
+
+    expect(storage.get(STORAGE_KEY)).toBe("neon");
   });
 
   it("persists and applies a new palette", async () => {
     const { palette, setPalette } = await loadStore(null);
 
-    setPalette("copper");
+    setPalette("graphite");
 
-    expect(palette()).toBe("copper");
-    expect(storage.get(STORAGE_KEY)).toBe("copper");
-    expect(root.dataset.palette).toBe("copper");
+    expect(palette()).toBe("graphite");
+    expect(storage.get(STORAGE_KEY)).toBe("graphite");
+    expect(root.dataset.palette).toBe("graphite");
   });
 
   it("suppresses transitions only for the switch itself", async () => {
     const { setPalette } = await loadStore(null);
 
     root.added.length = 0;
-    setPalette("ember");
+    setPalette("tide");
 
     expect(root.added).toContain("theme-switching");
     expect(root.classList.has("theme-switching")).toBe(false);
