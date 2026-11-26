@@ -80,7 +80,7 @@ To go back, run `rustmail restore-backup` with the new binary **before** install
 |---|---|
 | **Persistent storage** | SQLite-backed, emails survive restarts. `--ephemeral` for CI. |
 | **Full-text search** | FTS5 across subject, body, sender, and recipients. |
-| **Real-time UI** | WebSocket push: new email appears instantly. Dark/light mode, five colour palettes, keyboard shortcuts. |
+| **Real-time UI** | WebSocket push: new email appears instantly. Dark/light mode, three colour palettes, keyboard shortcuts. |
 | **CI-native** | REST assertion endpoints, CLI assert mode, and a first-party GitHub Action. |
 | **Single binary** | Frontend embedded at compile time. 10 to 14 MB depending on the target, zero runtime dependencies. |
 | **Auth header display** | Parses DKIM, SPF, DMARC, and ARC headers with color-coded status badges. |

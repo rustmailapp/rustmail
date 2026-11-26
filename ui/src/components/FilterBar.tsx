@@ -134,7 +134,7 @@ function TagDropdown() {
         </svg>
         Tags
         <Show when={filters().tags.length > 0}>
-          <span class="bg-orange-200 dark:bg-orange-500/30 text-orange-700 dark:text-orange-300 rounded-full px-1 text-[10px] leading-tight">
+          <span class="bg-orange-200 dark:bg-orange-500/30 text-orange-800 dark:text-orange-300 rounded-full px-1 text-[10px] leading-tight">
             {filters().tags.length}
           </span>
         </Show>

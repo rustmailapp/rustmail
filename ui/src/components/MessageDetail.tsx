@@ -58,7 +58,7 @@ import {
 } from "./icons";
 import Tooltip from "./Tooltip";
 import { confirm } from "./ConfirmDialog";
-import { releaseTarget } from "../stores/serverInfo";
+import { releaseTarget } from "../stores/server";
 import { relayLabel, release, releasing } from "../stores/release";
 
 type View = "preview" | "text" | "raw";

@@ -10,7 +10,7 @@ import {
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   filteredMessages,
-  visibleMessages,
+  inboxEmpty,
   listSize,
   selectedId,
   selectMessage,
@@ -29,6 +29,7 @@ import {
 } from "../stores/messages";
 import { formatDate } from "../lib/format";
 import { PaperclipIcon, StarIcon } from "./icons";
+import { EmptyInbox } from "./Onboarding";
 import type { MessageSummary } from "../lib/types";
 
 /**
@@ -162,16 +163,22 @@ export default function Inbox() {
         <div class="sticky top-0 z-10 h-0 flex justify-center">
           <button
             onClick={showNewest}
-            class="mt-2 rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-orange-400 transition cursor-pointer"
+            class="mt-2 rounded-full bg-orange-700 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-orange-800 transition cursor-pointer"
           >
             {heldArrivals() > 0 ? `${heldArrivals()} new` : "New results"}
           </button>
         </div>
       </Show>
-      <Show when={!loading() && filteredMessages().length === 0}>
+      <Show
+        when={
+          !loading() &&
+          filteredMessages().length === 0 &&
+          (inboxEmpty() || search() !== "" || hasActiveFilters())
+        }
+      >
         <div class="flex flex-col items-center justify-center h-full text-zinc-500 dark:text-zinc-400">
           <Show
-            when={visibleMessages().length === 0 && !search()}
+            when={inboxEmpty()}
             fallback={
               <>
                 <svg
@@ -199,23 +206,7 @@ export default function Inbox() {
               </>
             }
           >
-            <svg
-              class="size-12 mb-3 opacity-30"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="1.5"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
-              />
-            </svg>
-            <p class="text-sm">No messages yet</p>
-            <p class="text-xs mt-1 text-zinc-500 dark:text-zinc-400">
-              Send an email to the SMTP port to get started
-            </p>
+            <EmptyInbox />
           </Show>
         </div>
       </Show>
@@ -345,7 +336,9 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
                   )}
                 </For>
                 <Show when={msg().tags.length > 3}>
-                  <span class="text-[10px] text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400">
+                  <span
+                    class={`text-[10px] ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
+                  >
                     +{msg().tags.length - 3}
                   </span>
                 </Show>

@@ -274,6 +274,11 @@ function liveSummary(loaded: MessageSummary): MessageSummary {
   return open?.id === loaded.id ? open : loaded;
 }
 const [loading, setLoading] = createSignal(false);
+/**
+ * Whether the last list read to land was of the whole inbox, unsearched and
+ * unfiltered, so an empty list then means an empty inbox.
+ */
+const [listedWhole, setListedWhole] = createSignal(false);
 const [loadingMore, setLoadingMore] = createSignal(false);
 const [search, setSearch] = createSignal("");
 /**
@@ -410,6 +415,21 @@ const total = createMemo(() => {
   ).length;
   return Math.max(0, storedTotal() - hiddenCount);
 });
+
+/**
+ * Whether the inbox holds no mail at all, as opposed to none matching.
+ *
+ * False until a read of the whole inbox lands, so the empty state neither
+ * flashes up over an inbox still loading nor over leftover search results.
+ */
+function inboxEmpty(): boolean {
+  return (
+    listedWhole() &&
+    search() === "" &&
+    !hasActiveFilters() &&
+    visibleMessages().length === 0
+  );
+}
 
 /**
  * The inbox list: loaded messages narrowed by the active filters.
@@ -975,6 +995,7 @@ async function readFirstPage(): Promise<boolean> {
         snapshot += 1;
         countNeedsRefresh = raced;
         landed.show();
+        setListedWhole(search() === "" && !hasActiveFilters());
         setStoredTotal(landed.total);
         searchStale = false;
         replayEvents(eventsDuringRead ?? [], landed.ids);
@@ -1480,6 +1501,7 @@ export {
   liveSummary,
   visibleMessages,
   filteredMessages,
+  inboxEmpty,
   total,
   selectedId,
   setSelectedId,

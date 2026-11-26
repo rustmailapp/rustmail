@@ -33,12 +33,10 @@ The gear icon in the header opens **Settings**. Under **Appearance**:
 | Palette | Look |
 |---------|------|
 | **RustMail** (default) | Warm iron neutrals, an oxide orange accent, and an amber-to-oxide glow and selection |
-| **Ember** | Cool slate neutrals with an orange accent |
-| **Copper & Teal** | Teal-grey neutrals, an orange accent, and a copper and teal glow |
-| **Dawn** | Rose-grey neutrals, a coral accent, and an amber-to-rose glow and selection |
-| **Classic** | Plain zinc neutrals, an orange accent, and a grey selection |
+| **Graphite** | Plain zinc neutrals, an orange accent, and a grey selection |
+| **Tide** | Cool blue-grey neutrals, a teal accent, and a teal glow and selection |
 
-Both choices are kept in the browser's local storage, so they apply per browser rather than per server.
+Both choices are kept in the browser's local storage, so they apply per browser rather than per server. A palette saved by an older version moves to its replacement: Copper & Teal to Tide, Classic and Ember to Graphite, Dawn to RustMail.
 
 ## Details rail
 
