@@ -73,8 +73,9 @@ pub enum StorageError {
   /// zstd refused to compress a message's raw source.
   #[error("could not compress a message's raw source: {0}")]
   Compress(std::io::Error),
-  /// The blocking task decoding a large attachment did not complete.
-  #[error("decoding a stored attachment did not complete: {0}")]
+  /// The blocking task decoding a large stored message source or
+  /// attachment did not complete.
+  #[error("decoding stored message content did not complete: {0}")]
   DecodeAborted(#[from] tokio::task::JoinError),
   /// The database holds tables rustmail did not create. It is refused before
   /// anything is written to it.

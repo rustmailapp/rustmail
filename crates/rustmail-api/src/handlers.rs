@@ -1114,7 +1114,7 @@ fn storage_failure(error: &StorageError) -> (StatusCode, String) {
       )
     }
     e @ StorageError::DecodeAborted(_) => {
-      tracing::error!(error = %e, "Attachment decode aborted");
+      tracing::error!(error = %e, "Stored content decode aborted");
       (
         StatusCode::INTERNAL_SERVER_ERROR,
         "Internal server error".to_string(),

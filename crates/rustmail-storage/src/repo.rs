@@ -4,7 +4,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sqlx::pool::PoolConnection;
 use sqlx::{AssertSqlSafe, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
-use time::macros::format_description;
 use tracing::{debug, error, warn};
 use ulid::Ulid;
 
@@ -20,9 +19,6 @@ use crate::reclaim::{
   DELETE_ALL_RECLAIM_BUDGET, RETENTION_RECLAIM_BUDGET, ReclaimTrigger, page_stats, reclaim,
 };
 use crate::schema::{BUSY_TIMEOUT, OPTIMIZE_ANALYSIS_LIMIT};
-
-const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
-  format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
 
 /// Total attempts a contended write gets, the first one included.
 const WRITE_ATTEMPTS: u32 = 5;
@@ -169,12 +165,13 @@ impl MessageRepository {
 
   /// Parses and stores a raw email, extracting metadata and attachments.
   ///
-  /// Inserts the message into the `messages` table, populates the FTS5 index,
-  /// and stores any MIME attachments in the `attachments` table.
+  /// A shortcut for tests: ingest parses ahead of time and calls
+  /// [`Self::insert_prepared`] or [`Self::insert_batch`].
   ///
   /// # Errors
   ///
   /// Returns [`StorageError::Database`] if any insert fails.
+  #[cfg(any(test, feature = "test-util"))]
   pub async fn insert(
     &self,
     sender: &str,
@@ -425,7 +422,7 @@ impl MessageRepository {
     is_starred: Option<bool>,
     tags: Option<&[String]>,
   ) -> Result<(), StorageError> {
-    let tags_json = tags.map(|tags| serde_json::to_string(tags).unwrap_or_default());
+    let tags_json = tags.map(|tags| serde_json::Value::from(tags).to_string());
     let result = retry_on_lock(|| async {
       let result = sqlx::query(
         "UPDATE messages SET is_read = COALESCE(?1, is_read), is_starred = COALESCE(?2, is_starred), tags = COALESCE(?3, tags) WHERE id = ?4",
@@ -486,6 +483,10 @@ impl MessageRepository {
   /// The contentless index removes its entry by rowid alone. Content and
   /// attachments follow the `messages` row by cascade.
   pub async fn delete(&self, id: &str) -> Result<(), StorageError> {
+    retry_on_lock(|| self.delete_once(id)).await
+  }
+
+  async fn delete_once(&self, id: &str) -> Result<(), StorageError> {
     let mut txn = self.writer.begin().await?;
 
     sqlx::query("DELETE FROM messages_fts WHERE rowid = (SELECT seq FROM messages WHERE id = ?1)")
@@ -953,9 +954,7 @@ async fn insert_rows_in(
 ) -> Result<(i64, MessageSummary), StorageError> {
   let id = Ulid::new().to_string();
   let size = message.size as i64;
-  let now = OffsetDateTime::now_utc()
-    .format(ISO8601_FMT)
-    .unwrap_or_default();
+  let now = format_iso8601(OffsetDateTime::now_utc());
 
   let seq = sqlx::query(
     r#"
@@ -1389,9 +1388,19 @@ fn escape_like(s: &str) -> String {
     .replace('_', "\\_")
 }
 
-/// Formats an [`OffsetDateTime`] as an ISO 8601 string (`YYYY-MM-DDTHH:MM:SSZ`).
+/// Formats an [`OffsetDateTime`] as an ISO 8601 UTC string
+/// (`YYYY-MM-DDTHH:MM:SSZ`), converting it to UTC first.
 pub fn format_iso8601(dt: OffsetDateTime) -> String {
-  dt.format(ISO8601_FMT).unwrap_or_default()
+  let utc = dt.to_offset(time::UtcOffset::UTC);
+  format!(
+    "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+    utc.year(),
+    u8::from(utc.month()),
+    utc.day(),
+    utc.hour(),
+    utc.minute(),
+    utc.second()
+  )
 }
 
 #[cfg(test)]
@@ -2964,6 +2973,41 @@ mod tests {
         .await
         .unwrap();
     })
+  }
+
+  #[tokio::test]
+  async fn delete_waits_out_a_writer_holding_the_lock() {
+    let (repo, dir, pool) = impatient_repo().await;
+    let _guard = TempDir(dir);
+    let stored = repo
+      .insert(
+        "a@t.com",
+        &["b@t.com".into()],
+        &raw_email("contended delete", "a@t.com", "b@t.com"),
+      )
+      .await
+      .unwrap();
+
+    let releaser = hold_write_lock(&pool, Duration::from_millis(60)).await;
+    repo
+      .delete(&stored.id)
+      .await
+      .expect("a contended delete should be retried, not surfaced");
+
+    releaser.await.unwrap();
+    assert_eq!(repo.count().await.unwrap(), 0);
+  }
+
+  #[test]
+  fn format_iso8601_writes_utc_to_the_second() {
+    let instant = time::macros::datetime!(2026-03-07 09:05:04.75 UTC);
+    assert_eq!(format_iso8601(instant), "2026-03-07T09:05:04Z");
+  }
+
+  #[test]
+  fn format_iso8601_converts_an_offset_to_utc() {
+    let instant = time::macros::datetime!(2026-01-01 01:30:00 +02:00);
+    assert_eq!(format_iso8601(instant), "2025-12-31T23:30:00Z");
   }
 
   #[tokio::test]
