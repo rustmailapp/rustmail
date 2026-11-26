@@ -9,12 +9,24 @@ import { selectedId } from "./messages";
  */
 const WIDE_LAYOUT_QUERY = "(min-width: 1300px)";
 
+const RAIL_STORAGE_KEY = "rustmail-details-rail";
+const RAIL_COLLAPSED = "collapsed";
+const RAIL_EXPANDED = "expanded";
+
+/** Whether the rail starts collapsed; anything but a stored collapse expands it. */
+function getInitialRailCollapsed(): boolean {
+  return localStorage.getItem(RAIL_STORAGE_KEY) === RAIL_COLLAPSED;
+}
+
 const wideQuery =
   typeof window !== "undefined" && typeof window.matchMedia === "function"
     ? window.matchMedia(WIDE_LAYOUT_QUERY)
     : null;
 const [wideLayout, setWideLayout] = createSignal(wideQuery?.matches ?? false);
 const [drawerOpen, setDrawerOpen] = createSignal(false);
+const [railCollapsed, setRailCollapsed] = createSignal(
+  getInitialRailCollapsed(),
+);
 
 wideQuery?.addEventListener("change", (event) => {
   setWideLayout(event.matches);
@@ -34,9 +46,31 @@ function detailsDrawerOpen(): boolean {
   return !wideLayout() && drawerOpen();
 }
 
-/** Opens or closes the details drawer; the wide layout has none to toggle. */
+/** Whether the details rail has its own column beside the message right now. */
+function detailsRailOpen(): boolean {
+  return wideLayout() && !railCollapsed();
+}
+
+function toggleRail(): void {
+  const collapsed = !railCollapsed();
+  setRailCollapsed(collapsed);
+  localStorage.setItem(
+    RAIL_STORAGE_KEY,
+    collapsed ? RAIL_COLLAPSED : RAIL_EXPANDED,
+  );
+}
+
+/**
+ * Shows or hides the message details in the current layout.
+ *
+ * The wide layout collapses or expands the rail, and remembers it across
+ * reloads; the narrow layout opens or closes the drawer, which is never kept.
+ */
 function toggleDetails(): void {
-  if (wideLayout()) return;
+  if (wideLayout()) {
+    toggleRail();
+    return;
+  }
   setDrawerOpen((open) => !open);
 }
 
@@ -44,4 +78,10 @@ function closeDetails(): void {
   setDrawerOpen(false);
 }
 
-export { wideLayout, detailsDrawerOpen, toggleDetails, closeDetails };
+export {
+  wideLayout,
+  detailsDrawerOpen,
+  detailsRailOpen,
+  toggleDetails,
+  closeDetails,
+};

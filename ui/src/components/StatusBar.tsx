@@ -12,7 +12,6 @@ import {
   total,
   visibleMessages,
 } from "../stores/messages";
-import { wideLayout } from "../stores/layout";
 import * as api from "../lib/api";
 import {
   COPIED_FEEDBACK_MS,
@@ -160,9 +159,7 @@ export default function StatusBar() {
       </Show>
 
       <span class="ml-auto inline-flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
-        <Show when={!wideLayout()}>
-          <Hint keys={["i"]} label="details" />
-        </Show>
+        <Hint keys={["i"]} label="details" />
         <Hint keys={["j", "k"]} label="move" />
         <Hint keys={["/"]} label="search" />
         <Hint keys={["d"]} label="delete" />

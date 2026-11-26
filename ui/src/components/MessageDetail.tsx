@@ -19,6 +19,7 @@ import {
 import {
   closeDetails,
   detailsDrawerOpen,
+  detailsRailOpen,
   toggleDetails,
   wideLayout,
 } from "../stores/layout";
@@ -47,6 +48,7 @@ import DetailRail, {
 import {
   DownloadIcon,
   InfoIcon,
+  PanelRightIcon,
   PaperclipIcon,
   StarIcon,
   TrashIcon,
@@ -179,7 +181,7 @@ export default function MessageDetail() {
                       />
                     </Show>
                   </div>
-                  <Show when={!wideLayout() && !detailsDrawerOpen()}>
+                  <Show when={!detailsRailOpen() && !detailsDrawerOpen()}>
                     <CompactChecks
                       auth={reads.auth}
                       attachmentCount={files()?.length ?? 0}
@@ -218,33 +220,36 @@ export default function MessageDetail() {
         <aside
           id={DETAILS_ID}
           aria-label="Message details"
-          class="app-panel w-80 shrink-0 overflow-y-auto"
+          class="details-rail app-panel shrink-0 overflow-hidden"
+          data-collapsed={detailsRailOpen() ? undefined : ""}
         >
-          <Show
-            when={loaded()}
-            fallback={
-              <Show
-                when={selectedId()}
-                fallback={
-                  <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
-                    Details of the selected message show here.
-                  </p>
-                }
-              >
-                <ReadState read={message} label="the message details" />
-              </Show>
-            }
-          >
-            {(msg) => (
-              <DetailRail
-                message={msg()}
-                reads={reads}
-                files={files()}
-                headersOpen={headersOpen()}
-                onToggleHeaders={toggleHeaders}
-              />
-            )}
-          </Show>
+          <div class="w-80 h-full overflow-y-auto">
+            <Show
+              when={loaded()}
+              fallback={
+                <Show
+                  when={selectedId()}
+                  fallback={
+                    <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
+                      Details of the selected message show here.
+                    </p>
+                  }
+                >
+                  <ReadState read={message} label="the message details" />
+                </Show>
+              }
+            >
+              {(msg) => (
+                <DetailRail
+                  message={msg()}
+                  reads={reads}
+                  files={files()}
+                  headersOpen={headersOpen()}
+                  onToggleHeaders={toggleHeaders}
+                />
+              )}
+            </Show>
+          </div>
         </aside>
       </Show>
     </>
@@ -367,6 +372,18 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
         </p>
       </div>
       <div class="flex items-center gap-2 shrink-0">
+        <Show when={wideLayout()}>
+          <button
+            onClick={toggleDetails}
+            aria-label="Details"
+            aria-expanded={detailsRailOpen()}
+            aria-controls={DETAILS_ID}
+            title={detailsRailOpen() ? "Hide details (i)" : "Show details (i)"}
+            class="rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-1.5 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+          >
+            <PanelRightIcon class="size-4" />
+          </button>
+        </Show>
         <Show when={!wideLayout()}>
           <button
             onClick={toggleDetails}

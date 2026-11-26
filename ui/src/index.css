@@ -86,6 +86,26 @@
   box-shadow: var(--rm-panel-shadow);
 }
 
+.details-rail {
+  width: 20rem;
+  transition:
+    width 0.2s ease-out,
+    margin-left 0.2s ease-out,
+    visibility 0.2s;
+}
+
+.details-rail[data-collapsed] {
+  width: 0;
+  margin-left: calc(var(--spacing) * -2.5);
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .details-rail {
+    transition: none;
+  }
+}
+
 .details-drawer {
   background-color: var(--rm-panel);
   box-shadow: -16px 0 32px -20px
