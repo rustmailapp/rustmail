@@ -1,42 +1,14 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { smtpEndpoint } from "../stores/server";
 import { smtpAddress, smtpSnippets, type SnippetStack } from "../lib/smtp";
 import CopyButton from "./CopyButton";
+import SegmentedControl from "./SegmentedControl";
+import { EnvelopeIcon } from "./icons";
 
 const SNIPPET_PANEL_ID = "smtp-snippet-panel";
 
 function snippetTabId(stack: SnippetStack): string {
   return `smtp-snippet-tab-${stack}`;
-}
-
-/** Keys that move between snippet tabs, as where they land in the list. */
-const TAB_KEYS: Record<
-  string,
-  ((at: number, count: number) => number) | undefined
-> = {
-  ArrowRight: (at, count) => (at + 1) % count,
-  ArrowLeft: (at, count) => (at - 1 + count) % count,
-  Home: () => 0,
-  End: (_, count) => count - 1,
-};
-
-function MailIcon() {
-  return (
-    <svg
-      class="size-12 mb-3 opacity-30"
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      stroke-width="1.5"
-      aria-hidden="true"
-    >
-      <path
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
-      />
-    </svg>
-  );
 }
 
 /**
@@ -49,7 +21,7 @@ export function EmptyInbox() {
   let address: HTMLSpanElement | undefined;
   return (
     <div class="flex flex-col items-center px-6 text-center">
-      <MailIcon />
+      <EnvelopeIcon class="size-12 mb-3 opacity-30" />
       <p class="text-sm">No messages yet</p>
       <Show
         when={smtpEndpoint()}
@@ -95,20 +67,11 @@ export function ConnectApp() {
     const smtp = smtpEndpoint();
     return smtp ? smtpSnippets(smtp.host, smtp.port) : [];
   });
+  const stackOptions = createMemo(() =>
+    snippets().map((snippet) => ({ id: snippet.stack, label: snippet.label })),
+  );
   const current = () =>
     snippets().find((s) => s.stack === stack()) ?? snippets()[0];
-
-  function focusTab(event: KeyboardEvent): void {
-    const land = TAB_KEYS[event.key];
-    if (land === undefined) return;
-    event.preventDefault();
-    const list = snippets();
-    const at = list.findIndex((s) => s.stack === stack());
-    const next = list[land(at, list.length)];
-    if (!next) return;
-    setStack(next.stack);
-    document.getElementById(snippetTabId(next.stack))?.focus();
-  }
 
   return (
     <section
@@ -123,34 +86,14 @@ export function ConnectApp() {
           Plain SMTP, no username or password. Mail sent here shows up in the
           inbox as it arrives.
         </p>
-        <div
-          role="tablist"
-          aria-label="Stack"
-          onKeyDown={focusTab}
-          class="mt-5 inline-flex self-start rounded-lg bg-zinc-100 dark:bg-zinc-800/70 p-0.5"
-        >
-          <For each={snippets()}>
-            {(snippet) => (
-              <button
-                role="tab"
-                id={snippetTabId(snippet.stack)}
-                aria-selected={stack() === snippet.stack}
-                aria-controls={SNIPPET_PANEL_ID}
-                tabIndex={stack() === snippet.stack ? 0 : -1}
-                onClick={() => setStack(snippet.stack)}
-                class="rounded-md px-3 py-1 text-xs font-medium transition cursor-pointer"
-                classList={{
-                  "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 shadow-sm":
-                    stack() === snippet.stack,
-                  "text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
-                    stack() !== snippet.stack,
-                }}
-              >
-                {snippet.label}
-              </button>
-            )}
-          </For>
-        </div>
+        <SegmentedControl
+          label="Stack"
+          options={stackOptions()}
+          value={stack()}
+          onChange={setStack}
+          tabs={{ panelId: SNIPPET_PANEL_ID, tabId: snippetTabId }}
+          class="mt-5 self-start"
+        />
         <Show when={current()}>
           {(snippet) => (
             <div

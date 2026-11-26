@@ -23,6 +23,7 @@ import {
   listSize,
   MAX_TAG_FILTERS,
 } from "../stores/messages";
+import { CheckIcon, ChevronDownIcon, SearchIcon, TagIcon } from "./icons";
 
 const TAG_SEARCH_THRESHOLD = 8;
 
@@ -144,45 +145,16 @@ function TagDropdown() {
             : "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700/50 hover:bg-zinc-200 dark:hover:bg-zinc-700/50 hover:text-zinc-700 dark:hover:text-zinc-300"
         }`}
       >
-        <svg
-          class="size-3"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M9.568 3H5.25A2.25 2.25 0 003 5.25v4.318c0 .597.237 1.17.659 1.591l9.581 9.581c.699.699 1.78.872 2.607.33a18.095 18.095 0 005.223-5.223c.542-.827.369-1.908-.33-2.607L11.16 3.66A2.25 2.25 0 009.568 3z"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M6 6h.008v.008H6V6z"
-          />
-        </svg>
+        <TagIcon class="size-3" />
         Tags
         <Show when={filters().tags.length > 0}>
           <span class="bg-orange-200 dark:bg-orange-500/30 text-orange-800 dark:text-orange-300 rounded-full px-1 text-[10px] leading-tight">
             {filters().tags.length}
           </span>
         </Show>
-        <svg
+        <ChevronDownIcon
           class={`size-3 transition-transform ${open() ? "rotate-180" : ""}`}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M19.5 8.25l-7.5 7.5-7.5-7.5"
-          />
-        </svg>
+        />
       </button>
 
       <Show when={open()}>
@@ -243,19 +215,7 @@ function TagDropdown() {
                             }`}
                           >
                             <Show when={isSelected()}>
-                              <svg
-                                class="size-2.5 text-white"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="3"
-                              >
-                                <path
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                  d="M4.5 12.75l6 6 9-13.5"
-                                />
-                              </svg>
+                              <CheckIcon class="size-2.5 text-white" />
                             </Show>
                           </div>
                           <span
@@ -312,20 +272,7 @@ export default function FilterBar() {
   return (
     <div class="flex-shrink-0">
       <label class="relative block mx-3 mb-2">
-        <svg
-          class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-          />
-        </svg>
+        <SearchIcon class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
         <input
           type="text"
           placeholder="Search emails..."
