@@ -40,6 +40,7 @@ function state(overrides: Partial<CommandState> = {}): CommandState {
       { id: "tide", label: "Tide" },
     ],
     rusted: false,
+    density: "comfortable",
     previewWidth: "desktop",
     previewWidths: [
       { id: "desktop", label: "Desktop" },
@@ -65,6 +66,7 @@ function fakeActions(): CommandActions {
     setTheme: vi.fn(),
     setPalette: vi.fn(),
     setRusted: vi.fn(),
+    toggleDensity: vi.fn(),
     setPreviewWidth: vi.fn(),
     openSettings: vi.fn(),
     showShortcuts: vi.fn(),
@@ -218,6 +220,19 @@ describe("availableCommands", () => {
     expect(on.label).toBe("Turn Rusted off");
     on.run();
     expect(actions.setRusted).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("toggles density to the other one, with no shortcut hint", () => {
+    const actions = fakeActions();
+    const toCompact = find(state(), "density", actions);
+    expect(toCompact.label).toBe("Density: Compact");
+    expect(toCompact.shortcut).toBeUndefined();
+    toCompact.run();
+    expect(actions.toggleDensity).toHaveBeenCalledOnce();
+
+    expect(find(state({ density: "compact" }), "density").label).toBe(
+      "Density: Comfortable",
+    );
   });
 
   it("names the details toggle after the current layout state", () => {

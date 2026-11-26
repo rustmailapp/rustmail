@@ -48,6 +48,7 @@ import {
 import { theme, setTheme } from "../stores/theme";
 import { PALETTES, palette, setPalette } from "../stores/palette";
 import { rusted, setRusted } from "../stores/rusted";
+import { density, toggleDensity } from "../stores/density";
 import {
   PREVIEW_WIDTHS,
   previewWidth,
@@ -107,6 +108,7 @@ const actions: CommandActions = {
   setTheme,
   setPalette,
   setRusted,
+  toggleDensity,
   setPreviewWidth,
   openSettings: () => setSettingsOpen(true),
   showShortcuts: () => setShortcutsOpen(true),
@@ -128,6 +130,7 @@ function commandState(): CommandState {
     palette: palette(),
     palettes: PALETTES,
     rusted: rusted(),
+    density: density(),
     previewWidth: previewWidth(),
     previewWidths: PREVIEW_WIDTHS,
   };
