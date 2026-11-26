@@ -252,6 +252,10 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: Too many tags (max 20)
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to parse the request body as JSON: expected ident at line 1 column 2'
         '404':
           $ref: '#/components/responses/NotFound'
         '415':
@@ -560,7 +564,9 @@ paths:
             `port` is not one of 25, 465, 587 or 2525, or the captured envelope
             cannot be sent as captured: it has no recipient, or its sender
             (other than the empty `MAIL FROM:<>`) or any one recipient is not
-            an address a relay accepts. Nothing is sent to the relay then.
+            an address a relay accepts. Nothing is sent to the relay then. A
+            body that is not JSON at all is also a `400`, but as `text/plain`
+            from the JSON extractor.
           content:
             application/json:
               schema:
@@ -578,6 +584,10 @@ paths:
                   summary: a captured recipient is not a relayable address
                   value:
                     error: 'Invalid envelope: a captured recipient is not an address a relay accepts'
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to parse the request body as JSON: expected ident at line 1 column 2'
         '403':
           description: >
             Release is disabled (no `--release-host`), `host` is not the
