@@ -101,6 +101,9 @@ pub(crate) async fn page_stats(pool: &SqlitePool) -> Result<PageStats, StorageEr
 /// is empty, a step frees nothing, or `budget` runs out, then checkpoints the
 /// WAL with `TRUNCATE` and logs `event=storage_reclaim`.
 ///
+/// After a delete-all that left the file empty, one `VACUUM` rebuilds it
+/// instead, which costs a few pages rather than a step per megabyte freed.
+///
 /// No step holds a transaction open, so a waiting insert commits between two
 /// steps. A contended step is retried like any other write. A checkpoint that
 /// cannot finish because readers still hold an older snapshot is reported as
@@ -120,6 +123,12 @@ pub(crate) async fn reclaim(
   let deadline = started + budget;
   let before = page_stats(writer).await?;
   let mut free_pages = before.freelist_count;
+  if matches!(trigger, ReclaimTrigger::DeleteAll)
+    && free_pages > 0
+    && retry_on_lock(|| vacuum_if_empty(writer)).await?
+  {
+    free_pages = 0;
+  }
   while free_pages > 0 && Instant::now() < deadline {
     let left = retry_on_lock(|| vacuum_step(writer)).await?;
     let progressed = left < free_pages;
@@ -153,6 +162,27 @@ pub(crate) async fn reclaim(
     );
   }
   Ok(())
+}
+
+/// Runs `VACUUM` if no message or attachment is stored, and returns whether
+/// it did.
+///
+/// The check and the `VACUUM` run on one writer connection, so with the
+/// dedicated writer no insert can land between them. `VACUUM` may renumber
+/// the implicit rowids that order a message's attachments, and on a file
+/// with mail in it would hold the writer for as long as copying that mail
+/// takes; on an empty one it has nothing to renumber and finishes at once.
+async fn vacuum_if_empty(writer: &SqlitePool) -> Result<bool, StorageError> {
+  let mut conn = writer.acquire().await?;
+  let empty: bool = sqlx::query_scalar(
+    "SELECT NOT EXISTS (SELECT 1 FROM messages) AND NOT EXISTS (SELECT 1 FROM attachments)",
+  )
+  .fetch_one(&mut *conn)
+  .await?;
+  if empty {
+    sqlx::query("VACUUM").execute(&mut *conn).await?;
+  }
+  Ok(empty)
 }
 
 /// Runs one bounded `incremental_vacuum` and returns the freelist left after

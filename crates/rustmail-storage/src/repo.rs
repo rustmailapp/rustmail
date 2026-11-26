@@ -1,7 +1,8 @@
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use sqlx::{AssertSqlSafe, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
+use sqlx::pool::PoolConnection;
+use sqlx::{AssertSqlSafe, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
 use tracing::{debug, error};
@@ -479,12 +480,9 @@ impl MessageRepository {
   /// Deletes all messages and clears the FTS5 index atomically. Returns the
   /// count of deleted messages.
   ///
-  /// Uses FTS5's `delete-all` command rather than `DELETE FROM messages_fts`,
-  /// which empties the index in one step instead of removing every row's
-  /// tokens one by one. The child tables are
-  /// emptied next, each by a `DELETE` without a `WHERE` that SQLite turns into
-  /// dropping its pages whole, so removing `messages` last has no cascade left
-  /// to walk.
+  /// On a database file the writer turns foreign keys off for the delete, so
+  /// SQLite drops each table's pages whole instead of deleting row by row,
+  /// and turns them back on before the connection serves anything else.
   ///
   /// The freed pages stay on the freelist until
   /// [`reclaim_after_delete_all`](Self::reclaim_after_delete_all) gives them
@@ -518,30 +516,14 @@ impl MessageRepository {
   }
 
   async fn delete_all_once(&self) -> Result<u64, StorageError> {
-    let mut txn = self.writer.begin().await?;
-
-    sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
-      .execute(&mut *txn)
-      .await?;
-
-    sqlx::query("DELETE FROM message_content")
-      .execute(&mut *txn)
-      .await?;
-
-    sqlx::query("DELETE FROM attachments")
-      .execute(&mut *txn)
-      .await?;
-
-    sqlx::query("DELETE FROM message_tags")
-      .execute(&mut *txn)
-      .await?;
-
-    let result = sqlx::query("DELETE FROM messages")
-      .execute(&mut *txn)
-      .await?;
-
-    txn.commit().await?;
-    Ok(result.rows_affected())
+    let mut conn = self.writer.acquire().await?;
+    if !is_file_database(&mut conn).await? {
+      return delete_every_row(&mut conn).await;
+    }
+    let mut writer = ForeignKeysOff::turn_off(&mut conn).await?;
+    let deleted = delete_every_row(writer.connection()).await;
+    writer.restore().await;
+    deleted
   }
 
   /// Gives the pages freed by a retention sweep back to the filesystem, when
@@ -1078,6 +1060,108 @@ impl AttachmentRow {
       }),
     }
   }
+}
+
+/// Empties every table in one transaction and returns how many messages it
+/// held.
+///
+/// FTS5's `delete-all` empties the index in one step instead of removing
+/// every row's tokens. On a connection with foreign keys off, each `DELETE`
+/// without a `WHERE` drops its table's pages whole rather than visiting every
+/// row; with them on, SQLite deletes row by row to check each key.
+async fn delete_every_row(conn: &mut SqliteConnection) -> Result<u64, StorageError> {
+  let mut txn = conn.begin().await?;
+  sqlx::query("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')")
+    .execute(&mut *txn)
+    .await?;
+  for table in ["message_content", "attachments", "message_tags"] {
+    sqlx::query(AssertSqlSafe(format!("DELETE FROM {table}")))
+      .execute(&mut *txn)
+      .await?;
+  }
+  let result = sqlx::query("DELETE FROM messages")
+    .execute(&mut *txn)
+    .await?;
+  txn.commit().await?;
+  Ok(result.rows_affected())
+}
+
+/// Whether `conn` is open on a database file rather than in memory.
+async fn is_file_database(conn: &mut SqliteConnection) -> Result<bool, StorageError> {
+  Ok(
+    sqlx::query_scalar("SELECT file <> '' FROM pragma_database_list WHERE name = 'main'")
+      .fetch_one(conn)
+      .await?,
+  )
+}
+
+/// A writer connection with foreign keys off, which never goes back to the
+/// pool that way.
+///
+/// [`restore`](Self::restore) turns them back on. If that fails, or the
+/// guard is dropped first because its future was cancelled or panicked, the
+/// connection is closed instead of returned, and the pool opens a fresh one
+/// with every pragma of [`crate::connect_options`]. Only for a file database:
+/// closing the one connection of an in-memory database would discard it.
+struct ForeignKeysOff<'c> {
+  conn: &'c mut PoolConnection<Sqlite>,
+  restored: bool,
+}
+
+impl<'c> ForeignKeysOff<'c> {
+  async fn turn_off(conn: &'c mut PoolConnection<Sqlite>) -> Result<Self, StorageError> {
+    sqlx::query("PRAGMA foreign_keys = OFF")
+      .execute(&mut **conn)
+      .await?;
+    Ok(Self {
+      conn,
+      restored: false,
+    })
+  }
+
+  fn connection(&mut self) -> &mut SqliteConnection {
+    self.conn
+  }
+
+  async fn restore(mut self) {
+    let failure = match foreign_keys_on(self.conn).await {
+      Ok(true) => {
+        self.restored = true;
+        return;
+      }
+      Ok(false) => "PRAGMA foreign_keys still reads off".to_string(),
+      Err(error) => error.to_string(),
+    };
+    error!(
+      event = "storage_foreign_keys_restore_failed",
+      error = %failure,
+      hint = "the writer connection is closed and replaced",
+      "failed to turn foreign keys back on after deleting every message"
+    );
+  }
+}
+
+impl Drop for ForeignKeysOff<'_> {
+  fn drop(&mut self) {
+    if !self.restored {
+      self.conn.close_on_drop();
+    }
+  }
+}
+
+/// Turns foreign keys on for `conn` and returns whether they now are.
+///
+/// The pragma is silently ignored inside a transaction, so reading it back
+/// is the only proof it took effect.
+async fn foreign_keys_on(conn: &mut SqliteConnection) -> Result<bool, StorageError> {
+  sqlx::query("PRAGMA foreign_keys = ON")
+    .execute(&mut *conn)
+    .await?;
+  Ok(
+    sqlx::query_scalar("PRAGMA foreign_keys")
+      .fetch_one(conn)
+      .await?,
+  )
 }
 
 /// Columns of a [`MessageSummary`], read from `messages` aliased `m`.
@@ -2370,6 +2454,127 @@ mod tests {
     fn drop(&mut self) {
       let _ = std::fs::remove_dir_all(&self.0);
     }
+  }
+
+  /// A file repository whose writer is one connection, as in production,
+  /// with that writer pool for inspecting its connection.
+  async fn file_repo_with_writer() -> (MessageRepository, SqlitePool, TempDir) {
+    let dir = std::env::temp_dir().join(format!("rustmail-writer-{}", Ulid::new()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = format!("sqlite://{}?mode=rwc", dir.join("test.db").display());
+    let writer = sqlx::sqlite::SqlitePoolOptions::new()
+      .max_connections(1)
+      .connect_with(connect_options(&url).unwrap())
+      .await
+      .unwrap();
+    initialize_database(&writer).await.unwrap();
+    let readers = sqlx::sqlite::SqlitePoolOptions::new()
+      .connect_with(connect_options(&url).unwrap())
+      .await
+      .unwrap();
+    (
+      MessageRepository::with_writer(readers, writer.clone()),
+      writer,
+      TempDir(dir),
+    )
+  }
+
+  async fn writer_foreign_keys(writer: &SqlitePool) -> bool {
+    sqlx::query_scalar("PRAGMA foreign_keys")
+      .fetch_one(writer)
+      .await
+      .unwrap()
+  }
+
+  async fn insert_with_attachment(repo: &MessageRepository, subject: &str) -> String {
+    repo
+      .insert("a@t.com", &["b@t.com".into()], &multipart_email(subject))
+      .await
+      .unwrap()
+      .id
+  }
+
+  #[tokio::test]
+  async fn delete_all_leaves_the_writer_enforcing_foreign_keys() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    insert_with_attachment(&repo, "before").await;
+
+    repo.delete_all().await.unwrap();
+
+    assert!(writer_foreign_keys(&writer).await);
+    let id = insert_with_attachment(&repo, "after").await;
+    repo.delete(&id).await.unwrap();
+    assert_rows_follow_messages(&repo).await;
+    assert_eq!(attachment_rows(&repo).await, 0);
+  }
+
+  #[tokio::test]
+  async fn a_failed_delete_all_keeps_every_message_and_foreign_keys_on() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    let id = insert_with_attachment(&repo, "kept").await;
+    tag(&repo, &id, &["kept"]).await;
+    sqlx::query(
+      "CREATE TRIGGER refuse_tag_delete BEFORE DELETE ON message_tags \
+       BEGIN SELECT RAISE(ABORT, 'refused'); END",
+    )
+    .execute(&writer)
+    .await
+    .unwrap();
+
+    repo.delete_all().await.unwrap_err();
+
+    assert!(writer_foreign_keys(&writer).await);
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert_eq!(attachment_rows(&repo).await, 1);
+  }
+
+  #[tokio::test]
+  async fn a_writer_dropped_with_foreign_keys_off_is_closed_not_reused() {
+    let (_repo, writer, _dir) = file_repo_with_writer().await;
+    let mut conn = writer.acquire().await.unwrap();
+
+    drop(ForeignKeysOff::turn_off(&mut conn).await.unwrap());
+    drop(conn);
+
+    assert!(writer_foreign_keys(&writer).await);
+  }
+
+  #[tokio::test]
+  async fn mail_stored_between_delete_all_and_its_reclaim_keeps_its_attachments_in_order() {
+    let (repo, _writer, _dir) = file_repo_with_writer().await;
+    for index in 0..20 {
+      insert_with_attachment(&repo, &format!("old {index}")).await;
+    }
+    repo.delete_all().await.unwrap();
+    let raw = String::from_utf8(multipart_email("new"))
+      .unwrap()
+      .replace(
+        "--BOUNDARY--",
+        "--BOUNDARY\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename=\"second.pdf\"\r\n\r\nsecond\r\n--BOUNDARY--",
+      );
+    let id = repo
+      .insert("a@t.com", &["b@t.com".into()], raw.as_bytes())
+      .await
+      .unwrap()
+      .id;
+
+    repo.reclaim_after_delete_all().await;
+
+    let names: Vec<Option<String>> = repo
+      .get_attachments(&id)
+      .await
+      .unwrap()
+      .into_iter()
+      .map(|attachment| attachment.filename)
+      .collect();
+    assert_eq!(
+      names,
+      [
+        Some("report.pdf".to_string()),
+        Some("second.pdf".to_string())
+      ]
+    );
+    assert_eq!(repo.count().await.unwrap(), 1);
   }
 
   #[tokio::test]
