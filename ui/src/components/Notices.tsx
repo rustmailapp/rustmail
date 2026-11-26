@@ -1,5 +1,6 @@
 import { For } from "solid-js";
 import { dismissNotice, notices } from "../stores/notices";
+import { CloseIcon } from "./icons";
 
 /**
  * What the UI has to say about a write: one that did not land, or a release
@@ -30,19 +31,7 @@ export default function Notices() {
             aria-label="Dismiss notice"
             class="text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
           >
-            <svg
-              class="size-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              stroke-width="2.5"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M6 18L18 6M6 6l12 12"
-              />
-            </svg>
+            <CloseIcon class="size-3.5" strokeWidth={2.5} />
           </button>
         </div>
       )}

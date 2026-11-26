@@ -3,6 +3,7 @@ import Modal from "./Modal";
 import Kbd from "./Kbd";
 import { shortcutList } from "../lib/shortcuts";
 import { setShortcutsOpen, shortcutsOpen } from "../stores/commandPalette";
+import { CloseIcon } from "./icons";
 
 /** Every keyboard shortcut, listed in a dialog the command palette opens. */
 export default function KeyboardShortcuts() {
@@ -23,20 +24,7 @@ export default function KeyboardShortcuts() {
           aria-label="Close"
           class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
         >
-          <svg
-            class="size-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            stroke-width="2"
-            aria-hidden="true"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          </svg>
+          <CloseIcon class="size-4" />
         </button>
       </div>
       <dl class="px-6 py-4 space-y-2.5 text-xs">

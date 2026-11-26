@@ -2,7 +2,6 @@ import {
   createEffect,
   createSignal,
   createMemo,
-  For,
   on,
   onCleanup,
   onMount,
@@ -54,6 +53,7 @@ import DetailRail, {
 } from "./DetailRail";
 import {
   DownloadIcon,
+  EyeIcon,
   InfoIcon,
   PanelRightIcon,
   PaperclipIcon,
@@ -62,6 +62,7 @@ import {
   TrashIcon,
 } from "./icons";
 import Tooltip from "./Tooltip";
+import SegmentedControl, { type SegmentOption } from "./SegmentedControl";
 import { confirm } from "./ConfirmDialog";
 import { releaseTarget } from "../stores/server";
 import { relayLabel, release, releasing } from "../stores/release";
@@ -69,13 +70,11 @@ import { recordedRelease, releaseWarning } from "../lib/release";
 
 type View = "preview" | "text" | "raw";
 
-const VIEWS: readonly SwitchOption<View>[] = [
+const VIEWS: readonly SegmentOption<View>[] = [
   { id: "preview", label: "Preview" },
   { id: "text", label: "Text" },
   { id: "raw", label: "Raw" },
 ];
-
-type SwitchOption<T extends string> = { id: T; label: string };
 
 /**
  * Raw source fetched for the Raw view.
@@ -194,14 +193,14 @@ export default function MessageDetail() {
                 <MessageHeader message={msg()} reads={reads} />
                 <div class="flex items-center justify-between gap-3 px-5 pb-3">
                   <div class="flex flex-wrap items-center gap-2">
-                    <SegmentedSwitch
+                    <SegmentedControl
                       label="Message view"
                       options={VIEWS}
                       value={view()}
                       onChange={setView}
                     />
                     <Show when={view() === "preview" && msg().html_body}>
-                      <SegmentedSwitch
+                      <SegmentedControl
                         label="Preview width"
                         options={PREVIEW_WIDTHS}
                         value={previewWidth()}
@@ -340,24 +339,7 @@ function DetailsDrawer(props: { children: JSX.Element }) {
 function NothingSelected() {
   return (
     <div class="flex flex-col items-center justify-center h-full text-zinc-500">
-      <svg
-        class="size-10 mb-2 opacity-30"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        stroke-width="1.5"
-      >
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.64 0 8.577 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.64 0-8.577-3.007-9.963-7.178z"
-        />
-        <path
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-        />
-      </svg>
+      <EyeIcon class="size-10 mb-2 opacity-30" />
       <p class="text-sm">Select a message to view</p>
     </div>
   );
@@ -544,40 +526,6 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
           </Tooltip>
         </div>
       </div>
-    </div>
-  );
-}
-
-/** A row of toggle buttons, exactly one of them pressed. */
-function SegmentedSwitch<T extends string>(props: {
-  label: string;
-  options: readonly SwitchOption<T>[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div
-      role="group"
-      aria-label={props.label}
-      class="inline-flex rounded-lg bg-zinc-100 dark:bg-zinc-800/70 p-0.5"
-    >
-      <For each={props.options}>
-        {(option) => (
-          <button
-            onClick={() => props.onChange(option.id)}
-            aria-pressed={props.value === option.id}
-            class="rounded-md px-3 py-1 text-xs font-medium transition cursor-pointer"
-            classList={{
-              "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-50 shadow-sm":
-                props.value === option.id,
-              "text-zinc-600 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200":
-                props.value !== option.id,
-            }}
-          >
-            {option.label}
-          </button>
-        )}
-      </For>
     </div>
   );
 }

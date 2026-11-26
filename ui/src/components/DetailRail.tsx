@@ -30,7 +30,7 @@ import type {
   MessageSummary,
 } from "../lib/types";
 import { ReadState, settled, type PaneRead } from "./PaneRead";
-import { CopyIcon, PaperclipIcon } from "./icons";
+import { CopyIcon, PaperclipIcon, XMarkMiniIcon } from "./icons";
 
 /** The selection's reads that the rail shows, owned by the message pane. */
 export interface RailReads {
@@ -559,9 +559,7 @@ function TagEditor(props: { message: MessageSummary }) {
               aria-label={`Remove the tag ${tag}`}
               class="hover:text-red-500 dark:hover:text-red-400 transition cursor-pointer"
             >
-              <svg class="size-3" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
-              </svg>
+              <XMarkMiniIcon class="size-3" />
             </button>
           </span>
         )}

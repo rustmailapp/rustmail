@@ -60,6 +60,7 @@ import {
   setCommandPaletteOpen,
   setShortcutsOpen,
 } from "../stores/commandPalette";
+import { SearchIcon } from "./icons";
 
 /** The most messages a query lists, so a broad one stays readable. */
 const MAX_MESSAGE_RESULTS = 20;
@@ -257,20 +258,7 @@ function PaletteBody(props: { titleId: string }) {
         Command palette
       </h2>
       <div class="flex items-center gap-2.5 px-4 border-b border-zinc-200 dark:border-zinc-800">
-        <svg
-          class="size-4 shrink-0 text-zinc-500 dark:text-zinc-400"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          stroke-width="2"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"
-          />
-        </svg>
+        <SearchIcon class="size-4 shrink-0 text-zinc-500 dark:text-zinc-400" />
         <input
           ref={input}
           type="text"
