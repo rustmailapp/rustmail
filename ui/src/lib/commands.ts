@@ -2,6 +2,7 @@ import type { FilterState, MessageSummary } from "./types";
 import type { Theme } from "../stores/theme";
 import type { Palette } from "../stores/palette";
 import type { PreviewWidth } from "../stores/previewWidth";
+import type { Density } from "../stores/density";
 import { KEYS } from "./shortcuts";
 
 /** The app state that decides which commands the palette offers. */
@@ -19,6 +20,7 @@ export interface CommandState {
   palette: Palette;
   palettes: readonly { id: Palette; label: string }[];
   rusted: boolean;
+  density: Density;
   previewWidth: PreviewWidth;
   previewWidths: readonly { id: PreviewWidth; label: string }[];
 }
@@ -41,6 +43,7 @@ export interface CommandActions {
   setTheme(theme: Theme): void;
   setPalette(palette: Palette): void;
   setRusted(on: boolean): void;
+  toggleDensity(): void;
   setPreviewWidth(width: PreviewWidth): void;
   openSettings(): void;
   showShortcuts(): void;
@@ -173,6 +176,13 @@ function appearanceCommands(state: CommandState, actions: CommandActions) {
     label: state.rusted ? "Turn Rusted off" : "Turn Rusted on",
     keywords: "appearance texture",
     run: () => actions.setRusted(!state.rusted),
+  });
+  commands.push({
+    id: "density",
+    label:
+      state.density === "compact" ? "Density: Comfortable" : "Density: Compact",
+    keywords: "appearance toggle density layout rows",
+    run: actions.toggleDensity,
   });
   for (const width of state.previewWidths) {
     if (width.id === state.previewWidth) continue;
