@@ -41,6 +41,9 @@ rustmail-storage = { workspace = true }
 rustmail-api = { workspace = true }
 rustmail-tui = { workspace = true, optional = true }
 
+[target.'cfg(target_env = "musl")'.dependencies]
+mimalloc = "=0.1.52"
+
 [dev-dependencies]
 rustmail-smtp = { workspace = true, features = ["test-util"] }
 tokio = { workspace = true, features = ["test-util"] }

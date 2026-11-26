@@ -23,6 +23,10 @@ use rustmail_storage::{
 };
 use webhook::{WEBHOOK_QUEUE_CAPACITY, WEBHOOK_WORKERS, WebhookQueue};
 
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Parser)]
 #[command(
   name = "rustmail",
