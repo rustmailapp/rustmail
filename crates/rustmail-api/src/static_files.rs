@@ -5,6 +5,8 @@ use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use rust_embed::{Embed, EmbeddedFile};
 
+use crate::handlers::AppError;
+
 #[derive(Embed)]
 #[folder = "../../ui/dist"]
 #[exclude = ".DS_Store"]
@@ -40,11 +42,7 @@ pub async fn static_handler(uri: Uri, headers: HeaderMap) -> Response {
   let path = uri.path().trim_start_matches('/');
 
   if path.starts_with(API_PREFIX) {
-    return (
-      StatusCode::NOT_FOUND,
-      axum::Json(serde_json::json!({ "error": "Unknown API endpoint" })),
-    )
-      .into_response();
+    return AppError::NotFound("Unknown API endpoint".to_string()).into_response();
   }
 
   if let Some(file) = Assets::get(path) {
