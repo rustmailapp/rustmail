@@ -17,7 +17,11 @@ export const MAX_TAG_FILTERS = 20;
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 200;
 /** What the fake server says about itself on `GET /info`. */
-export const SERVER_INFO = { version: "0.0.0-test", smtp_port: 2525 };
+export const SERVER_INFO = {
+  version: "0.0.0-test",
+  smtp_port: 2525,
+  release: null,
+};
 const NO_AUTH_RESULTS = { dkim: [], spf: [], dmarc: [], arc: [] };
 
 function clampLimit(limit: number): number {

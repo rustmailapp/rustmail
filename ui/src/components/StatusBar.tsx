@@ -1,18 +1,11 @@
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-  Show,
-  type JSX,
-} from "solid-js";
+import { createMemo, createSignal, onCleanup, Show, type JSX } from "solid-js";
 import {
   hasMore,
   socketLive,
   total,
   visibleMessages,
 } from "../stores/messages";
-import * as api from "../lib/api";
+import { serverInfo } from "../stores/serverInfo";
 import {
   COPIED_FEEDBACK_MS,
   MANUAL_COPY_HINT,
@@ -52,7 +45,7 @@ function Hint(props: { keys: string[]; label: string }) {
  * reload that would fix a stale server fixes this too.
  */
 export default function StatusBar() {
-  const [info] = createResource(() => api.getInfo());
+  const info = serverInfo();
   const ready = () => (info.state === "ready" ? info() : undefined);
   const endpoint = () => {
     const server = ready();

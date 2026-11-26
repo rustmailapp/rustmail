@@ -1,4 +1,11 @@
-import { Show, onMount, onCleanup, createSignal } from "solid-js";
+import {
+  For,
+  Show,
+  onMount,
+  onCleanup,
+  createSignal,
+  createUniqueId,
+} from "solid-js";
 import Modal from "./Modal";
 
 export interface ConfirmDialogOptions {
@@ -6,6 +13,14 @@ export interface ConfirmDialogOptions {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Items the confirmation acts on, listed under the message. */
+  list?: { label: string; items: readonly string[] };
+  /**
+   * Whether Enter confirms. Off for an action that cannot be taken back:
+   * focus then starts on Cancel, so only a click or a deliberate Tab to the
+   * confirm button goes ahead.
+   */
+  enterConfirms?: boolean;
 }
 
 const [dialogState, setDialogState] = createSignal<{
@@ -33,8 +48,10 @@ function close(confirmed: boolean) {
 }
 
 export default function ConfirmDialog() {
+  const titleId = createUniqueId();
   function onKeyDown(e: KeyboardEvent) {
-    if (!dialogState()) return;
+    const state = dialogState();
+    if (!state || state.options.enterConfirms === false) return;
     if (e.key === "Enter") {
       e.stopPropagation();
       close(true);
@@ -48,27 +65,54 @@ export default function ConfirmDialog() {
     <Show when={dialogState()}>
       {(state) => (
         <Modal open={true} onClose={() => close(false)} maxWidth="max-w-sm">
-          <div class="px-6 pt-5 pb-2">
-            <h3 class="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
-              {state().options.title}
-            </h3>
-            <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
-              {state().options.message}
-            </p>
-          </div>
-          <div class="flex justify-end gap-2 px-6 py-4">
-            <button
-              onClick={() => close(false)}
-              class="rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
-            >
-              {state().options.cancelLabel ?? "Cancel"}
-            </button>
-            <button
-              onClick={() => close(true)}
-              class="btn-destructive rounded-md border px-3 py-1.5 text-xs font-medium transition cursor-pointer"
-            >
-              {state().options.confirmLabel ?? "Confirm"}
-            </button>
+          <div role="dialog" aria-modal="true" aria-labelledby={titleId}>
+            <div class="px-6 pt-5 pb-2">
+              <h3
+                id={titleId}
+                class="text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+              >
+                {state().options.title}
+              </h3>
+              <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+                {state().options.message}
+              </p>
+              <Show when={state().options.list}>
+                {(list) => (
+                  <div class="mt-3">
+                    <p class="text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                      {list().label}
+                    </p>
+                    <ul
+                      aria-label={list().label}
+                      class="mt-1 max-h-40 overflow-y-auto rounded-md border border-zinc-200 dark:border-zinc-700 px-2.5 py-1.5 font-mono text-xs text-zinc-800 dark:text-zinc-200"
+                    >
+                      <For each={list().items}>
+                        {(item) => <li class="break-all py-0.5">{item}</li>}
+                      </For>
+                    </ul>
+                  </div>
+                )}
+              </Show>
+            </div>
+            <div class="flex justify-end gap-2 px-6 py-4">
+              <button
+                ref={(button) => {
+                  if (state().options.enterConfirms === false) {
+                    queueMicrotask(() => button.focus());
+                  }
+                }}
+                onClick={() => close(false)}
+                class="rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
+              >
+                {state().options.cancelLabel ?? "Cancel"}
+              </button>
+              <button
+                onClick={() => close(true)}
+                class="btn-destructive rounded-md border px-3 py-1.5 text-xs font-medium transition cursor-pointer"
+              >
+                {state().options.confirmLabel ?? "Confirm"}
+              </button>
+            </div>
           </div>
         </Modal>
       )}

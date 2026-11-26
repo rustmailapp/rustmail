@@ -7,6 +7,8 @@ import type {
   ListResponse,
   Message,
   MessageHeader,
+  ReleaseTarget,
+  ServerInfo,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -22,6 +24,18 @@ export const REQUEST_TIMEOUT_MS = 15_000;
  * to a read's deadline it would abort a delete that was going to succeed.
  */
 export const BULK_REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a release may take.
+ *
+ * Past the server's own 30 s limit on the relay exchange, so the server
+ * reports the outcome before the browser stops listening. A release cut off
+ * by this deadline may still have been delivered.
+ */
+export const RELEASE_REQUEST_TIMEOUT_MS = 45_000;
+
+/** The `code` a release that timed out on the server answers with. */
+export const RELEASE_OUTCOME_UNKNOWN_CODE = "release_outcome_unknown";
 
 /**
  * Runs `request` under a deadline, and under `signal` if the caller gave one.
@@ -337,10 +351,30 @@ export async function getHeaders(
   );
 }
 
-/** Fetches the running server's version and SMTP port. */
-export async function getInfo(
-  signal?: AbortSignal,
-): Promise<z.infer<typeof schema.serverInfo>> {
+/**
+ * Forwards a captured message to the release relay, to its whole envelope.
+ *
+ * `target` is the relay the user confirmed: the server refuses any other, so
+ * a server restarted with a different relay rejects the send instead of
+ * delivering through a relay nobody saw.
+ */
+export async function releaseMessage(
+  id: string,
+  target: ReleaseTarget,
+): Promise<void> {
+  await fetchVoid(
+    `${BASE}/messages/${enc(id)}/release`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ host: target.host, port: target.port }),
+    },
+    RELEASE_REQUEST_TIMEOUT_MS,
+  );
+}
+
+/** Fetches the running server's version, SMTP port and release relay. */
+export async function getInfo(signal?: AbortSignal): Promise<ServerInfo> {
   return fetchJson("GET /info", `${BASE}/info`, schema.serverInfo, {
     signal,
   });

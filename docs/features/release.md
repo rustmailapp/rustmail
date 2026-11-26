@@ -22,6 +22,21 @@ RUSTMAIL_RELEASE_HOST=smtp.example.com:587 rustmail serve
 
 The `--release-host` value is an allowlist: only this exact host (and port, if specified) can be used as a release target. This prevents SSRF.
 
+## Web UI
+
+When release is enabled, the message toolbar shows a **Release** button (a paper plane) next to star, download and delete. Without `--release-host` the button is not shown.
+
+Clicking it opens a confirmation that names the relay (`host:port`) and lists every envelope recipient the message will be sent to, Bcc recipients included: release reuses the captured envelope, not the `To` and `Cc` headers. Enter does not confirm and focus starts on **Cancel**; there is no keyboard shortcut for release.
+
+While a release is in flight the button is disabled. The outcome appears as a notice:
+
+- **Released**: the relay accepted the message.
+- **Refused** (`400`, `403`): the server sent nothing.
+- **Failed** (`502`): the relay could not be reached or refused the message.
+- **Outcome unknown**: the relay did not answer within 30 seconds (`504`), the browser lost the connection, or the server answered any other error. The relay may already have the message, so check it before releasing the same message again. This notice stays until you dismiss it.
+
+The UI reads the relay from [`GET /api/v1/info`](#server-info) and sends that exact host and port, so a server restarted with a different relay rejects the release instead of sending through a relay you did not confirm.
+
 ## Endpoint
 
 ```
@@ -45,6 +60,22 @@ Success response:
 { "released": true }
 ```
 
+The whole exchange with the relay is limited to 30 seconds. Past that the server answers `504` with `"code": "release_outcome_unknown"`. The server does not track how far the exchange got, so a relay that stalled before the message was sent gets the same answer: check the relay before retrying.
+
+## Server info
+
+`GET /api/v1/info` reports the release relay, or `null` while release is disabled:
+
+```json
+{
+  "version": "0.8.1",
+  "smtp_port": 1025,
+  "release": { "host": "smtp.example.com", "port": 587 }
+}
+```
+
+`port` is the configured port, or `587` when `--release-host` has none.
+
 ## Security Model
 
 Release is locked down to prevent misuse:
@@ -63,3 +94,4 @@ Release is locked down to prevent misuse:
 | `403` | Release disabled, host mismatch, or port mismatch |
 | `404` | Message not found |
 | `502` | TLS setup failure or SMTP delivery failure |
+| `504` | The relay did not finish within 30 seconds; the message may have been delivered |

@@ -18,6 +18,8 @@ export type MessageHeader = z.infer<typeof schema.messageHeader>;
 export type AuthCheck = z.infer<typeof schema.authCheck>;
 export type AuthResults = z.infer<typeof schema.authResults>;
 export type WsEvent = z.infer<typeof schema.wsEvent>;
+export type ServerInfo = z.infer<typeof schema.serverInfo>;
+export type ReleaseTarget = z.infer<typeof schema.releaseTarget>;
 
 export interface FilterState {
   starred: boolean;
