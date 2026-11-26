@@ -392,17 +392,25 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
       </div>
       <div class="flex items-center gap-2 shrink-0">
         <Show when={wideLayout()}>
-          <button
-            id={RAIL_TOGGLE_ID}
-            onClick={toggleDetails}
-            aria-label="Details"
-            aria-expanded={detailsRailOpen()}
-            aria-controls={DETAILS_ID}
-            title={detailsRailOpen() ? "Hide details (i)" : "Show details (i)"}
-            class="rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-1.5 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+          <Tooltip
+            label={detailsRailOpen() ? "Hide details" : "Show details"}
+            shortcut="i"
           >
-            <PanelRightIcon class="size-4" />
-          </button>
+            {(trigger) => (
+              <button
+                ref={trigger.ref}
+                id={RAIL_TOGGLE_ID}
+                onClick={toggleDetails}
+                aria-label="Details"
+                aria-describedby={trigger.describedBy}
+                aria-expanded={detailsRailOpen()}
+                aria-controls={DETAILS_ID}
+                class="rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-1.5 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+              >
+                <PanelRightIcon class="size-4" />
+              </button>
+            )}
+          </Tooltip>
         </Show>
         <Show when={!wideLayout()}>
           <button

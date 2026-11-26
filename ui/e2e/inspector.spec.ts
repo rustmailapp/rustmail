@@ -169,6 +169,26 @@ test.describe("details rail", () => {
     await expect(railButton(page)).toBeFocused();
   });
 
+  test("describes the rail button with a tooltip that follows the state", async ({
+    page,
+  }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    const button = railButton(page);
+
+    await button.hover();
+
+    const hide = page.getByRole("tooltip", { name: /Hide details/ });
+    await expect(hide).toBeVisible();
+    await expect(hide.locator("kbd")).toHaveText("i");
+    await expect(button).toHaveAccessibleDescription(/^Hide details/);
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeHidden();
+    await expect(button).toHaveAccessibleDescription(/^Show details/);
+  });
+
   test("the rail button toggles it too", async ({ page }) => {
     await mockInbox(page, INBOX_SIZE);
     await page.goto("/");
