@@ -45,7 +45,7 @@ test.describe("rusted easter egg", () => {
   test("stays out of Settings while off", async ({ page }) => {
     await openInbox(page);
 
-    await page.getByTitle("Settings").click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
 
     await expect(page.getByText("Palette")).toBeVisible();
     await expect(page.getByText("Rusted · On")).toHaveCount(0);
@@ -60,7 +60,7 @@ test.describe("rusted easter egg", () => {
     await openInbox(page);
     expect(await rootIsRusted(page)).toBe(true);
 
-    await page.getByTitle("Settings").click();
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await expect(page.getByText("Rusted · On")).toBeVisible();
     await turnOff(page).click();
 
