@@ -231,12 +231,7 @@ mod tests {
     let _only_connection = pool.acquire().await.unwrap();
     let app = short_timeout_router(&pool);
     let reads = spec().operations().into_iter().filter(|operation| {
-      operation.method == Method::GET.as_str()
-        && !UNTIMED_READS.contains(&operation.path.as_str())
-        && spec()
-          .responses(operation)
-          .iter()
-          .any(|(status, _)| *status == StatusCode::SERVICE_UNAVAILABLE.as_u16())
+      operation.method == Method::GET.as_str() && !UNTIMED_READS.contains(&operation.path.as_str())
     });
 
     for operation in reads {
