@@ -1,3 +1,5 @@
+mod webhook;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -19,6 +21,7 @@ use rustmail_smtp::{
 use rustmail_storage::{
   MessageRepository, MessageSummary, PreparedMessage, format_iso8601, initialize_database,
 };
+use webhook::{WEBHOOK_QUEUE_CAPACITY, WEBHOOK_WORKERS, WebhookQueue};
 
 #[derive(Parser)]
 #[command(
@@ -1104,9 +1107,14 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     validate_webhook_url(url)?;
   }
 
-  let webhook_client = args.webhook_url.as_ref().map(|_| reqwest::Client::new());
-  let webhook_url = args.webhook_url.clone();
-  let webhook_semaphore = Arc::new(tokio::sync::Semaphore::new(10));
+  let mut webhook_queue = args.webhook_url.clone().map(|url| {
+    WebhookQueue::spawn(
+      reqwest::Client::new(),
+      url,
+      WEBHOOK_WORKERS,
+      WEBHOOK_QUEUE_CAPACITY,
+    )
+  });
 
   let (stop_processor, processor_stop) = oneshot::channel::<()>();
   let mut message_processor = {
@@ -1117,28 +1125,8 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
       let mut batch = Vec::with_capacity(MAX_BATCH_MESSAGES);
       while next_batch(&mut smtp_rx, &mut stop, &mut batch).await {
         let stored = process_batch(&repo, &state, std::mem::take(&mut batch)).await;
-        let (Some(client), Some(url)) = (&webhook_client, &webhook_url) else {
-          continue;
-        };
-        for payload in stored {
-          let client = client.clone();
-          let url = url.clone();
-          let sem = webhook_semaphore.clone();
-          tokio::spawn(async move {
-            let _permit = match sem.acquire().await {
-              Ok(p) => p,
-              Err(_) => return,
-            };
-            if let Err(e) = client
-              .post(&url)
-              .json(&payload)
-              .timeout(std::time::Duration::from_secs(5))
-              .send()
-              .await
-            {
-              tracing::warn!(error = %e, "Webhook delivery failed");
-            }
-          });
+        if let Some(queue) = webhook_queue.as_mut() {
+          queue.enqueue_batch(stored);
         }
       }
     })
