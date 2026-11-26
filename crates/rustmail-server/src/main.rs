@@ -847,10 +847,10 @@ fn build_smtp_tls_config(cert: Option<&Path>, key: Option<&Path>) -> Result<Opti
   }
 }
 
-fn validate_webhook_url(url: &str) -> Result<()> {
+fn validate_webhook_url(url: &str) -> Result<reqwest::Url> {
   let parsed: reqwest::Url = url
     .parse()
-    .map_err(|_| anyhow::anyhow!("invalid webhook URL: {}", url))?;
+    .map_err(|e| anyhow::anyhow!("invalid webhook URL: {e}"))?;
 
   match parsed.scheme() {
     "http" | "https" => {}
@@ -860,9 +860,10 @@ fn validate_webhook_url(url: &str) -> Result<()> {
   let host = parsed
     .host_str()
     .ok_or_else(|| anyhow::anyhow!("webhook URL has no host"))?;
+  let origin = format!("{}://{host}", parsed.scheme());
 
   if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
-    anyhow::bail!("webhook URL must not point to localhost: {}", url);
+    anyhow::bail!("webhook URL must not point to localhost: {}", origin);
   }
 
   if let Ok(ip) = host.parse::<std::net::IpAddr>()
@@ -870,11 +871,11 @@ fn validate_webhook_url(url: &str) -> Result<()> {
   {
     anyhow::bail!(
       "webhook URL must not point to a private/reserved IP: {}",
-      url
+      origin
     );
   }
 
-  Ok(())
+  Ok(parsed)
 }
 
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
@@ -1113,11 +1114,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   };
   let smtp_server = SmtpServer::new(smtp_config, smtp_tx);
 
-  if let Some(ref url) = args.webhook_url {
-    validate_webhook_url(url)?;
-  }
+  let webhook_url = args
+    .webhook_url
+    .as_deref()
+    .map(validate_webhook_url)
+    .transpose()?;
 
-  let mut webhook_queue = args.webhook_url.clone().map(|url| {
+  let mut webhook_queue = webhook_url.map(|url| {
     WebhookQueue::spawn(
       reqwest::Client::new(),
       url,
@@ -1264,6 +1267,46 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod webhook_url_tests {
+  use super::*;
+
+  fn rejection(url: &str) -> String {
+    format!("{:#}", validate_webhook_url(url).unwrap_err())
+  }
+
+  #[test]
+  fn a_localhost_rejection_names_scheme_and_host_only() {
+    let message = rejection("http://user:secret@localhost:9000/secret-path?token=secret");
+    assert_eq!(
+      message,
+      "webhook URL must not point to localhost: http://localhost"
+    );
+  }
+
+  #[test]
+  fn a_private_ip_rejection_names_scheme_and_host_only() {
+    let message = rejection("https://10.0.0.5/secret-path?token=secret");
+    assert_eq!(
+      message,
+      "webhook URL must not point to a private/reserved IP: https://10.0.0.5"
+    );
+  }
+
+  #[test]
+  fn an_unparseable_url_is_rejected_without_echoing_it() {
+    let message = rejection("http://user:secret@[not-a-host/secret-path");
+    assert!(message.starts_with("invalid webhook URL: "), "{message}");
+    assert!(!message.contains("secret"), "{message}");
+  }
+
+  #[test]
+  fn a_public_url_is_accepted_whole() {
+    let url = validate_webhook_url("https://hooks.example.com/email?token=abc").unwrap();
+    assert_eq!(url.as_str(), "https://hooks.example.com/email?token=abc");
+  }
 }
 
 #[cfg(test)]
