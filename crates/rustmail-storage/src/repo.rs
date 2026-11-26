@@ -3241,7 +3241,7 @@ mod tests {
       "the tags-only count reads more than message_tags: {plan:?}"
     );
     assert!(
-      !plan.iter().any(|step| step.starts_with("USE TEMP B-TREE")),
+      !plan.iter().any(|step| step.contains("TEMP B-TREE")),
       "the tags-only count collects its matches in a temporary table: {plan:?}"
     );
   }
@@ -3254,8 +3254,8 @@ mod tests {
     for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
       let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_string()).await;
       assert!(
-        !sorts_for_order_by(&plan),
-        "{start:?}: the tagged page sorts its matches: {plan:?}"
+        !plan.iter().any(|step| step.contains("TEMP B-TREE")),
+        "{start:?}: the tagged page sorts or collects its matches: {plan:?}"
       );
     }
   }
