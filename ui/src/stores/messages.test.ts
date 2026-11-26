@@ -2183,12 +2183,6 @@ describe("a superseded list read", () => {
   });
 });
 
-/**
- * A deletion is reported twice, over two connections that do not order
- * themselves: once by the DELETE response, once by the `message:delete` event.
- * These cover both arrival orders, and the case where the event is about a
- * message this client never asked to delete.
- */
 describe("a bulk deletion", () => {
   const rows = [400, 401, 402, 403].map((n) => message(n));
 
@@ -2251,6 +2245,12 @@ describe("a bulk deletion", () => {
   });
 });
 
+/**
+ * A deletion is reported twice, over two connections that do not order
+ * themselves: once by the DELETE response, once by the `message:delete` event.
+ * These cover both arrival orders, and the case where the event is about a
+ * message this client never asked to delete.
+ */
 describe("a deletion reported over both connections", () => {
   beforeEach(async () => {
     useFakeClock();
