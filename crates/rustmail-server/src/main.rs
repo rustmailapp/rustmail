@@ -847,7 +847,7 @@ fn build_smtp_tls_config(cert: Option<&Path>, key: Option<&Path>) -> Result<Opti
   }
 }
 
-fn validate_webhook_url(url: &str) -> Result<()> {
+fn validate_webhook_url(url: &str) -> Result<reqwest::Url> {
   let parsed: reqwest::Url = url
     .parse()
     .map_err(|_| anyhow::anyhow!("invalid webhook URL: {}", url))?;
@@ -874,7 +874,7 @@ fn validate_webhook_url(url: &str) -> Result<()> {
     );
   }
 
-  Ok(())
+  Ok(parsed)
 }
 
 fn is_private_ip(ip: std::net::IpAddr) -> bool {
@@ -1103,11 +1103,13 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   };
   let smtp_server = SmtpServer::new(smtp_config, smtp_tx);
 
-  if let Some(ref url) = args.webhook_url {
-    validate_webhook_url(url)?;
-  }
+  let webhook_url = args
+    .webhook_url
+    .as_deref()
+    .map(validate_webhook_url)
+    .transpose()?;
 
-  let mut webhook_queue = args.webhook_url.clone().map(|url| {
+  let mut webhook_queue = webhook_url.map(|url| {
     WebhookQueue::spawn(
       reqwest::Client::new(),
       url,

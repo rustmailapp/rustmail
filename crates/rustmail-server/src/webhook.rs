@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use reqwest::Url;
 use serde::Serialize;
 use tokio::sync::{Mutex, mpsc};
 use tracing::warn;
@@ -25,10 +26,10 @@ pub struct WebhookQueue<T> {
 impl<T: Serialize + Send + 'static> WebhookQueue<T> {
   /// Starts `workers` tasks posting to `url`. They stop once the queue is
   /// dropped and drained.
-  pub fn spawn(client: reqwest::Client, url: String, workers: usize, capacity: usize) -> Self {
+  pub fn spawn(client: reqwest::Client, url: Url, workers: usize, capacity: usize) -> Self {
     let (tx, rx) = mpsc::channel(capacity);
     let rx = Arc::new(Mutex::new(rx));
-    let url: Arc<str> = url.into();
+    let url = Arc::new(url);
     for _ in 0..workers {
       tokio::spawn(run_worker(client.clone(), url.clone(), rx.clone()));
     }
@@ -61,7 +62,7 @@ impl<T: Serialize + Send + 'static> WebhookQueue<T> {
 
 async fn run_worker<T: Serialize>(
   client: reqwest::Client,
-  url: Arc<str>,
+  url: Arc<Url>,
   rx: Arc<Mutex<mpsc::Receiver<T>>>,
 ) {
   loop {
@@ -69,13 +70,17 @@ async fn run_worker<T: Serialize>(
       return;
     };
     if let Err(e) = client
-      .post(&*url)
+      .post(url.as_str())
       .json(&payload)
       .timeout(WEBHOOK_TIMEOUT)
       .send()
       .await
     {
-      warn!(error = %e, "Webhook delivery failed");
+      warn!(
+        error = %e.without_url(),
+        host = url.host_str(),
+        "Webhook delivery failed"
+      );
     }
   }
 }
@@ -127,7 +132,7 @@ mod tests {
   #[tokio::test]
   async fn a_stalled_webhook_drops_what_does_not_fit_in_the_queue() {
     let (url, mut requests) = stalling_webhook().await;
-    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url, 1, 2);
+    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url.parse().unwrap(), 1, 2);
 
     assert_eq!(queue.enqueue_batch(vec![0]), 0);
     let _in_flight = tokio::time::timeout(WAIT, requests.recv())
@@ -143,7 +148,7 @@ mod tests {
   #[tokio::test]
   async fn a_stalled_webhook_holds_at_most_one_request_per_worker() {
     let (url, mut requests) = stalling_webhook().await;
-    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url, 2, 8);
+    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url.parse().unwrap(), 2, 8);
 
     assert_eq!(queue.enqueue_batch((0..8).collect()), 0);
     let mut in_flight = Vec::new();
@@ -166,7 +171,7 @@ mod tests {
   #[tokio::test]
   async fn every_queued_notification_reaches_a_healthy_webhook() {
     let (url, mut bodies) = recording_webhook().await;
-    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url, 3, 16);
+    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url.parse().unwrap(), 3, 16);
 
     assert_eq!(queue.enqueue_batch((0..10).collect::<Vec<u32>>()), 0);
 
@@ -180,5 +185,55 @@ mod tests {
     }
     received.sort_unstable();
     assert_eq!(received, (0..10).collect::<Vec<u64>>());
+  }
+
+  #[derive(Clone, Default)]
+  struct CapturedLogs(Arc<std::sync::Mutex<Vec<u8>>>);
+
+  impl CapturedLogs {
+    fn text(&self) -> String {
+      String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+    }
+  }
+
+  impl std::io::Write for CapturedLogs {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+      self.0.lock().unwrap().extend_from_slice(buf);
+      Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+      Ok(())
+    }
+  }
+
+  #[tokio::test]
+  async fn a_failed_delivery_logs_the_host_but_not_the_url() {
+    let logs = CapturedLogs::default();
+    let writer = logs.clone();
+    let subscriber = tracing_subscriber::fmt()
+      .with_writer(move || writer.clone())
+      .with_ansi(false)
+      .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = closed.local_addr().unwrap();
+    drop(closed);
+    let url = format!("http://{addr}/hook-secret-path?token=secret-token");
+    let mut queue = WebhookQueue::spawn(reqwest::Client::new(), url.parse().unwrap(), 1, 1);
+
+    assert_eq!(queue.enqueue_batch(vec![0]), 0);
+    tokio::time::timeout(WAIT, async {
+      while !logs.text().contains("Webhook delivery failed") {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+      }
+    })
+    .await
+    .unwrap();
+
+    let text = logs.text();
+    assert!(text.contains("host=\"127.0.0.1\""), "{text}");
+    assert!(!text.contains("secret"), "{text}");
   }
 }
