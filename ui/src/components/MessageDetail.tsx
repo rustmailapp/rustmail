@@ -1,7 +1,9 @@
 import {
+  createEffect,
   createSignal,
   createMemo,
   For,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -83,6 +85,7 @@ const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
 const SELECTION_SETTLE_MS = 120;
 
 const DETAILS_ID = "message-details";
+const RAIL_TOGGLE_ID = "details-rail-toggle";
 const HUE_TURN = 360;
 const MESSAGE_LIST_SELECTOR = '[role="listbox"][aria-label="Messages"]';
 
@@ -149,6 +152,21 @@ export default function MessageDetail() {
     return list === undefined ? undefined : downloadable(list);
   });
   const toggleHeaders = () => setHeadersOpen((open) => !open);
+  let rail: HTMLElement | undefined;
+
+  createEffect(
+    on(
+      detailsRailOpen,
+      (open) => {
+        if (open || !rail?.contains(document.activeElement)) return;
+        const target =
+          document.getElementById(RAIL_TOGGLE_ID) ??
+          document.querySelector<HTMLElement>(MESSAGE_LIST_SELECTOR);
+        target?.focus({ preventScroll: true });
+      },
+      { defer: true },
+    ),
+  );
 
   return (
     <>
@@ -218,6 +236,7 @@ export default function MessageDetail() {
       </section>
       <Show when={wideLayout()}>
         <aside
+          ref={rail}
           id={DETAILS_ID}
           aria-label="Message details"
           class="details-rail app-panel shrink-0 overflow-hidden"
@@ -374,6 +393,7 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
       <div class="flex items-center gap-2 shrink-0">
         <Show when={wideLayout()}>
           <button
+            id={RAIL_TOGGLE_ID}
             onClick={toggleDetails}
             aria-label="Details"
             aria-expanded={detailsRailOpen()}

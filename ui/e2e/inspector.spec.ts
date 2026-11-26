@@ -21,7 +21,7 @@ function messagePane(page: Page) {
 }
 
 function railButton(page: Page) {
-  return page.getByRole("button", { name: "Details" });
+  return page.getByRole("button", { name: "Details", exact: true });
 }
 
 function heading(page: Page, subject: string) {
@@ -151,6 +151,22 @@ test.describe("details rail", () => {
 
     await expect(details(page)).toBeVisible();
     await expect(button).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("hands focus to the rail button when it collapses around it", async ({
+    page,
+  }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    const showHeaders = details(page).getByRole("button", {
+      name: "Show headers",
+    });
+    await showHeaders.focus();
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeHidden();
+    await expect(railButton(page)).toBeFocused();
   });
 
   test("the rail button toggles it too", async ({ page }) => {

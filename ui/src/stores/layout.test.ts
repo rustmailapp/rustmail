@@ -131,6 +131,9 @@ describe("crossing the wide layout boundary", () => {
 
     expect(detailsDrawerOpen()).toBe(false);
     expect(detailsRailOpen()).toBe(false);
+    toggleDetails();
+    expect(detailsDrawerOpen()).toBe(true);
+    expect(storage.get(STORAGE_KEY)).toBe("collapsed");
   });
 
   it("does not collapse the rail from an open drawer", async () => {
