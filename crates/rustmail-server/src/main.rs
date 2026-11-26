@@ -951,9 +951,9 @@ fn parse_release_host(s: &str) -> Result<(String, Option<u16>)> {
     let (addr, after) = rest
       .split_once(']')
       .ok_or_else(|| anyhow::anyhow!("release host {s:?} opens a bracket it never closes"))?;
-    let addr: std::net::Ipv6Addr = addr
-      .parse()
-      .map_err(|_| anyhow::anyhow!("release host {s:?} has no IPv6 address in its brackets"))?;
+    if addr.parse::<std::net::Ipv6Addr>().is_err() {
+      anyhow::bail!("release host {s:?} has no IPv6 address in its brackets");
+    }
     let port = match after {
       "" => None,
       _ => {
@@ -975,10 +975,10 @@ fn parse_release_host(s: &str) -> Result<(String, Option<u16>)> {
       Ok((host.to_string(), Some(parse_release_port(s, port)?)))
     }
     Some(_) => {
-      let addr: std::net::Ipv6Addr = s.parse().map_err(|_| {
-        anyhow::anyhow!("release host {s:?} is not an IPv6 address; write a port as [addr]:port")
-      })?;
-      Ok((addr.to_string(), None))
+      if s.parse::<std::net::Ipv6Addr>().is_err() {
+        anyhow::bail!("release host {s:?} is not an IPv6 address; write a port as [addr]:port");
+      }
+      Ok((s.to_string(), None))
     }
   }
 }
@@ -1356,6 +1356,15 @@ mod release_host_tests {
   fn a_bracketed_ipv6_address_loses_its_brackets() {
     assert_eq!(parsed("[::1]:2525"), ("::1".into(), Some(2525)));
     assert_eq!(parsed("[2001:db8::25]"), ("2001:db8::25".into(), None));
+  }
+
+  #[test]
+  fn an_ipv6_address_is_kept_as_written() {
+    assert_eq!(parsed("2001:0DB8::0025"), ("2001:0DB8::0025".into(), None));
+    assert_eq!(
+      parsed("[2001:0DB8::0025]:587"),
+      ("2001:0DB8::0025".into(), Some(587))
+    );
   }
 
   #[test]

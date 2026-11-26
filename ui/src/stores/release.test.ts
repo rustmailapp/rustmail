@@ -21,7 +21,8 @@ vi.mock("./messages", () => ({ recordRelease }));
 
 const { ApiError, ReleaseError, RELEASE_OUTCOME_UNKNOWN_CODE } =
   await import("../lib/api");
-const { release, releaseFailure, releasing } = await import("./release");
+const { relayLabel, release, releaseFailure, releasing } =
+  await import("./release");
 const { NOTICE_TTL_MS } = await import("./notices");
 
 const TARGET = { host: "smtp.example.test", port: 465 };
@@ -198,5 +199,17 @@ describe("releaseFailure", () => {
   it("says nothing was sent when the server refused before sending", () => {
     expect(releaseFailure(rejection(400), RELAY)).toMatch(/Nothing was sent/);
     expect(releaseFailure(rejection(403), RELAY)).toMatch(/Nothing was sent/);
+  });
+});
+
+describe("relayLabel", () => {
+  it("joins a name and its port", () => {
+    expect(relayLabel(TARGET)).toBe(RELAY);
+  });
+
+  it("brackets an IPv6 host so the port stays readable", () => {
+    expect(relayLabel({ host: "2001:db8::25", port: 587 })).toBe(
+      "[2001:db8::25]:587",
+    );
   });
 });
