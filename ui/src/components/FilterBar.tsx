@@ -1,4 +1,12 @@
-import { For, Show, createSignal, onCleanup, createEffect, on } from "solid-js";
+import {
+  For,
+  Show,
+  createSignal,
+  createUniqueId,
+  onCleanup,
+  createEffect,
+  on,
+} from "solid-js";
 import { Portal } from "solid-js/web";
 import {
   search,
@@ -28,6 +36,7 @@ function Chip(props: {
   return (
     <button
       onClick={props.onClick}
+      aria-pressed={props.active}
       class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer select-none ${
         props.active
           ? props.activeClass
@@ -35,7 +44,9 @@ function Chip(props: {
       }`}
     >
       <Show when={props.icon}>
-        <span class="text-[10px]">{props.icon}</span>
+        <span class="text-[10px]" aria-hidden="true">
+          {props.icon}
+        </span>
       </Show>
       {props.label}
     </button>
@@ -46,6 +57,7 @@ function TagDropdown() {
   const [open, setOpen] = createSignal(false);
   const [pos, setPos] = createSignal({ top: 0, left: 0 });
   const [tagQuery, setTagQuery] = createSignal("");
+  const menuId = createUniqueId();
   let triggerRef: HTMLButtonElement | undefined;
   let dropdownRef: HTMLDivElement | undefined;
 
@@ -72,10 +84,21 @@ function TagDropdown() {
     }
   }
 
+  /** Closes the menu, handing focus back to the trigger if the menu had it. */
+  function close() {
+    const focused = document.activeElement;
+    const focusWasInside =
+      focused === null ||
+      focused === document.body ||
+      (dropdownRef?.contains(focused) ?? false);
+    setOpen(false);
+    if (focusWasInside) triggerRef?.focus();
+  }
+
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape" && open()) {
       e.stopPropagation();
-      setOpen(false);
+      close();
     }
   }
 
@@ -86,6 +109,11 @@ function TagDropdown() {
         if (isOpen) {
           setTagQuery("");
           updatePosition();
+          queueMicrotask(() =>
+            dropdownRef
+              ?.querySelector<HTMLElement>("input, button:not(:disabled)")
+              ?.focus(),
+          );
           window.addEventListener("scroll", updatePosition, true);
           window.addEventListener("resize", updatePosition);
           document.addEventListener("mousedown", handleClickOutside);
@@ -108,6 +136,8 @@ function TagDropdown() {
       <button
         ref={triggerRef}
         onClick={() => setOpen(!open())}
+        aria-expanded={open()}
+        aria-controls={open() ? menuId : undefined}
         class={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-medium border transition-colors cursor-pointer select-none ${
           filters().tags.length > 0
             ? "bg-orange-50 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-500/30"
@@ -120,6 +150,7 @@ function TagDropdown() {
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <path
             stroke-linecap="round"
@@ -144,6 +175,7 @@ function TagDropdown() {
           fill="none"
           stroke="currentColor"
           stroke-width="2"
+          aria-hidden="true"
         >
           <path
             stroke-linecap="round"
@@ -157,6 +189,9 @@ function TagDropdown() {
         <Portal>
           <div
             ref={dropdownRef}
+            id={menuId}
+            role="group"
+            aria-label="Tags"
             class="fixed z-50 min-w-[180px] max-h-[240px] overflow-y-auto rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
             style={{ top: `${pos().top}px`, left: `${pos().left}px` }}
           >
@@ -172,10 +207,10 @@ function TagDropdown() {
                 <div class="border-b border-zinc-100 dark:border-zinc-800 p-1.5">
                   <input
                     type="text"
-                    ref={(el) => queueMicrotask(() => el.focus())}
                     value={tagQuery()}
                     onInput={(e) => setTagQuery(e.currentTarget.value)}
                     placeholder="Filter tags..."
+                    aria-label="Filter tags"
                     class="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none focus:border-zinc-400 dark:focus:border-zinc-600"
                   />
                 </div>
@@ -195,10 +230,12 @@ function TagDropdown() {
                       return (
                         <button
                           onClick={() => toggleTagFilter(tag)}
+                          aria-pressed={isSelected()}
                           disabled={!isSelected() && tagFiltersFull()}
-                          class="flex items-center gap-2 w-full px-3 py-1.5 text-left text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                          class="flex items-center gap-2 w-full px-3 py-1.5 text-left focus-visible:-outline-offset-2 text-xs hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                         >
                           <div
+                            aria-hidden="true"
                             class={`size-3.5 rounded border flex items-center justify-center transition-colors ${
                               isSelected()
                                 ? "bg-orange-500 border-orange-500"
@@ -246,7 +283,7 @@ function TagDropdown() {
                   <button
                     onClick={() => {
                       clearTagFilters();
-                      setOpen(false);
+                      close();
                     }}
                     class="text-[11px] text-zinc-500 dark:text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition cursor-pointer"
                   >
@@ -292,6 +329,7 @@ export default function FilterBar() {
         <input
           type="text"
           placeholder="Search emails..."
+          aria-label="Search messages"
           value={search()}
           onInput={(e) => onSearchInput(e.currentTarget.value)}
           class="w-full rounded-md border border-zinc-200 dark:border-zinc-700/60 bg-zinc-50 dark:bg-zinc-950/40 pl-8 pr-3 py-1.5 text-sm text-zinc-800 dark:text-zinc-200 placeholder-zinc-500 dark:placeholder-zinc-400 outline-none focus:border-zinc-400 dark:focus:border-zinc-500 transition"

@@ -569,6 +569,7 @@ function TagEditor(props: { message: MessageSummary }) {
       <input
         type="text"
         placeholder="Add tag..."
+        aria-label="Add tag"
         value={input()}
         onInput={(e) => setInput(e.currentTarget.value)}
         onKeyDown={(e) => {

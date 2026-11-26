@@ -62,6 +62,7 @@ export default function Settings() {
         </h2>
         <button
           onClick={() => setSettingsOpen(false)}
+          aria-label="Close"
           class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
         >
           <svg
@@ -70,6 +71,7 @@ export default function Settings() {
             viewBox="0 0 24 24"
             stroke="currentColor"
             stroke-width="2"
+            aria-hidden="true"
           >
             <path
               stroke-linecap="round"
@@ -107,6 +109,7 @@ export default function Settings() {
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 stroke-width="2"
+                aria-hidden="true"
               >
                 <path
                   stroke-linecap="round"
@@ -140,12 +143,20 @@ export default function Settings() {
 function AppearanceTab() {
   return (
     <div>
-      <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2 block">
+      <span
+        id="theme-label"
+        class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-2 block"
+      >
         Theme
-      </label>
-      <div class="grid grid-cols-3 gap-2">
+      </span>
+      <div
+        role="group"
+        aria-labelledby="theme-label"
+        class="grid grid-cols-3 gap-2"
+      >
         <button
           onClick={() => setTheme("dark")}
+          aria-pressed={theme() === "dark"}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "dark"
               ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
@@ -158,6 +169,7 @@ function AppearanceTab() {
             viewBox="0 0 24 24"
             stroke="currentColor"
             stroke-width="2"
+            aria-hidden="true"
           >
             <path
               stroke-linecap="round"
@@ -169,6 +181,7 @@ function AppearanceTab() {
         </button>
         <button
           onClick={() => setTheme("light")}
+          aria-pressed={theme() === "light"}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "light"
               ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
@@ -181,6 +194,7 @@ function AppearanceTab() {
             viewBox="0 0 24 24"
             stroke="currentColor"
             stroke-width="2"
+            aria-hidden="true"
           >
             <path
               stroke-linecap="round"
@@ -192,6 +206,7 @@ function AppearanceTab() {
         </button>
         <button
           onClick={() => setTheme("system")}
+          aria-pressed={theme() === "system"}
           class={`rounded-lg border px-3 py-2.5 text-xs font-medium transition cursor-pointer flex items-center justify-center gap-2 ${
             theme() === "system"
               ? "border-orange-500 bg-orange-500/10 text-orange-700 dark:text-orange-500"
@@ -204,6 +219,7 @@ function AppearanceTab() {
             viewBox="0 0 24 24"
             stroke="currentColor"
             stroke-width="2"
+            aria-hidden="true"
           >
             <path
               stroke-linecap="round"
@@ -215,10 +231,17 @@ function AppearanceTab() {
         </button>
       </div>
 
-      <label class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block">
+      <span
+        id="palette-label"
+        class="text-sm font-medium text-zinc-700 dark:text-zinc-300 mt-6 mb-2 block"
+      >
         Palette
-      </label>
-      <div class="grid grid-cols-3 gap-2">
+      </span>
+      <div
+        role="group"
+        aria-labelledby="palette-label"
+        class="grid grid-cols-3 gap-2"
+      >
         <For each={PALETTES}>
           {(option) => (
             <button
