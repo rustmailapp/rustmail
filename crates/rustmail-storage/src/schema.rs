@@ -55,7 +55,7 @@ const WAL_AUTOCHECKPOINT_PAGES: &str = "4000";
 /// far past what steady ingest needs; without a limit SQLite reuses that
 /// file at its high-water size forever.
 const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
-/// Rows `ANALYZE` reads per index when `PRAGMA optimize` refreshes the
+/// Rows `ANALYZE` reads per index when the repository refreshes the
 /// planner's statistics.
 ///
 /// Enough for estimates the planner can rank indexes by, and it bounds the

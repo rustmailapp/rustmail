@@ -136,8 +136,8 @@ impl MessageRepository {
   /// after [`CLOSE_OPTIMIZE_BUDGET`] so the pools still close within a
   /// caller's shutdown deadline, then closes the readers, then the writer.
   ///
-  /// SQLite advises `PRAGMA optimize` before a long-lived connection closes.
-  /// It runs here rather than on every connection's close, because a
+  /// SQLite advises refreshing statistics before a long-lived connection
+  /// closes. It runs here rather than on every connection's close, because a
   /// connection that only inspected a file rustmail then refused must leave
   /// it untouched. A failed refresh is logged and the close goes on.
   ///
@@ -559,11 +559,10 @@ impl MessageRepository {
   /// Refreshes the query planner's statistics on the writer where they are
   /// missing or stale.
   ///
-  /// `PRAGMA optimize` with flag `0x10000` checks every table, not only
-  /// those this connection has queried, so it is the call for startup and
-  /// after a retention sweep has removed rows. `ANALYZE` reads a bounded
-  /// sample of each index, and a table whose size has not changed much since
-  /// its last analysis is skipped.
+  /// Every ordinary table is analyzed, not only those this connection has
+  /// queried, so it is the call for startup and after a retention sweep has
+  /// removed rows. `ANALYZE` reads a bounded sample of each index, see
+  /// [`OPTIMIZE_ANALYSIS_LIMIT`].
   ///
   /// # Errors
   ///
@@ -1258,17 +1257,34 @@ async fn foreign_keys_on(conn: &mut SqliteConnection) -> Result<bool, StorageErr
   )
 }
 
-/// Runs `PRAGMA optimize` on `conn` over every table, reading a bounded
+/// Runs `ANALYZE` on `conn` over every ordinary table, reading a bounded
 /// sample of each index.
+///
+/// Shadow tables are left out. FTS5 looks up its own rows by rowid, and a
+/// `sqlite_stat1` row taken while the index was nearly empty makes SQLite
+/// plan the range delete behind every segment merge as a full scan of
+/// `messages_fts_data`. `PRAGMA optimize` cannot skip a table, so the tables
+/// are named one by one.
 async fn refresh_statistics(conn: &mut SqliteConnection) -> Result<(), StorageError> {
   sqlx::query(AssertSqlSafe(format!(
     "PRAGMA analysis_limit = {OPTIMIZE_ANALYSIS_LIMIT}"
   )))
   .execute(&mut *conn)
   .await?;
-  sqlx::query("PRAGMA optimize = 0x10002")
+  let tables: Vec<String> = sqlx::query_scalar(
+    "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' \
+     AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'",
+  )
+  .fetch_all(&mut *conn)
+  .await?;
+  for table in tables {
+    sqlx::query(AssertSqlSafe(format!(
+      "ANALYZE main.\"{}\"",
+      table.replace('"', "\"\"")
+    )))
     .execute(&mut *conn)
     .await?;
+  }
   Ok(())
 }
 
@@ -2747,6 +2763,42 @@ mod tests {
         .await
         .contains(&"messages".to_string()),
       "no statistics for messages after optimize"
+    );
+  }
+
+  #[tokio::test]
+  async fn optimize_on_an_empty_file_leaves_the_fts5_shadow_tables_unanalyzed() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+
+    repo.optimize().await.unwrap();
+
+    let analyzed = analyzed_tables(&writer).await;
+    let fts: Vec<&String> = analyzed
+      .iter()
+      .filter(|table| table.starts_with("messages_fts"))
+      .collect();
+    assert!(fts.is_empty(), "statistics recorded for {fts:?}");
+  }
+
+  #[tokio::test]
+  async fn fts5_segment_cleanup_seeks_its_data_rows_after_a_startup_optimize() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    repo.optimize().await.unwrap();
+    insert_subjects(&repo, &["m0", "m1", "m2"]).await;
+
+    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(
+      "EXPLAIN QUERY PLAN DELETE FROM messages_fts_data WHERE id >= ?1 AND id <= ?2",
+    )
+    .bind(1_i64)
+    .bind(2_i64)
+    .fetch_all(&writer)
+    .await
+    .unwrap();
+    let details: Vec<&str> = plan.iter().map(|row| row.3.as_str()).collect();
+
+    assert!(
+      details.iter().any(|detail| detail.starts_with("SEARCH")),
+      "segment cleanup scans messages_fts_data: {details:?}"
     );
   }
 
