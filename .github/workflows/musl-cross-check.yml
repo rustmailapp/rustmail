@@ -52,7 +52,7 @@ jobs:
         run: |
           file target/${{ matrix.target }}/release/rustmail
           ls -l target/${{ matrix.target }}/release/rustmail
-          strings target/${{ matrix.target }}/release/rustmail | grep -m1 MIMALLOC_
+          strings target/${{ matrix.target }}/release/rustmail | grep -m1 "environment option mimalloc_"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
