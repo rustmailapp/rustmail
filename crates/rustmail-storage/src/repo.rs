@@ -556,12 +556,11 @@ impl MessageRepository {
     deleted
   }
 
-  /// Refreshes the query planner's statistics on the writer where they are
-  /// missing or stale.
+  /// Refreshes the query planner's statistics for every ordinary table on the
+  /// writer.
   ///
-  /// Every ordinary table is analyzed, not only those this connection has
-  /// queried, so it is the call for startup and after a retention sweep has
-  /// removed rows. `ANALYZE` reads a bounded sample of each index, see
+  /// It does not depend on what this connection has queried, so it is the
+  /// call for startup and after a retention sweep has removed rows. `ANALYZE` reads a bounded sample of each index, see
   /// [`OPTIMIZE_ANALYSIS_LIMIT`].
   ///
   /// # Errors
