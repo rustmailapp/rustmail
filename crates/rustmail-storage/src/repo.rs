@@ -36,6 +36,13 @@ const WRITE_RETRY_BASE_DELAY: Duration = Duration::from_millis(20);
 /// reachable from an HTTP handler, so a request could hang for a multiple of
 /// what one attempt already costs.
 const WRITE_RETRY_BUDGET: Duration = BUSY_TIMEOUT;
+/// Time [`MessageRepository::close`] gives its statistics refresh, well
+/// inside the two seconds the server allows a close.
+const CLOSE_OPTIMIZE_BUDGET: Duration = Duration::from_millis(500);
+/// `busy_timeout` of the refresh in [`MessageRepository::close`], so a write
+/// lock held by another process fails it fast instead of using up
+/// [`CLOSE_OPTIMIZE_BUDGET`].
+const CLOSE_OPTIMIZE_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Whether a failed write is worth attempting again.
 ///
@@ -129,8 +136,9 @@ impl MessageRepository {
     Self { readers, writer }
   }
 
-  /// Refreshes the planner's statistics with [`Self::optimize`], then closes
-  /// the readers, then the writer.
+  /// Refreshes the planner's statistics like [`Self::optimize`], giving up
+  /// after [`CLOSE_OPTIMIZE_BUDGET`] so the pools still close within a
+  /// caller's shutdown deadline, then closes the readers, then the writer.
   ///
   /// SQLite advises `PRAGMA optimize` before a long-lived connection closes.
   /// It runs here rather than on every connection's close, because a
@@ -140,13 +148,20 @@ impl MessageRepository {
   /// The last connection to close checkpoints the WAL, and closing the writer
   /// last leaves that to the connection whose cache already holds the pages.
   pub async fn close(&self) {
-    if let Err(failure) = self.optimize().await {
-      warn!(
+    match tokio::time::timeout(CLOSE_OPTIMIZE_BUDGET, self.optimize_before_close()).await {
+      Ok(Ok(())) => {}
+      Ok(Err(failure)) => warn!(
         event = "storage_optimize_failed",
         error = %failure,
         hint = "the planner keeps its previous statistics until the next start",
         "failed to refresh query planner statistics before closing"
-      );
+      ),
+      Err(_) => warn!(
+        event = "storage_optimize_failed",
+        budget_ms = CLOSE_OPTIMIZE_BUDGET.as_millis() as u64,
+        hint = "the planner keeps its previous statistics until the next start",
+        "ran out of time refreshing query planner statistics before closing"
+      ),
     }
     self.readers.close().await;
     self.writer.close().await;
@@ -555,17 +570,24 @@ impl MessageRepository {
   pub async fn optimize(&self) -> Result<(), StorageError> {
     retry_on_lock(|| async {
       let mut conn = self.writer.acquire().await?;
-      sqlx::query(AssertSqlSafe(format!(
-        "PRAGMA analysis_limit = {OPTIMIZE_ANALYSIS_LIMIT}"
-      )))
-      .execute(&mut *conn)
-      .await?;
-      sqlx::query("PRAGMA optimize = 0x10002")
-        .execute(&mut *conn)
-        .await?;
-      Ok(())
+      refresh_statistics(&mut conn).await
     })
     .await
+  }
+
+  /// [`Self::optimize`] for [`Self::close`]: one attempt that waits at most
+  /// [`CLOSE_OPTIMIZE_BUSY_TIMEOUT`] for a write lock held elsewhere. The
+  /// writer is about to close, so its lowered `busy_timeout` is left in
+  /// place.
+  async fn optimize_before_close(&self) -> Result<(), StorageError> {
+    let mut conn = self.writer.acquire().await?;
+    sqlx::query(AssertSqlSafe(format!(
+      "PRAGMA busy_timeout = {}",
+      CLOSE_OPTIMIZE_BUSY_TIMEOUT.as_millis()
+    )))
+    .execute(&mut *conn)
+    .await?;
+    refresh_statistics(&mut conn).await
   }
 
   /// Gives the pages freed by a retention sweep back to the filesystem, when
@@ -1204,6 +1226,20 @@ async fn foreign_keys_on(conn: &mut SqliteConnection) -> Result<bool, StorageErr
       .fetch_one(conn)
       .await?,
   )
+}
+
+/// Runs `PRAGMA optimize` on `conn` over every table, reading a bounded
+/// sample of each index.
+async fn refresh_statistics(conn: &mut SqliteConnection) -> Result<(), StorageError> {
+  sqlx::query(AssertSqlSafe(format!(
+    "PRAGMA analysis_limit = {OPTIMIZE_ANALYSIS_LIMIT}"
+  )))
+  .execute(&mut *conn)
+  .await?;
+  sqlx::query("PRAGMA optimize = 0x10002")
+    .execute(&mut *conn)
+    .await?;
+  Ok(())
 }
 
 /// Columns of a [`MessageSummary`], read from `messages` aliased `m`.
@@ -2669,6 +2705,30 @@ mod tests {
         .contains(&"messages".to_string()),
       "closing left messages without statistics"
     );
+  }
+
+  #[tokio::test]
+  async fn closing_while_another_process_holds_the_write_lock_still_closes_promptly() {
+    let (repo, _writer, dir) = file_repo_with_writer().await;
+    insert_subjects(&repo, &["m0"]).await;
+    let url = format!("sqlite://{}", dir.0.join("test.db").display());
+    let mut holder = SqliteConnection::connect_with(&connect_options(&url).unwrap())
+      .await
+      .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut holder)
+      .await
+      .unwrap();
+
+    let started = Instant::now();
+    repo.close().await;
+
+    assert!(
+      started.elapsed() < CLOSE_OPTIMIZE_BUDGET * 2,
+      "close took {:?} while the write lock was held elsewhere",
+      started.elapsed()
+    );
+    sqlx::query("ROLLBACK").execute(&mut holder).await.unwrap();
   }
 
   #[tokio::test]
