@@ -163,7 +163,7 @@ export default function Inbox() {
         <div class="sticky top-0 z-10 h-0 flex justify-center">
           <button
             onClick={showNewest}
-            class="mt-2 rounded-full bg-orange-500 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-orange-400 transition cursor-pointer"
+            class="mt-2 rounded-full bg-orange-700 px-3 py-1 text-xs font-medium text-white shadow-md hover:bg-orange-800 transition cursor-pointer"
           >
             {heldArrivals() > 0 ? `${heldArrivals()} new` : "New results"}
           </button>
@@ -336,7 +336,9 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
                   )}
                 </For>
                 <Show when={msg().tags.length > 3}>
-                  <span class="text-[10px] text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400">
+                  <span
+                    class={`text-[10px] ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
+                  >
                     +{msg().tags.length - 3}
                   </span>
                 </Show>

@@ -19,7 +19,9 @@ On a window at least 1300px wide the UI has three panes and a status bar:
 
 The message pane switches between **Preview** (the rendered [HTML body](/features/html-preview)), **Text** and **Raw**.
 
-Below 1300px the details rail becomes a drawer over the message body. Open it with the **Details** button or `i`, and close it with `i` or `Esc`. See [Keyboard Shortcuts](/features/keyboard-shortcuts).
+With a message selected, `i` or the **Details** panel button next to its actions collapses the details rail, giving its width to the message; while the rail is collapsed, compact SPF, DKIM and attachment badges sit next to the Preview / Text / Raw switch. The choice is kept in the browser's local storage, so the rail stays collapsed across reloads.
+
+Below 1300px the details rail becomes a drawer over the message body. Open it with the **Details** button or `i`, and close it with `i` or `Esc`. The drawer always starts closed, whatever the rail was set to. See [Keyboard Shortcuts](/features/keyboard-shortcuts).
 
 ## Theme and palettes
 
@@ -31,12 +33,10 @@ The gear icon in the header opens **Settings**. Under **Appearance**:
 | Palette | Look |
 |---------|------|
 | **RustMail** (default) | Warm iron neutrals, an oxide orange accent, and an amber-to-oxide glow and selection |
-| **Ember** | Cool slate neutrals with an orange accent |
-| **Copper & Teal** | Teal-grey neutrals, an orange accent, and a copper and teal glow |
-| **Dawn** | Rose-grey neutrals, a coral accent, and an amber-to-rose glow and selection |
-| **Classic** | Plain zinc neutrals, an orange accent, and a grey selection |
+| **Graphite** | Plain zinc neutrals, an orange accent, and a grey selection |
+| **Tide** | Cool blue-grey neutrals, a teal accent, and a teal glow and selection |
 
-Both choices are kept in the browser's local storage, so they apply per browser rather than per server.
+Both choices are kept in the browser's local storage, so they apply per browser rather than per server. A palette saved by an older version moves to its replacement: Copper & Teal to Tide, Classic and Ember to Graphite, Dawn to RustMail.
 
 ## Details rail
 
