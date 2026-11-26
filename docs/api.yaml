@@ -820,6 +820,7 @@ paths:
         |---|---|
         | `message:new` | `MessageSummary` object, `recipients` and `tags` as arrays |
         | `message:delete` | `{ "id": "<ulid>" }` |
+        | `messages:delete` | `{ "ids": ["<ulid>", ...] }`, sent by the retention sweep, at most 1000 ids per event |
         | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
         | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
         | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |

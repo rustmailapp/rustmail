@@ -678,10 +678,30 @@ function countedInTotal(id: string): boolean | undefined {
  * is read from the server when that cannot be told locally.
  */
 function reconcileDeletion(id: string): void {
+  reconcileDeletions([id]);
+}
+
+/**
+ * Applies {@link reconcileDeletion} to every id in `ids` as one change, reading
+ * the total from the server at most once for all of them.
+ */
+function reconcileDeletions(ids: readonly string[]): void {
+  let countUnknown = false;
+  batch(() => {
+    for (const id of ids) countUnknown = settleDeletion(id) || countUnknown;
+  });
+  if (countUnknown) void refreshTotal();
+}
+
+/**
+ * Applies one confirmed deletion, resolving whether the total now needs a read
+ * from the server.
+ */
+function settleDeletion(id: string): boolean {
   const issued = issuedDeletes.get(id);
   if (issued?.confirmed === true) {
     issuedDeletes.delete(id);
-    return;
+    return false;
   }
 
   const cleared =
@@ -702,7 +722,7 @@ function reconcileDeletion(id: string): void {
       setStoredTotal((current) => Math.max(0, current - 1));
     }
   });
-  if (!cleared && !countIsCurrent) void refreshTotal();
+  return !cleared && !countIsCurrent;
 }
 
 /**
@@ -1328,6 +1348,10 @@ function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
     case "message:delete":
       cancelUndo(event.data.id);
       reconcileDeletion(event.data.id);
+      break;
+    case "messages:delete":
+      for (const id of event.data.ids) cancelUndo(id);
+      reconcileDeletions(event.data.ids);
       break;
     case "messages:clear":
       batch(() => {
