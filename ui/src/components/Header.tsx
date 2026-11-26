@@ -19,7 +19,13 @@ export default function Header() {
         class="shrink-0 rounded-md"
         onClick={registerLogoClick}
       >
-        <img src="/logo.webp" alt="" class="size-8 rounded-md" />
+        <img
+          src="/logo-64.webp"
+          alt=""
+          width="32"
+          height="32"
+          class="size-8 rounded-md"
+        />
       </button>
       <div class="min-w-0 flex items-baseline gap-2">
         <h1 class="font-brand text-lg font-bold tracking-tight bg-linear-to-r from-orange-500 to-zinc-800 dark:to-white bg-clip-text text-transparent">
