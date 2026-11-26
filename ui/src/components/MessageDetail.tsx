@@ -608,8 +608,7 @@ function MessageBody(props: {
 }
 
 function rewriteCidUrls(html: string, messageId: string): string {
-  const inlineUrl = (cid: string) =>
-    `/api/v1/messages/${encodeURIComponent(messageId)}/inline/${encodeURIComponent(cid)}`;
+  const inlineUrl = (cid: string) => api.inlineUrl(messageId, cid);
 
   let result = html.replace(
     /(?:src|background)=["']cid:([^"']+)["']/gi,

@@ -4,7 +4,6 @@ import {
   createSignal,
   For,
   on,
-  onCleanup,
   Show,
   type JSX,
 } from "solid-js";
@@ -12,13 +11,7 @@ import { liveSummary } from "../stores/messages";
 import { notify } from "../stores/notices";
 import * as api from "../lib/api";
 import { formatDateTime, formatSize } from "../lib/format";
-import {
-  COPIED_FEEDBACK_MS,
-  MANUAL_COPY_HINT,
-  MANUAL_COPY_HINT_MS,
-  writeClipboard,
-  type CopyFeedback,
-} from "../lib/clipboard";
+import { createCopy, MANUAL_COPY_HINT } from "../lib/clipboard";
 import { extractLinks, type MessageLink } from "../lib/links";
 import { recordedRelease, releaseSummary } from "../lib/release";
 import type {
@@ -419,25 +412,11 @@ const LOCAL_TONE =
   "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300";
 
 function LinkRow(props: { link: MessageLink }) {
-  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let fullHref: HTMLSpanElement | undefined;
-  onCleanup(() => clearTimeout(feedbackTimer));
-
-  function showFeedback(kind: CopyFeedback, durationMs: number): void {
-    setFeedback(kind);
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => setFeedback(null), durationMs);
-  }
-
-  async function copy(): Promise<void> {
-    if (await writeClipboard(props.link.href)) {
-      showFeedback("copied", COPIED_FEEDBACK_MS);
-      return;
-    }
-    showFeedback("manual", MANUAL_COPY_HINT_MS);
-    if (fullHref) window.getSelection()?.selectAllChildren(fullHref);
-  }
+  const { feedback, copy } = createCopy(
+    () => props.link.href,
+    () => fullHref,
+  );
 
   return (
     <li>
