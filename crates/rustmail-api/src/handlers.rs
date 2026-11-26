@@ -767,10 +767,9 @@ pub async fn release_message(
     );
   }
 
-  let raw = state.repo.get_raw(&id).await?;
-  let msg = state.repo.get(&id).await?;
+  let source = state.repo.get_source(&id).await?;
 
-  let envelope = match release_envelope(&msg.sender, &msg.recipients) {
+  let envelope = match release_envelope(&source.sender, &source.recipients) {
     Ok(envelope) => envelope,
     Err(reason) => {
       return Ok(
@@ -802,7 +801,7 @@ pub async fn release_message(
   let release_state = state.clone();
   let release_id = id.clone();
   let release = tokio::spawn(async move {
-    let outcome = send_to_relay(&mailer, &envelope, &raw, RELEASE_TIMEOUT).await;
+    let outcome = send_to_relay(&mailer, &envelope, &source.raw, RELEASE_TIMEOUT).await;
     let recorded = match &outcome {
       RelayOutcome::Sent => record_release(&release_state, &release_id, ReleaseOutcome::Sent).await,
       RelayOutcome::Unknown(_) => {

@@ -12,7 +12,7 @@ use crate::content::{Bodies, decompress, decompress_prefix};
 use crate::error::{SQLITE_BUSY, SQLITE_LOCKED, StorageError};
 use crate::locator::TransferEncoding;
 use crate::models::{
-  Attachment, AttachmentSummary, Message, MessageSummary, Release, ReleaseOutcome,
+  Attachment, AttachmentSummary, Message, MessageSource, MessageSummary, Release, ReleaseOutcome,
 };
 use crate::prepared::{AttachmentStorage, PreparedMessage};
 use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page, push_tagged_seqs};
@@ -739,6 +739,37 @@ impl MessageRepository {
       return tokio::task::spawn_blocking(move || decompress(&frame, size, &id)).await?;
     }
     decompress(&frame, size, id)
+  }
+
+  /// Returns a message's envelope and raw bytes from a single read.
+  ///
+  /// The source is decompressed once and its bodies are not parsed, so this
+  /// is the read for resending a message rather than [`Self::get`] plus
+  /// [`Self::get_raw`].
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::NotFound`] if no message has that id, and
+  /// [`StorageError::ContentCorrupt`] if its stored source is damaged.
+  pub async fn get_source(&self, id: &str) -> Result<MessageSource, StorageError> {
+    let (sender, recipients, frame, size): (String, String, Vec<u8>, i64) = sqlx::query_as(
+      "SELECT m.sender, m.recipients, c.raw, m.size FROM messages m JOIN message_content c ON c.seq = m.seq WHERE m.id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(&self.readers)
+    .await?
+    .ok_or_else(|| StorageError::NotFound(id.to_string()))?;
+    let raw = if size >= BLOCKING_DECODE_THRESHOLD_BYTES {
+      let id = id.to_string();
+      tokio::task::spawn_blocking(move || decompress(&frame, size, &id)).await??
+    } else {
+      decompress(&frame, size, id)?
+    };
+    Ok(MessageSource {
+      sender,
+      recipients,
+      raw,
+    })
   }
 
   /// Returns at most `max_bytes` from the start of a message's raw bytes.
@@ -2267,6 +2298,30 @@ mod tests {
 
     let fetched = repo.get_raw(&s.id).await.unwrap();
     assert_eq!(fetched, raw);
+  }
+
+  #[tokio::test]
+  async fn get_source_reads_the_envelope_with_the_raw_bytes() {
+    let repo = test_repo().await;
+    let raw = raw_email("Source test", "a@t.com", "b@t.com");
+    let s = repo
+      .insert("a@t.com", &["b@t.com".into(), "c@t.com".into()], &raw)
+      .await
+      .unwrap();
+
+    let source = repo.get_source(&s.id).await.unwrap();
+    assert_eq!(source.sender, "a@t.com");
+    assert_eq!(source.recipients, r#"["b@t.com","c@t.com"]"#);
+    assert_eq!(source.raw, raw);
+  }
+
+  #[tokio::test]
+  async fn get_source_reports_a_missing_message() {
+    let repo = test_repo().await;
+    assert!(matches!(
+      repo.get_source("nope").await,
+      Err(StorageError::NotFound(_))
+    ));
   }
 
   #[tokio::test]

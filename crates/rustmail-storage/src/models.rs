@@ -1,5 +1,17 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+/// A message's envelope and raw RFC 5322 bytes, read together for a caller
+/// that resends the message as captured.
+#[derive(Debug, Clone)]
+pub struct MessageSource {
+  /// MAIL FROM address.
+  pub sender: String,
+  /// JSON-encoded array of RCPT TO addresses.
+  pub recipients: String,
+  /// The raw RFC 5322 bytes.
+  pub raw: Vec<u8>,
+}
+
 /// An email message with its parsed bodies.
 ///
 /// The raw RFC 5322 bytes are deliberately absent: they are never part of a
