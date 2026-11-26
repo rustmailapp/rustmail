@@ -5,10 +5,8 @@ import {
   createMemo,
   createSignal,
   createUniqueId,
-  onMount,
 } from "solid-js";
 import Modal from "./Modal";
-import { returnFocusOnCleanup } from "./focusReturn";
 import Kbd from "./Kbd";
 import { confirm } from "./ConfirmDialog";
 import { confirmRelease } from "./MessageDetail";
@@ -152,14 +150,16 @@ function messageItem(message: MessageSummary): PaletteItem {
  * that does the same thing, so the two never drift apart.
  */
 export default function CommandPalette() {
+  const titleId = createUniqueId();
   return (
     <Modal
       open={commandPaletteOpen()}
       onClose={() => setCommandPaletteOpen(false)}
+      labelledBy={titleId}
       maxWidth="max-w-xl"
       align="top"
     >
-      <PaletteBody />
+      <PaletteBody titleId={titleId} />
     </Modal>
   );
 }
@@ -167,19 +167,16 @@ export default function CommandPalette() {
 /**
  * The palette's search box and results, mounted only while it is open.
  *
- * Focus moves into the search box on open and stays there: Tab is held so it
- * cannot leave the dialog, and the arrow keys move the active row through
- * `aria-activedescendant`. On close focus goes back to whatever had it
- * before, unless something else already took it.
+ * The search box is the dialog's only control, so focus starts and stays
+ * there, and the arrow keys move the active row through
+ * `aria-activedescendant`.
  */
-function PaletteBody() {
-  const titleId = createUniqueId();
+function PaletteBody(props: { titleId: string }) {
   const listId = createUniqueId();
   const [query, setQuery] = createSignal("");
   const [active, setActive] = createSignal(0);
   let input!: HTMLInputElement;
   let list!: HTMLDivElement;
-  let dialog: HTMLDivElement | undefined;
 
   const items = createMemo<PaletteItem[]>(() => {
     const q = query();
@@ -214,9 +211,6 @@ function PaletteBody() {
       ?.scrollIntoView({ block: "nearest" });
   });
 
-  returnFocusOnCleanup(() => dialog);
-  onMount(() => input.focus());
-
   function runItem(item: PaletteItem | undefined): void {
     if (!item) return;
     setCommandPaletteOpen(false);
@@ -246,8 +240,6 @@ function PaletteBody() {
       case "Enter":
         if (!event.repeat && !event.isComposing) runItem(items()[current()]);
         break;
-      case "Tab":
-        break;
       default:
         return;
     }
@@ -257,15 +249,11 @@ function PaletteBody() {
 
   return (
     <div
-      ref={dialog}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
       onMouseDown={(event) => {
         if (event.target !== input) event.preventDefault();
       }}
     >
-      <h2 id={titleId} class="sr-only">
+      <h2 id={props.titleId} class="sr-only">
         Command palette
       </h2>
       <div class="flex items-center gap-2.5 px-4 border-b border-zinc-200 dark:border-zinc-800">

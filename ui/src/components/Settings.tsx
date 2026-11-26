@@ -1,4 +1,4 @@
-import { Show, For } from "solid-js";
+import { Show, For, createUniqueId } from "solid-js";
 import { theme, setTheme } from "../stores/theme";
 import { PALETTES, palette, setPalette } from "../stores/palette";
 import { rusted, setRusted } from "../stores/rusted";
@@ -49,10 +49,17 @@ function handleTabKeyDown(e: KeyboardEvent) {
 }
 
 export default function Settings() {
+  const titleId = createUniqueId();
   return (
-    <Modal open={settingsOpen()} onClose={() => setSettingsOpen(false)}>
+    <Modal
+      open={settingsOpen()}
+      onClose={() => setSettingsOpen(false)}
+      labelledBy={titleId}
+    >
       <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
-        <h2 class="text-base font-semibold">Settings</h2>
+        <h2 id={titleId} class="text-base font-semibold">
+          Settings
+        </h2>
         <button
           onClick={() => setSettingsOpen(false)}
           class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
