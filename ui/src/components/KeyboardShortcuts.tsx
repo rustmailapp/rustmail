@@ -1,46 +1,24 @@
-import { For, createUniqueId, onMount } from "solid-js";
+import { For, createUniqueId } from "solid-js";
 import Modal from "./Modal";
 import Kbd from "./Kbd";
-import { returnFocusOnCleanup } from "./focusReturn";
 import { shortcutList } from "../lib/shortcuts";
 import { setShortcutsOpen, shortcutsOpen } from "../stores/commandPalette";
 
 /** Every keyboard shortcut, listed in a dialog the command palette opens. */
 export default function KeyboardShortcuts() {
+  const titleId = createUniqueId();
   return (
     <Modal
       open={shortcutsOpen()}
       onClose={() => setShortcutsOpen(false)}
+      labelledBy={titleId}
       maxWidth="max-w-sm"
-    >
-      <ShortcutsBody />
-    </Modal>
-  );
-}
-
-function ShortcutsBody() {
-  const titleId = createUniqueId();
-  let dialog: HTMLDivElement | undefined;
-  let closeButton!: HTMLButtonElement;
-  returnFocusOnCleanup(() => dialog);
-  onMount(() => closeButton.focus());
-
-  return (
-    <div
-      ref={dialog}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onKeyDown={(event) => {
-        if (event.key === "Tab") event.preventDefault();
-      }}
     >
       <div class="flex items-center justify-between px-6 py-4 border-b border-zinc-200 dark:border-zinc-800">
         <h2 id={titleId} class="text-base font-semibold">
           Keyboard shortcuts
         </h2>
         <button
-          ref={closeButton}
           onClick={() => setShortcutsOpen(false)}
           aria-label="Close"
           class="rounded-md p-1.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
@@ -73,6 +51,6 @@ function ShortcutsBody() {
           )}
         </For>
       </dl>
-    </div>
+    </Modal>
   );
 }

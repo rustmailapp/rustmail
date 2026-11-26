@@ -19,8 +19,8 @@ export interface ConfirmDialogOptions {
   list?: { label: string; items: readonly string[] };
   /**
    * Whether Enter confirms. Off for an action that cannot be taken back:
-   * focus then starts on Cancel, so only a click or a deliberate Tab to the
-   * confirm button goes ahead.
+   * focus then starts on Cancel instead of the confirm button, so only a
+   * click or a deliberate Tab to the confirm button goes ahead.
    */
   enterConfirms?: boolean;
 }
@@ -52,17 +52,20 @@ function close(confirmed: boolean) {
 export default function ConfirmDialog() {
   const titleId = createUniqueId();
   let dialog: HTMLDivElement | undefined;
+  let cancelButton: HTMLButtonElement | undefined;
+  let confirmButton: HTMLButtonElement | undefined;
   function onKeyDown(e: KeyboardEvent) {
     const state = dialogState();
-    if (!state || state.options.enterConfirms === false) return;
-    if (e.key !== "Enter") return;
+    if (!state || e.key !== "Enter") return;
     e.stopPropagation();
     const focused = document.activeElement;
-    if (focused instanceof HTMLButtonElement && dialog?.contains(focused)) {
-      return;
+    const onDialogButton =
+      focused instanceof HTMLButtonElement &&
+      (dialog?.contains(focused) ?? false);
+    if (e.repeat || !onDialogButton) e.preventDefault();
+    if (!e.repeat && !onDialogButton && state.options.enterConfirms !== false) {
+      close(true);
     }
-    e.preventDefault();
-    if (!e.repeat) close(true);
   }
 
   onMount(() => document.addEventListener("keydown", onKeyDown, true));
@@ -71,13 +74,18 @@ export default function ConfirmDialog() {
   return (
     <Show when={dialogState()}>
       {(state) => (
-        <Modal open={true} onClose={() => close(false)} maxWidth="max-w-sm">
-          <div
-            ref={dialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-          >
+        <Modal
+          open={true}
+          onClose={() => close(false)}
+          labelledBy={titleId}
+          initialFocus={() =>
+            state().options.enterConfirms === false
+              ? cancelButton
+              : confirmButton
+          }
+          maxWidth="max-w-sm"
+        >
+          <div ref={dialog}>
             <div class="px-6 pt-5 pb-2">
               <h3
                 id={titleId}
@@ -115,17 +123,14 @@ export default function ConfirmDialog() {
             </div>
             <div class="flex justify-end gap-2 px-6 py-4">
               <button
-                ref={(button) => {
-                  if (state().options.enterConfirms === false) {
-                    queueMicrotask(() => button.focus());
-                  }
-                }}
+                ref={cancelButton}
                 onClick={() => close(false)}
                 class="rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
               >
                 {state().options.cancelLabel ?? "Cancel"}
               </button>
               <button
+                ref={confirmButton}
                 onClick={() => close(true)}
                 class="btn-destructive rounded-md border px-3 py-1.5 text-xs font-medium transition cursor-pointer"
               >
