@@ -11,6 +11,7 @@ import ConfirmDialog, {
 import UndoToast from "./components/UndoToast";
 import Notices from "./components/Notices";
 import StatusBar from "./components/StatusBar";
+import { ConnectApp } from "./components/Onboarding";
 import {
   connectWebSocket,
   disconnectWebSocket,
@@ -28,7 +29,9 @@ import {
   undoDelete,
   hasActiveFilters,
   clearFilters,
+  inboxEmpty,
 } from "./stores/messages";
+import { smtpEndpoint } from "./stores/server";
 import { settingsOpen } from "./stores/settings";
 import {
   closeDetails,
@@ -164,7 +167,12 @@ export default function App() {
           <FilterBar />
           <Inbox />
         </aside>
-        <MessageDetail />
+        <Show
+          when={inboxEmpty() && smtpEndpoint()}
+          fallback={<MessageDetail />}
+        >
+          <ConnectApp />
+        </Show>
       </div>
       <StatusBar />
       <Settings />

@@ -27,6 +27,8 @@ rustmail serve --ephemeral --smtp-port 1025 --http-port 8025
 
 Navigate to `http://localhost:8025` in your browser.
 
+Until the first message arrives, the inbox shows the SMTP address as reached from your browser, with a copy button, and plain SMTP settings to paste into a Node.js (nodemailer), Django, Laravel or Rails app. In Docker, an app in another container uses the Compose service name as the host, and a remapped host port replaces the one shown.
+
 ## Send a Test Email
 
 Configure your application to send mail to `localhost:1025`. To verify the SMTP receiver is working:

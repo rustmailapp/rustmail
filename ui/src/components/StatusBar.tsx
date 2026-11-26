@@ -1,11 +1,4 @@
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-  Show,
-  type JSX,
-} from "solid-js";
+import { createMemo, createSignal, onCleanup, Show, type JSX } from "solid-js";
 import {
   hasMore,
   socketLive,
@@ -13,7 +6,8 @@ import {
   visibleMessages,
 } from "../stores/messages";
 import { wideLayout } from "../stores/layout";
-import * as api from "../lib/api";
+import { serverInfo, smtpEndpoint } from "../stores/server";
+import { smtpAddress } from "../lib/smtp";
 import {
   COPIED_FEEDBACK_MS,
   MANUAL_COPY_HINT,
@@ -48,16 +42,13 @@ function Hint(props: { keys: string[]; label: string }) {
 /**
  * The bottom bar: whether mail arrives live, where to send it, and the keys.
  *
- * The server's details are read once. A failed read says the SMTP address is
- * unknown rather than retrying: nothing on the page depends on it, and the
- * reload that would fix a stale server fixes this too.
+ * A failed read of the server's details says the SMTP address is unknown.
  */
 export default function StatusBar() {
-  const [info] = createResource(() => api.getInfo());
-  const ready = () => (info.state === "ready" ? info() : undefined);
+  const ready = () => (serverInfo.state === "ready" ? serverInfo() : undefined);
   const endpoint = () => {
-    const server = ready();
-    return server ? `${location.hostname}:${server.smtp_port}` : undefined;
+    const smtp = smtpEndpoint();
+    return smtp ? smtpAddress(smtp.host, smtp.port) : undefined;
   };
   const unread = createMemo(
     () => visibleMessages().filter((m) => !m.is_read).length,
@@ -107,7 +98,7 @@ export default function StatusBar() {
       <Show
         when={endpoint()}
         fallback={
-          <Show when={info.state === "errored"}>
+          <Show when={serverInfo.state === "errored"}>
             <span class="text-zinc-500 dark:text-zinc-400">SMTP unknown</span>
           </Show>
         }
