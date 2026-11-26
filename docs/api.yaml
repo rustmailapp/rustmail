@@ -606,6 +606,18 @@ paths:
                   summary: TLS client could not be set up
                   value:
                     error: Failed to establish TLS connection to relay host
+        '504':
+          description: >
+            The relay did not finish the exchange within 30 seconds. It may
+            already have accepted the message, so check the relay before
+            releasing the same message again.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: 'The relay did not answer in time. The message may have been delivered: check the relay before releasing it again.'
+                code: release_outcome_unknown
 
   /api/v1/messages/{id}/auth:
     parameters:
@@ -730,10 +742,11 @@ paths:
   /api/v1/info:
     get:
       operationId: getInfo
-      summary: Server version and SMTP port
+      summary: Server version, SMTP port and release relay
       description: >
         Reports the version of the running binary, the one `rustmail --version`
-        prints, and the port the SMTP listener was configured with. Both are
+        prints, the port the SMTP listener was configured with, and the relay
+        a release is forwarded to (`null` while release is disabled). All are
         fixed for the life of the process.
       tags: [Server]
       responses:
@@ -746,6 +759,9 @@ paths:
               example:
                 version: 0.8.1
                 smtp_port: 1025
+                release:
+                  host: smtp.example.com
+                  port: 587
         '503':
           $ref: '#/components/responses/TimedOut'
 
@@ -1069,7 +1085,7 @@ components:
 
     Info:
       type: object
-      required: [version, smtp_port]
+      required: [version, smtp_port, release]
       properties:
         version:
           type: string
@@ -1083,6 +1099,30 @@ components:
           maximum: 65535
           description: Port the SMTP listener was configured with
           example: 1025
+        release:
+          oneOf:
+            - $ref: '#/components/schemas/ReleaseTarget'
+            - type: 'null'
+          description: >
+            The relay `POST /api/v1/messages/{id}/release` forwards to, from
+            `--release-host`; `null` while release is disabled.
+
+    ReleaseTarget:
+      type: object
+      required: [host, port]
+      properties:
+        host:
+          type: string
+          description: The only `host` a release request may name
+          example: smtp.example.com
+        port:
+          type: integer
+          minimum: 0
+          maximum: 65535
+          description: >
+            The configured release port, or `587` when `--release-host` names
+            none. A release request that omits `port` goes here.
+          example: 587
 
     MessageHeader:
       type: object
@@ -1156,10 +1196,12 @@ components:
           example: Resource not found
         code:
           type: string
-          enum: [unknown_cursor]
+          enum: [unknown_cursor, release_outcome_unknown]
           description: >
             Machine-readable reason, present only where a client needs to act
             on it. `unknown_cursor`: `before` names no stored message.
+            `release_outcome_unknown`: a release timed out and the relay may
+            have the message.
 
   responses:
 

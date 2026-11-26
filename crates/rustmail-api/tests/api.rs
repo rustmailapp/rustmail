@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use rustmail_api::{AppState, Hostname, Origin, WsEvent, WsFrame, router};
+use rustmail_api::{AppState, Hostname, Origin, ServerInfo, WsEvent, WsFrame, router};
 use rustmail_storage::{MessageRepository, initialize_database};
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -535,6 +535,62 @@ async fn export_invalid_format() {
     .unwrap();
 
   assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+async fn info_with_release(release_host: Option<&str>, release_port: Option<u16>) -> Value {
+  let pool = sqlx::sqlite::SqlitePoolOptions::new()
+    .connect("sqlite::memory:")
+    .await
+    .unwrap();
+  initialize_database(&pool).await.unwrap();
+  let (ws_tx, _) = broadcast::channel::<WsFrame>(1);
+  let state = AppState::new(
+    MessageRepository::new(pool),
+    ws_tx,
+    release_host.map(str::to_owned),
+    release_port,
+  )
+  .with_server_info(ServerInfo {
+    version: "0.0.0-test".into(),
+    smtp_port: 1025,
+  });
+
+  let response = router(state)
+    .oneshot(
+      Request::builder()
+        .uri("/api/v1/info")
+        .body(Body::empty())
+        .unwrap(),
+    )
+    .await
+    .unwrap();
+  assert_eq!(response.status(), StatusCode::OK);
+  json_body(response).await
+}
+
+#[tokio::test]
+async fn info_reports_release_as_null_while_it_is_disabled() {
+  let info = info_with_release(None, None).await;
+
+  assert_eq!(info["release"], Value::Null);
+  assert_eq!(info["smtp_port"], 1025);
+}
+
+#[tokio::test]
+async fn info_reports_the_configured_release_host_and_port() {
+  let info = info_with_release(Some("smtp.example.com"), Some(2525)).await;
+
+  assert_eq!(
+    info["release"],
+    serde_json::json!({ "host": "smtp.example.com", "port": 2525 })
+  );
+}
+
+#[tokio::test]
+async fn info_reports_the_default_release_port_when_none_was_configured() {
+  let info = info_with_release(Some("smtp.example.com"), None).await;
+
+  assert_eq!(info["release"]["port"], 587);
 }
 
 #[tokio::test]

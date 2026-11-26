@@ -2594,4 +2594,5 @@ async fn info_reports_the_build_version_and_configured_smtp_port() {
   let info: serde_json::Value = response.json().await.unwrap();
   assert_eq!(info["version"], env!("RUSTMAIL_BUILD_VERSION"));
   assert_eq!(info["smtp_port"], smtp_port);
+  assert_eq!(info["release"], serde_json::Value::Null);
 }

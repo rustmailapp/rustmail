@@ -44,7 +44,7 @@ mod ws;
 
 pub use host::{Hostname, HostnameError};
 pub use origin::{Origin, OriginError};
-pub use state::{AppState, ServerInfo, WsEvent, WsFrame, WsFrameError};
+pub use state::{AppState, ReleaseTarget, ServerInfo, WsEvent, WsFrame, WsFrameError};
 
 use axum::Router;
 use axum::extract::{Request, State};

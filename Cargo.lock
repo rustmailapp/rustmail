@@ -2520,6 +2520,8 @@ dependencies = [
  "mail-parser",
  "mime_guess",
  "rust-embed",
+ "rustls",
+ "rustmail-smtp",
  "rustmail-storage",
  "serde",
  "serde_json",
