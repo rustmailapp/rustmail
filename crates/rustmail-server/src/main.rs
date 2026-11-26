@@ -960,7 +960,8 @@ fn broadcast_purged(state: &AppState, ids: &[String]) {
 /// Runs a single retention sweep: purges messages older than `retention_hours`
 /// and trims to `max_messages` when configured, announcing the removed ids
 /// with [`broadcast_purged`], then reclaims disk once the freelist is large
-/// enough to be worth it.
+/// enough to be worth it and, if anything was removed, refreshes the query
+/// planner's statistics.
 ///
 /// `now` is injected so callers can drive deterministic cutoffs in tests.
 async fn run_retention_tick(
@@ -973,6 +974,7 @@ async fn run_retention_tick(
   if retention_hours == 0 && max_messages == 0 {
     return;
   }
+  let mut purged_any = false;
   if retention_hours > 0 {
     let cutoff = now - time::Duration::hours(retention_hours as i64);
     let cutoff_str = format_iso8601(cutoff);
@@ -980,6 +982,7 @@ async fn run_retention_tick(
       Ok(ids) if !ids.is_empty() => {
         tracing::info!(deleted = ids.len(), "Retention: purged old messages");
         broadcast_purged(state, &ids);
+        purged_any = true;
       }
       Err(e) => {
         tracing::error!(error = %e, "Retention: failed to purge");
@@ -992,6 +995,7 @@ async fn run_retention_tick(
       Ok(ids) if !ids.is_empty() => {
         tracing::info!(deleted = ids.len(), "Retention: trimmed to max");
         broadcast_purged(state, &ids);
+        purged_any = true;
       }
       Err(e) => {
         tracing::error!(error = %e, "Retention: failed to trim");
@@ -1001,6 +1005,9 @@ async fn run_retention_tick(
   }
   if let Err(e) = repo.reclaim_after_retention().await {
     tracing::error!(error = %e, "Retention: failed to reclaim disk");
+  }
+  if purged_any && let Err(e) = repo.optimize().await {
+    tracing::error!(error = %e, "Retention: failed to refresh query planner statistics");
   }
 }
 
@@ -1076,6 +1083,9 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   };
 
   let repo = open_repository(&db_url, args.ephemeral).await?;
+  if let Err(e) = repo.optimize().await {
+    warn!(error = %e, "Failed to refresh query planner statistics at startup");
+  }
 
   let (release_host, release_port) = args.release_host.as_deref().map(parse_release_host).unzip();
   let release_host: Option<String> = release_host;
@@ -2110,6 +2120,58 @@ mod retention_tests {
     assert_eq!(repo.count().await.unwrap(), 0);
     let events = drain_delete_events(&mut rx);
     assert_eq!(events, vec![old_id]);
+  }
+
+  async fn has_planner_statistics(pool: &sqlx::SqlitePool) -> bool {
+    let stats_table: bool =
+      sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1')")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    if !stats_table {
+      return false;
+    }
+    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_stat1 WHERE tbl = 'messages')")
+      .fetch_one(pool)
+      .await
+      .unwrap()
+  }
+
+  async fn state_with_pool() -> (MessageRepository, AppState, sqlx::SqlitePool) {
+    let pool = SqlitePoolOptions::new()
+      .max_connections(1)
+      .connect("sqlite::memory:")
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool.clone());
+    let (ws_tx, _) = broadcast::channel::<WsFrame>(64);
+    let state = AppState::new(repo.clone(), ws_tx, None, None);
+    (repo, state, pool)
+  }
+
+  #[tokio::test]
+  async fn a_tick_that_removes_messages_refreshes_planner_statistics() {
+    let (repo, state, pool) = state_with_pool().await;
+    for subject in ["a", "b", "c"] {
+      insert_sample(&repo, subject).await;
+    }
+
+    run_retention_tick(&repo, &state, 0, 1, OffsetDateTime::now_utc()).await;
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert!(has_planner_statistics(&pool).await);
+  }
+
+  #[tokio::test]
+  async fn a_tick_that_removes_nothing_leaves_planner_statistics_alone() {
+    let (repo, state, pool) = state_with_pool().await;
+    insert_sample(&repo, "kept").await;
+
+    run_retention_tick(&repo, &state, 24, 5, OffsetDateTime::now_utc()).await;
+
+    assert_eq!(repo.count().await.unwrap(), 1);
+    assert!(!has_planner_statistics(&pool).await);
   }
 
   #[tokio::test]

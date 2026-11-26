@@ -5,7 +5,7 @@ use sqlx::pool::PoolConnection;
 use sqlx::{AssertSqlSafe, Connection, QueryBuilder, Sqlite, SqliteConnection, SqlitePool};
 use time::OffsetDateTime;
 use time::macros::format_description;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use ulid::Ulid;
 
 use crate::content::{Bodies, decompress, decompress_prefix};
@@ -19,7 +19,7 @@ use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page, pus
 use crate::reclaim::{
   DELETE_ALL_RECLAIM_BUDGET, RETENTION_RECLAIM_BUDGET, ReclaimTrigger, page_stats, reclaim,
 };
-use crate::schema::BUSY_TIMEOUT;
+use crate::schema::{BUSY_TIMEOUT, OPTIMIZE_ANALYSIS_LIMIT};
 
 const ISO8601_FMT: &[time::format_description::BorrowedFormatItem<'_>] =
   format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
@@ -129,11 +129,25 @@ impl MessageRepository {
     Self { readers, writer }
   }
 
-  /// Closes the readers, then the writer.
+  /// Refreshes the planner's statistics with [`Self::optimize`], then closes
+  /// the readers, then the writer.
+  ///
+  /// SQLite advises `PRAGMA optimize` before a long-lived connection closes.
+  /// It runs here rather than on every connection's close, because a
+  /// connection that only inspected a file rustmail then refused must leave
+  /// it untouched. A failed refresh is logged and the close goes on.
   ///
   /// The last connection to close checkpoints the WAL, and closing the writer
   /// last leaves that to the connection whose cache already holds the pages.
   pub async fn close(&self) {
+    if let Err(failure) = self.optimize().await {
+      warn!(
+        event = "storage_optimize_failed",
+        error = %failure,
+        hint = "the planner keeps its previous statistics until the next start",
+        "failed to refresh query planner statistics before closing"
+      );
+    }
     self.readers.close().await;
     self.writer.close().await;
   }
@@ -524,6 +538,34 @@ impl MessageRepository {
     let deleted = delete_every_row(writer.connection()).await;
     writer.restore().await;
     deleted
+  }
+
+  /// Refreshes the query planner's statistics on the writer where they are
+  /// missing or stale.
+  ///
+  /// `PRAGMA optimize` with flag `0x10000` checks every table, not only
+  /// those this connection has queried, so it is the call for startup and
+  /// after a retention sweep has removed rows. `ANALYZE` reads a bounded
+  /// sample of each index, and a table whose size has not changed much since
+  /// its last analysis is skipped.
+  ///
+  /// # Errors
+  ///
+  /// Returns [`StorageError::Database`] if a statement fails.
+  pub async fn optimize(&self) -> Result<(), StorageError> {
+    retry_on_lock(|| async {
+      let mut conn = self.writer.acquire().await?;
+      sqlx::query(AssertSqlSafe(format!(
+        "PRAGMA analysis_limit = {OPTIMIZE_ANALYSIS_LIMIT}"
+      )))
+      .execute(&mut *conn)
+      .await?;
+      sqlx::query("PRAGMA optimize = 0x10002")
+        .execute(&mut *conn)
+        .await?;
+      Ok(())
+    })
+    .await
   }
 
   /// Gives the pages freed by a retention sweep back to the filesystem, when
@@ -2575,6 +2617,58 @@ mod tests {
       ]
     );
     assert_eq!(repo.count().await.unwrap(), 1);
+  }
+
+  async fn analyzed_tables(pool: &SqlitePool) -> Vec<String> {
+    let has_stats: bool =
+      sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1')")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    if !has_stats {
+      return Vec::new();
+    }
+    sqlx::query_scalar("SELECT DISTINCT tbl FROM sqlite_stat1 ORDER BY tbl")
+      .fetch_all(pool)
+      .await
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn optimize_gives_the_planner_statistics_for_messages() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    insert_subjects(&repo, &["m0", "m1", "m2"]).await;
+    assert!(analyzed_tables(&writer).await.is_empty());
+
+    repo.optimize().await.unwrap();
+
+    assert!(
+      analyzed_tables(&writer)
+        .await
+        .contains(&"messages".to_string()),
+      "no statistics for messages after optimize"
+    );
+  }
+
+  #[tokio::test]
+  async fn closing_the_repository_refreshes_planner_statistics() {
+    let (repo, writer, dir) = file_repo_with_writer().await;
+    insert_subjects(&repo, &["m0", "m1", "m2"]).await;
+    assert!(analyzed_tables(&writer).await.is_empty());
+
+    repo.close().await;
+
+    let url = format!("sqlite://{}", dir.0.join("test.db").display());
+    let reopened = sqlx::sqlite::SqlitePoolOptions::new()
+      .connect_with(connect_options(&url).unwrap())
+      .await
+      .unwrap();
+    assert!(
+      analyzed_tables(&reopened)
+        .await
+        .contains(&"messages".to_string()),
+      "closing left messages without statistics"
+    );
   }
 
   #[tokio::test]
