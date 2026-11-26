@@ -46,6 +46,8 @@ pub enum WsEvent {
   MessageNew(MessageSummary),
   #[serde(rename = "message:delete")]
   MessageDelete { id: String },
+  #[serde(rename = "messages:delete")]
+  MessagesDelete { ids: Vec<String> },
   #[serde(rename = "message:read")]
   MessageRead { id: String, is_read: bool },
   #[serde(rename = "message:starred")]

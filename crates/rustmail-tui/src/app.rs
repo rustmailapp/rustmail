@@ -1068,19 +1068,8 @@ impl App {
           self.restore_selection(anchor).await;
         }
       }
-      WsEvent::MessageDelete { id } => {
-        let position = self.messages.iter().position(|m| m.id == id);
-        if position.is_some() || self.search_query.is_empty() {
-          self.total = (self.total - 1).max(0);
-        } else {
-          self.view_stale = true;
-        }
-        if let Some(pos) = position {
-          let anchor = self.capture_selection();
-          self.messages.remove(pos);
-          self.restore_selection(anchor).await;
-        }
-      }
+      WsEvent::MessageDelete { id } => self.apply_deletions(&[id]).await,
+      WsEvent::MessagesDelete { ids } => self.apply_deletions(&ids).await,
       update @ (WsEvent::MessageRead { .. }
       | WsEvent::MessageStarred { .. }
       | WsEvent::MessageTags { .. }) => self.apply_update(update),
@@ -1090,6 +1079,29 @@ impl App {
         self.total = 0;
         self.restore_selection(anchor).await;
       }
+    }
+  }
+
+  /// Takes deleted messages off the page and out of the total. Under a search
+  /// a message off the page may not have been among its matches, so the view
+  /// is marked stale instead of guessing.
+  async fn apply_deletions(&mut self, ids: &[String]) {
+    let anchor = self.capture_selection();
+    let mut removed_any = false;
+    for id in ids {
+      let position = self.messages.iter().position(|m| &m.id == id);
+      if position.is_some() || self.search_query.is_empty() {
+        self.total = (self.total - 1).max(0);
+      } else {
+        self.view_stale = true;
+      }
+      if let Some(pos) = position {
+        self.messages.remove(pos);
+        removed_any = true;
+      }
+    }
+    if removed_any {
+      self.restore_selection(anchor).await;
     }
   }
 
@@ -1110,7 +1122,10 @@ impl App {
           msg.tags = tags;
         }
       }
-      WsEvent::MessageNew(_) | WsEvent::MessageDelete { .. } | WsEvent::MessagesClear => {}
+      WsEvent::MessageNew(_)
+      | WsEvent::MessageDelete { .. }
+      | WsEvent::MessagesDelete { .. }
+      | WsEvent::MessagesClear => {}
     }
   }
 
@@ -1160,18 +1175,27 @@ impl App {
         self.messages.insert(0, summary);
         self.messages.truncate(self.page_size as usize);
       }
-      WsEvent::MessageDelete { id } => match self.messages.iter().position(|m| m.id == id) {
-        Some(pos) => {
-          self.messages.remove(pos);
-          self.total = (self.total - 1).max(0);
+      WsEvent::MessageDelete { id } => self.replay_deletion(&id),
+      WsEvent::MessagesDelete { ids } => {
+        for id in &ids {
+          self.replay_deletion(id);
         }
-        None => self.view_stale = true,
-      },
+      }
       WsEvent::MessagesClear => {
         self.messages.clear();
         self.total = 0;
       }
       update => self.apply_update(update),
+    }
+  }
+
+  fn replay_deletion(&mut self, id: &str) {
+    match self.messages.iter().position(|m| m.id == id) {
+      Some(pos) => {
+        self.messages.remove(pos);
+        self.total = (self.total - 1).max(0);
+      }
+      None => self.view_stale = true,
     }
   }
 
@@ -1602,6 +1626,41 @@ mod tests {
     assert_eq!(app.total, 2);
   }
 
+  fn bulk_delete_event(ids: &[&str]) -> String {
+    ws_event("messages:delete", serde_json::json!({ "ids": ids }))
+  }
+
+  #[tokio::test]
+  async fn bulk_delete_removes_listed_rows_and_counts_every_id() {
+    let mut app = app_with_messages(4);
+    app.total = 10;
+    app.selected = 3;
+    app.sync_list_state();
+
+    app
+      .handle_ws_message(&bulk_delete_event(&["id-0", "id-2", "elsewhere"]))
+      .await;
+
+    let ids: Vec<&str> = app.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["id-1", "id-3"]);
+    assert_eq!(app.total, 7);
+    assert_eq!(app.messages[app.selected].id, "id-3");
+  }
+
+  #[tokio::test]
+  async fn bulk_delete_under_search_marks_unlisted_ids_stale() {
+    let mut app = app_with_messages(3);
+    app.search_query = "invoice".into();
+
+    app
+      .handle_ws_message(&bulk_delete_event(&["id-0", "elsewhere"]))
+      .await;
+
+    assert_eq!(app.total, 2);
+    assert_eq!(app.messages.len(), 2);
+    assert!(app.view_stale);
+  }
+
   #[tokio::test]
   async fn stale_search_view_refetches_only_after_throttle() {
     let (base_url, requests) = spawn_recording_server().await;
@@ -1843,6 +1902,21 @@ mod tests {
 
   fn delete_event(id: &str) -> String {
     ws_event("message:delete", serde_json::json!({ "id": id }))
+  }
+
+  #[tokio::test]
+  async fn bulk_delete_during_in_flight_fetch_is_replayed_onto_the_snapshot() {
+    let mut app = in_flight_fetch(3);
+
+    app
+      .handle_ws_message(&bulk_delete_event(&["id-0", "id-2"]))
+      .await;
+    land_snapshot(&mut app, &["id-0", "id-1", "id-2"], 3).await;
+
+    let ids: Vec<&str> = app.messages.iter().map(|m| m.id.as_str()).collect();
+    assert_eq!(ids, vec!["id-1"]);
+    assert_eq!(app.total, 1);
+    assert!(!app.view_stale);
   }
 
   #[tokio::test]

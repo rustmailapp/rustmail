@@ -831,6 +831,7 @@ paths:
         |---|---|
         | `message:new` | `MessageSummary` object, `recipients` and `tags` as arrays |
         | `message:delete` | `{ "id": "<ulid>" }` |
+        | `messages:delete` | `{ "ids": ["<ulid>", ...] }`, sent by the retention sweep, at most 1000 ids per event |
         | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
         | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
         | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |
@@ -1255,6 +1256,7 @@ components:
       oneOf:
         - $ref: '#/components/schemas/WsMessageNew'
         - $ref: '#/components/schemas/WsMessageDelete'
+        - $ref: '#/components/schemas/WsMessagesDelete'
         - $ref: '#/components/schemas/WsMessageRead'
         - $ref: '#/components/schemas/WsMessageStarred'
         - $ref: '#/components/schemas/WsMessageTags'
@@ -1283,6 +1285,24 @@ components:
             id:
               type: string
               description: ULID of the deleted message
+
+    WsMessagesDelete:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'messages:delete'
+        data:
+          type: object
+          required: [ids]
+          properties:
+            ids:
+              type: array
+              items:
+                type: string
+              description: >
+                ULIDs of the deleted messages, at most 1000. The retention
+                sweep sends one event per 1000 ids it removes.
 
     WsMessageRead:
       type: object

@@ -223,6 +223,12 @@ async fn message_responses() -> BTreeSet<Covered> {
     })
     .unwrap(),
   );
+  check_ws_frame(
+    &serde_json::to_string(&WsEvent::MessagesDelete {
+      ids: vec![welcome.clone(), files_id.clone()],
+    })
+    .unwrap(),
+  );
   let mut t = fx.transcript();
 
   for uri in [

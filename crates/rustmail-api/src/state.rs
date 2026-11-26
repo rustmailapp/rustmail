@@ -30,6 +30,9 @@ pub enum WsEvent {
   /// A message was deleted.
   #[serde(rename = "message:delete")]
   MessageDelete { id: String },
+  /// Several messages were deleted at once, as by the retention sweep.
+  #[serde(rename = "messages:delete")]
+  MessagesDelete { ids: Vec<String> },
   /// A message's read state changed.
   #[serde(rename = "message:read")]
   MessageRead { id: String, is_read: bool },
@@ -212,6 +215,12 @@ mod tests {
       (
         WsEvent::MessageDelete { id: "a".into() },
         r#"{"type":"message:delete","data":{"id":"a"}}"#,
+      ),
+      (
+        WsEvent::MessagesDelete {
+          ids: vec!["a".into(), "b".into()],
+        },
+        r#"{"type":"messages:delete","data":{"ids":["a","b"]}}"#,
       ),
       (
         WsEvent::MessageRead {

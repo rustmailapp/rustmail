@@ -2378,6 +2378,68 @@ describe("a superseded list read", () => {
   });
 });
 
+describe("a bulk deletion", () => {
+  const rows = [400, 401, 402, 403].map((n) => message(n));
+
+  beforeEach(async () => {
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    listMessages.mockResolvedValue(page(rows, 5000));
+    await fetchMessages();
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+  });
+
+  function purge(ids: string[]): string {
+    return JSON.stringify({ type: "messages:delete", data: { ids } });
+  }
+
+  function purged(count: number): string[] {
+    return Array.from({ length: count }, (_, i) => `purged-${i}`);
+  }
+
+  it("takes the loaded rows it names out of the list", () => {
+    deliver(purge(["id-401", "id-403"]));
+
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-400", "id-402"]);
+  });
+
+  it("counts every id it names out of an unnarrowed total", () => {
+    deliver(purge(["id-401", ...purged(2999)]));
+
+    expect(total()).toBe(2000);
+  });
+
+  it("reads the count once for ids a filter cannot place", async () => {
+    const starred = rows.slice(0, 2).map((m) => ({ ...m, is_starred: true }));
+    listMessages.mockResolvedValue(page(starred, 50));
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockClear();
+    listMessages.mockResolvedValue(page([], 10));
+
+    deliver(purge(purged(3000)));
+
+    await vi.waitFor(() => expect(total()).toBe(10));
+    expect(listMessages).toHaveBeenCalledOnce();
+    expect(listMessages.mock.calls[0][0]).toMatchObject({ limit: 1 });
+  });
+
+  it("gives up the undo of a message it names", () => {
+    deleteWithUndo("id-400");
+
+    deliver(purge(["id-400", "id-402"]));
+
+    expect(undoableId()).toBeNull();
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-401", "id-403"]);
+  });
+});
+
 /**
  * A deletion is reported twice, over two connections that do not order
  * themselves: once by the DELETE response, once by the `message:delete` event.
@@ -2688,7 +2750,7 @@ describe("a deletion reported over both connections", () => {
   });
 
   /**
-   * Retention purges a batch one `message:delete` at a time, so a list read
+   * Deletions can keep confirming while a list read is in flight, so the read
    * can lose every race it retries. The read has to stop asking and leave the
    * count to a refresh.
    */

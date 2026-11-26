@@ -55,6 +55,17 @@ Fired when a single message is deleted.
 }
 ```
 
+### `messages:delete`
+
+Fired when several messages are deleted at once. The retention sweep (`--retention`, `--max-messages`) sends one event for up to 1000 ids, and more events when it removes more. Deleting a single message still sends `message:delete`.
+
+```json
+{
+  "type": "messages:delete",
+  "data": { "ids": ["01ARZ3NDEKTSV4RRFFQ69G5FAV", "01ARZ3NDEKTSV4RRFFQ69G5FAW"] }
+}
+```
+
 ### `message:read`
 
 Fired when a message's read state changes.
@@ -158,6 +169,9 @@ ws.onmessage = (event) => {
       break;
     case "message:delete":
       console.log(`Message ${msg.data.id} deleted`);
+      break;
+    case "messages:delete":
+      console.log(`${msg.data.ids.length} messages deleted`);
       break;
     case "messages:clear":
       console.log("All messages cleared");

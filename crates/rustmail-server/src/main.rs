@@ -943,9 +943,23 @@ fn parse_release_host(s: &str) -> (String, Option<u16>) {
   (s.to_string(), None)
 }
 
+/// Most ids one `messages:delete` event carries, which keeps a sweep of any
+/// size to a few frames of bounded length.
+const RETENTION_IDS_PER_EVENT: usize = 1000;
+
+/// Announces the messages a retention sweep removed, one `MessagesDelete`
+/// event per [`RETENTION_IDS_PER_EVENT`] ids.
+fn broadcast_purged(state: &AppState, ids: &[String]) {
+  for chunk in ids.chunks(RETENTION_IDS_PER_EVENT) {
+    state.broadcast(WsEvent::MessagesDelete {
+      ids: chunk.to_vec(),
+    });
+  }
+}
+
 /// Runs a single retention sweep: purges messages older than `retention_hours`
-/// and trims to `max_messages` when configured, broadcasting `MessageDelete`
-/// events for each removed id, then reclaims disk once the freelist is large
+/// and trims to `max_messages` when configured, announcing the removed ids
+/// with [`broadcast_purged`], then reclaims disk once the freelist is large
 /// enough to be worth it.
 ///
 /// `now` is injected so callers can drive deterministic cutoffs in tests.
@@ -965,9 +979,7 @@ async fn run_retention_tick(
     match repo.delete_older_than(&cutoff_str).await {
       Ok(ids) if !ids.is_empty() => {
         tracing::info!(deleted = ids.len(), "Retention: purged old messages");
-        for id in ids {
-          state.broadcast(WsEvent::MessageDelete { id });
-        }
+        broadcast_purged(state, &ids);
       }
       Err(e) => {
         tracing::error!(error = %e, "Retention: failed to purge");
@@ -979,9 +991,7 @@ async fn run_retention_tick(
     match repo.trim_to_max(max_messages).await {
       Ok(ids) if !ids.is_empty() => {
         tracing::info!(deleted = ids.len(), "Retention: trimmed to max");
-        for id in ids {
-          state.broadcast(WsEvent::MessageDelete { id });
-        }
+        broadcast_purged(state, &ids);
       }
       Err(e) => {
         tracing::error!(error = %e, "Retention: failed to trim");
@@ -2061,15 +2071,19 @@ mod retention_tests {
       .id
   }
 
-  fn drain_delete_events(rx: &mut broadcast::Receiver<WsFrame>) -> Vec<String> {
-    let mut ids = Vec::new();
+  fn drain_delete_batches(rx: &mut broadcast::Receiver<WsFrame>) -> Vec<Vec<String>> {
+    let mut batches = Vec::new();
     while let Ok(frame) = rx.try_recv() {
       match frame.decode().unwrap() {
-        WsEvent::MessageDelete { id } => ids.push(id),
+        WsEvent::MessagesDelete { ids } => batches.push(ids),
         other => panic!("unexpected WebSocket event from retention tick: {other:?}"),
       }
     }
-    ids
+    batches
+  }
+
+  fn drain_delete_events(rx: &mut broadcast::Receiver<WsFrame>) -> Vec<String> {
+    drain_delete_batches(rx).concat()
   }
 
   #[tokio::test]
@@ -2139,6 +2153,33 @@ mod retention_tests {
     for surviving in &expected_survivors {
       assert_eq!(repo.get(surviving).await.unwrap().id, *surviving);
     }
+  }
+
+  #[tokio::test]
+  async fn tick_announces_a_large_trim_in_bounded_batches() {
+    const STORED: usize = 2 * RETENTION_IDS_PER_EVENT + 501;
+    let (repo, state, mut rx) = build_state().await;
+    let raw = raw_email("bulk");
+    let prepared: Vec<_> = (0..STORED)
+      .map(|_| {
+        PreparedMessage::parse("a@test.com".into(), &["b@test.com".into()], raw.clone()).unwrap()
+      })
+      .collect();
+    repo.insert_batch(&prepared).await.unwrap();
+
+    run_retention_tick(&repo, &state, 0, 1, OffsetDateTime::now_utc()).await;
+
+    let batches = drain_delete_batches(&mut rx);
+    let sizes: Vec<usize> = batches.iter().map(Vec::len).collect();
+    assert_eq!(
+      sizes,
+      vec![RETENTION_IDS_PER_EVENT, RETENTION_IDS_PER_EVENT, 500]
+    );
+    let mut announced = batches.concat();
+    announced.sort();
+    announced.dedup();
+    assert_eq!(announced.len(), STORED - 1);
+    assert_eq!(repo.count().await.unwrap(), 1);
   }
 
   #[tokio::test]

@@ -108,6 +108,10 @@ export const wsEvent = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message:new"), data: messageSummary }),
   z.object({ type: z.literal("message:delete"), data: identified }),
   z.object({
+    type: z.literal("messages:delete"),
+    data: z.object({ ids: z.array(z.string()) }),
+  }),
+  z.object({
     type: z.literal("message:read"),
     data: z.extend(identified, { is_read: z.boolean() }),
   }),
