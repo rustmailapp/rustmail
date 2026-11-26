@@ -1,0 +1,84 @@
+name: musl cross check
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Cross (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            platform: linux/amd64
+          - target: aarch64-unknown-linux-musl
+            platform: linux/arm64
+          - target: armv7-unknown-linux-musleabihf
+            platform: linux/arm/v7
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6
+        with:
+          node-version: 22
+
+      - name: Build UI
+        working-directory: ui
+        run: corepack enable && pnpm install --frozen-lockfile && pnpm build
+
+      - name: Install cross
+        env:
+          CROSS_SHA256: 642375d1bcf3bd88272c32ba90e999f3d983050adf45e66bd2d3887e8e838bad
+        run: |
+          curl -fsSL https://github.com/cross-rs/cross/releases/download/v0.2.5/cross-x86_64-unknown-linux-gnu.tar.gz \
+            -o /tmp/cross.tar.gz
+          echo "${CROSS_SHA256}  /tmp/cross.tar.gz" | sha256sum -c -
+          tar xz -C /usr/local/bin -f /tmp/cross.tar.gz
+          rm /tmp/cross.tar.gz
+
+      - name: Build release binary (cross)
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Check mimalloc is linked
+        run: |
+          file target/${{ matrix.target }}/release/rustmail
+          ls -l target/${{ matrix.target }}/release/rustmail
+          strings target/${{ matrix.target }}/release/rustmail | grep -m1 MIMALLOC_
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4
+
+      - name: Run the binary on its platform
+        run: |
+          docker run --rm --platform ${{ matrix.platform }} \
+            -v "$PWD/target/${{ matrix.target }}/release/rustmail:/rustmail:ro" \
+            alpine:3.21 /rustmail --version
+          docker run -d --name smoke --platform ${{ matrix.platform }} -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 \
+            -v "$PWD/target/${{ matrix.target }}/release/rustmail:/rustmail:ro" \
+            alpine:3.21 /rustmail --bind 0.0.0.0
+          for _ in $(seq 1 120); do curl -fsS "http://127.0.0.1:8025/api/v1/messages?limit=1" >/dev/null 2>&1 && break; sleep 1; done
+          python3 - <<'PY'
+          import smtplib
+          from email.message import EmailMessage
+          with smtplib.SMTP("127.0.0.1", 1025, timeout=60) as s:
+              for i in range(20):
+                  m = EmailMessage()
+                  m["From"] = "a@example.test"
+                  m["To"] = "b@example.test"
+                  m["Subject"] = f"cross {i}"
+                  m.set_content("body " * 200)
+                  s.send_message(m)
+          PY
+          sleep 3
+          curl -fsS "http://127.0.0.1:8025/api/v1/messages?limit=1" | python3 -c 'import json,sys; t=json.load(sys.stdin)["total"]; print("total", t); assert t == 20'
+          docker logs smoke
+          docker rm -f smoke
