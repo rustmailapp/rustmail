@@ -660,6 +660,7 @@ fn relay_transport(
 
 /// How a release attempt against the relay ended.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
 enum RelayOutcome {
   /// The relay accepted the message.
   Sent,
@@ -1379,6 +1380,41 @@ mod relay_transport_tests {
   const EHLO_WITH_STARTTLS: &[u8] = b"250-relay.test\r\n250 STARTTLS\r\n";
   const EHLO_WITHOUT_STARTTLS: &[u8] = b"250 relay.test\r\n";
   const RAW_MESSAGE: &[u8] = b"Subject: relay\r\n\r\nBody.\r\n";
+  const RELEASED_ID: &str = "01J0000000000000000000000Z";
+  const RELEASED_AT: &str = "2026-11-26T12:00:00Z";
+
+  /// Checks the answer the router gives for `outcome` against
+  /// `docs/api.yaml`, with and without a release recorded on the message.
+  fn assert_release_response_is_documented(outcome: &RelayOutcome) {
+    let operation = crate::openapi::Operation {
+      method: "POST".to_string(),
+      path: "/api/v1/messages/{id}/release".to_string(),
+    };
+    let recorded_outcome = match outcome {
+      RelayOutcome::Sent => Some(ReleaseOutcome::Sent),
+      RelayOutcome::Unknown(_) => Some(ReleaseOutcome::Unknown),
+      RelayOutcome::NotSent(_) => None,
+    };
+    let recordings = [
+      None,
+      recorded_outcome.map(|release_outcome| Release {
+        released_at: RELEASED_AT.to_string(),
+        release_outcome,
+      }),
+    ];
+    for recorded in recordings {
+      let (status, Json(body)) = release_response(RELEASED_ID, outcome.clone(), recorded);
+      let bytes = serde_json::to_vec(&body).unwrap();
+      crate::openapi::spec()
+        .check_response(
+          &operation,
+          status.as_u16(),
+          Some("application/json"),
+          Some(&bytes),
+        )
+        .unwrap();
+    }
+  }
 
   fn envelope() -> Envelope {
     Envelope::new(
@@ -1566,6 +1602,7 @@ mod relay_transport_tests {
       .unwrap();
 
     assert!(matches!(outcome, RelayOutcome::Sent), "{outcome:?}");
+    assert_release_response_is_documented(&outcome);
     assert_eq!(message.sender, "sender@example.com");
     assert_eq!(
       message.recipients,
@@ -1598,6 +1635,7 @@ mod relay_transport_tests {
     let outcome = send_to_relay(&mailer, &envelope(), RAW_MESSAGE, STALL_DEADLINE).await;
 
     assert!(matches!(outcome, RelayOutcome::NotSent(_)), "{outcome:?}");
+    assert_release_response_is_documented(&outcome);
     relay.abort();
   }
 
@@ -1682,6 +1720,7 @@ mod relay_transport_tests {
     let (outcome, relay) = release_through_scripted_relay(AfterData::Disconnect).await;
 
     assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
+    assert_release_response_is_documented(&outcome);
     tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
       .await
       .expect("the relay never received the whole message")
@@ -1693,6 +1732,7 @@ mod relay_transport_tests {
     let (outcome, relay) = release_through_scripted_relay(AfterData::Stall).await;
 
     assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
+    assert_release_response_is_documented(&outcome);
     relay.abort();
   }
 }

@@ -37,3 +37,4 @@ ulid = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 tower = { workspace = true }
+yaml-rust2 = { workspace = true }

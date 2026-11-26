@@ -7,6 +7,7 @@
 //! a legacy file, migrates the file and serves it the way a file database is
 //! served. Every request goes through the full [`router`] with its middleware.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use axum::Router;
@@ -20,6 +21,7 @@ use rustmail_storage::{
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
+use crate::contract::{self, Covered};
 use crate::corpus::{CorpusMessage, corpus};
 use crate::golden::{KnownBlob, Normalizer, render_body};
 use crate::legacy_v0_7_0;
@@ -103,6 +105,7 @@ impl Fixture {
       fixture: self,
       known: self.known_blobs(),
       out: String::new(),
+      covered: BTreeSet::new(),
     }
   }
 }
@@ -332,10 +335,13 @@ pub struct Captured {
 }
 
 /// An ordered text record of exchanges, compared against a snapshot.
+///
+/// Every response is also checked against `docs/api.yaml` as it arrives.
 pub struct Transcript<'a> {
   fixture: &'a Fixture,
   known: Vec<KnownBlob<'static>>,
   out: String,
+  covered: BTreeSet<Covered>,
 }
 
 impl Transcript<'_> {
@@ -404,6 +410,13 @@ impl Transcript<'_> {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
       .await
       .unwrap();
+    self.covered.extend(contract::observe(
+      &request.method,
+      &request.uri,
+      status,
+      &headers,
+      &body,
+    ));
 
     self.out.push_str(&format!(
       "<<< {} {}\n",
@@ -423,6 +436,11 @@ impl Transcript<'_> {
     }
 
     Captured { status, body }
+  }
+
+  /// The documented responses these exchanges produced.
+  pub fn covered(&self) -> &BTreeSet<Covered> {
+    &self.covered
   }
 
   /// The recorded text.
