@@ -36,7 +36,7 @@ const {
   MAX_TAG_FILTERS,
   NOTICE_SUBJECT_MAX,
   PAGE_SIZE,
-  SEARCH_REFRESH_WINDOW_MS,
+  LIST_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   UNDO_WINDOW_MS,
   clearFilters,
@@ -1706,7 +1706,7 @@ describe("arrivals while the reader is scrolled away", () => {
       setLiveHeld(true);
 
       deliver(arrival(9));
-      await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+      await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
       expect(listMessages).not.toHaveBeenCalled();
       expect(heldRefresh()).toBe(true);
 
@@ -2090,6 +2090,129 @@ describe("loading while the socket will not open", () => {
   });
 });
 
+describe("live events during an older-page read", () => {
+  const rows = Array.from({ length: PAGE_SIZE + 10 }, (_, i) =>
+    message(500 + i),
+  );
+  const olderRow = rows[PAGE_SIZE + 3];
+
+  beforeEach(async () => {
+    connectAndOpen();
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    listMessages.mockResolvedValue(
+      page(rows.slice(0, PAGE_SIZE), rows.length, rows[PAGE_SIZE - 1].id),
+    );
+    await fetchMessages();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+  });
+
+  it("applies a flag change to a row of the page it was reading", async () => {
+    const older = deferred<Page>();
+    listMessages.mockReturnValueOnce(older.promise);
+    const reading = loadMore();
+
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: olderRow.id, is_read: true },
+      }),
+    );
+    older.resolve(page(rows.slice(PAGE_SIZE), rows.length));
+    await reading;
+
+    const row = filteredMessages().find((m) => m.id === olderRow.id);
+    expect(row?.is_read).toBe(true);
+  });
+
+  it("keeps an arrival made while it read in the count", async () => {
+    const older = deferred<Page>();
+    listMessages.mockReturnValueOnce(older.promise);
+    const reading = loadMore();
+
+    deliver(JSON.stringify({ type: "message:new", data: message(999) }));
+    listMessages.mockResolvedValue(page([message(999)], rows.length + 1));
+    older.resolve(page(rows.slice(PAGE_SIZE), rows.length));
+    await reading;
+
+    await vi.waitFor(() => expect(total()).toBe(rows.length + 1));
+  });
+});
+
+describe("a flag change on a row the list does not hold", () => {
+  const starred = (n: number) => message(n, { is_starred: true });
+
+  beforeEach(async () => {
+    useFakeClock();
+    connectAndOpen();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function starredEvent(id: string, is_starred: boolean): string {
+    return JSON.stringify({
+      type: "message:starred",
+      data: { id, is_starred },
+    });
+  }
+
+  it("brings in a message the change makes match the filters", async () => {
+    listMessages.mockResolvedValue(page([starred(600), starred(602)]));
+    toggleFilter("starred");
+    await vi.advanceTimersByTimeAsync(0);
+    listMessages.mockResolvedValue(
+      page([starred(600), starred(601), starred(602)]),
+    );
+
+    deliver(starredEvent("id-601", true));
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
+
+    expect(filteredMessages().map((m) => m.id)).toEqual([
+      "id-600",
+      "id-601",
+      "id-602",
+    ]);
+    expect(total()).toBe(3);
+  });
+
+  it("does not read again for a change that cannot make it match", async () => {
+    listMessages.mockResolvedValue(page([starred(600), starred(602)]));
+    toggleFilter("starred");
+    await vi.advanceTimersByTimeAsync(0);
+    listMessages.mockClear();
+
+    deliver(starredEvent("id-601", false));
+    deliver(
+      JSON.stringify({
+        type: "message:read",
+        data: { id: "id-603", is_read: true },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not read again without filters", async () => {
+    listMessages.mockResolvedValue(page([message(600)]));
+    await fetchMessages();
+    listMessages.mockClear();
+
+    deliver(starredEvent("id-601", true));
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
+
+    expect(listMessages).not.toHaveBeenCalled();
+  });
+});
+
 describe("live traffic during a search", () => {
   const ROUND_TRIP_MS = 50;
   const ARRIVAL_INTERVAL_MS = 10;
@@ -2120,7 +2243,7 @@ describe("live traffic during a search", () => {
 
     for (let n = 100; n < 150; n += 1) deliver(arrival(n));
     expect(listMessages).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
 
     expect(listMessages).toHaveBeenCalledExactlyOnceWith(
       { limit: PAGE_SIZE, q: "invoice" },
@@ -2136,20 +2259,20 @@ describe("live traffic during a search", () => {
     listMessages.mockResolvedValue({ messages: [message(6)], total: 1 });
 
     deliver(arrival(100));
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
     deliver(arrival(101));
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
     expect(listMessages).toHaveBeenCalledTimes(1);
 
     read.resolve({ messages: [message(5)], total: 1 });
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
 
     expect(listMessages).toHaveBeenCalledTimes(2);
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-6"]);
   });
 
   it("lands results and settles loading while mail keeps arriving", async () => {
-    const TRAFFIC_MS = 5 * SEARCH_REFRESH_WINDOW_MS;
+    const TRAFFIC_MS = 5 * LIST_REFRESH_WINDOW_MS;
     listMessages.mockImplementation(
       () =>
         new Promise((resolve) =>
@@ -2167,9 +2290,9 @@ describe("live traffic during a search", () => {
 
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);
     expect(listMessages.mock.calls.length).toBeLessThanOrEqual(
-      TRAFFIC_MS / SEARCH_REFRESH_WINDOW_MS,
+      TRAFFIC_MS / LIST_REFRESH_WINDOW_MS,
     );
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS + ROUND_TRIP_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS + ROUND_TRIP_MS);
     expect(loading()).toBe(false);
   });
 
@@ -2177,7 +2300,7 @@ describe("live traffic during a search", () => {
     deliver(arrival(100));
     setSearch("");
 
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
 
     expect(listMessages).not.toHaveBeenCalled();
   });
@@ -2186,7 +2309,7 @@ describe("live traffic during a search", () => {
     deliver(arrival(100));
 
     disconnectWebSocket();
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS * 2);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS * 2);
 
     expect(listMessages).not.toHaveBeenCalled();
   });
@@ -2196,12 +2319,12 @@ describe("live traffic during a search", () => {
     listMessages.mockReturnValueOnce(read.promise);
 
     deliver(arrival(100));
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
     expect(listMessages).toHaveBeenCalledTimes(1);
 
     disconnectWebSocket();
     read.resolve({ messages: [message(5)], total: 1 });
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS * 2);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS * 2);
 
     expect(listMessages).toHaveBeenCalledTimes(1);
     expect(loading()).toBe(false);
@@ -2212,11 +2335,11 @@ describe("live traffic during a search", () => {
     deliver(arrival(100));
 
     listMessages.mockRejectedValueOnce(new Error("offline"));
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
     expect(listMessages).toHaveBeenCalledTimes(1);
 
     listMessages.mockResolvedValueOnce({ messages: [message(5)], total: 1 });
-    await vi.advanceTimersByTimeAsync(SEARCH_REFRESH_WINDOW_MS);
+    await vi.advanceTimersByTimeAsync(LIST_REFRESH_WINDOW_MS);
 
     expect(listMessages).toHaveBeenCalledTimes(2);
     expect(filteredMessages().map((m) => m.id)).toEqual(["id-5"]);

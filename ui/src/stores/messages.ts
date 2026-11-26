@@ -54,13 +54,13 @@ const NOTICE_SUBJECT_MAX = 50;
 const UNDO_WINDOW_MS = 5000;
 
 /**
- * The most often live mail refetches an active search.
+ * The most often live events refetch a list they cannot update in place.
  *
- * Every arrival makes the results stale, and at hundreds per second a refetch
+ * Every arrival makes a search stale, and at hundreds per second a refetch
  * each would never let one land while flooding the server with full-text
  * queries.
  */
-const SEARCH_REFRESH_WINDOW_MS = 1000;
+const LIST_REFRESH_WINDOW_MS = 1000;
 
 /**
  * The most live events held for the next frame.
@@ -604,10 +604,14 @@ let latestFetch = 0;
 let currentListRead: AbortController | null = null;
 /** The older-page read in flight, abandoned once a first-page read supersedes it. */
 let currentPageRead: AbortController | null = null;
-let searchStale = false;
-let searchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let listStale = false;
+let listRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+/** The view {@link scheduleListRefresh} last found stale. */
+let staleView: View = currentView();
 /** Live events applied while the current list read is in flight. */
 let eventsDuringRead: ReplayableEvent[] | null = null;
+/** Live events applied while the current older-page read is in flight. */
+let eventsDuringPageRead: ReplayableEvent[] | null = null;
 let latestCountRead = 0;
 let countNeedsRefresh = false;
 
@@ -1048,7 +1052,7 @@ async function readFirstPage(): Promise<boolean> {
         landed.show();
         setListedWhole(search() === "" && !hasActiveFilters());
         setStoredTotal(landed.total);
-        searchStale = false;
+        listStale = false;
         replayEvents(eventsDuringRead ?? [], landed.ids);
       });
       if (countUnsettled) void refreshTotal();
@@ -1063,33 +1067,34 @@ async function readFirstPage(): Promise<boolean> {
       currentListRead = null;
       eventsDuringRead = null;
       setLoading(false);
-      if (searchStale) scheduleSearchRefresh();
+      if (listStale) scheduleListRefresh();
     }
   }
 }
 
 /**
- * Marks the search results stale and refetches them once the window closes.
+ * Marks the list stale and reads it again once the window closes.
  *
- * A search cannot place a live message itself, since only the server knows
- * whether it matches, so arrivals are folded into one trailing read per
- * {@link SEARCH_REFRESH_WINDOW_MS}. A read still in flight when the window
+ * Some live events cannot be placed here: a search cannot tell whether an
+ * arrival matches, and a filter cannot show a message it never loaded that a
+ * flag change has made match. They are folded into one trailing read per
+ * {@link LIST_REFRESH_WINDOW_MS}. A read still in flight when the window
  * closes is left alone; the stale flag outlives it and schedules the next.
+ * A refresh is for the view it was scheduled in, and another view drops it.
  */
-function scheduleSearchRefresh(): void {
-  searchStale = true;
-  if (searchRefreshTimer !== null) return;
-  searchRefreshTimer = setTimeout(() => {
-    searchRefreshTimer = null;
-    if (!searchStale || !search() || loading()) return;
+function scheduleListRefresh(): void {
+  listStale = true;
+  staleView = currentView();
+  if (listRefreshTimer !== null) return;
+  listRefreshTimer = setTimeout(() => {
+    listRefreshTimer = null;
+    if (!listStale || loading() || !isCurrentView(staleView)) return;
     if (liveHeld()) {
       setHeldRefresh(true);
       return;
     }
-    fetchMessages().catch(() =>
-      notify("Could not refresh the search results."),
-    );
-  }, SEARCH_REFRESH_WINDOW_MS);
+    fetchMessages().catch(() => notify("Could not refresh the list."));
+  }, LIST_REFRESH_WINDOW_MS);
 }
 
 const OLDER_PAGE_FAILED = "Could not load older messages.";
@@ -1105,6 +1110,11 @@ const OLDER_PAGE_FAILED = "Could not load older messages.";
  * {@link LIST_READ_ATTEMPTS} reads have all missed. Any other failure is
  * reported rather than thrown, since the list's scroll position is what calls
  * this.
+ *
+ * A flag change that lands while the page is read finds none of its rows yet,
+ * so it is applied again over the page once it is appended, and the count is
+ * read again: the page may have been served before or after it, and an arrival
+ * made meanwhile may be missing from the page's total.
  */
 async function loadMore(): Promise<void> {
   if (loading() || loadingMore() || !hasMore()) return;
@@ -1120,6 +1130,7 @@ async function loadMore(): Promise<void> {
       const before = nextCursor();
       if (before === null) return;
       const revision = deletionRevision;
+      eventsDuringPageRead = [];
       let res: ListResponse;
       try {
         res = await api.listMessages(
@@ -1137,14 +1148,17 @@ async function loadMore(): Promise<void> {
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
+      const missed = eventsDuringPageRead ?? [];
+      const countUnsettled = raced || missed.length > 0;
       batch(() => {
         snapshot += 1;
-        countNeedsRefresh = raced;
+        countNeedsRefresh = countUnsettled;
         appendRows(res.messages.filter((m) => !positions.has(m.id)));
         setPageCursor(res.next_cursor, view);
         setStoredTotal(res.total);
+        applyEvents(missed.filter((event) => event.type !== "message:new"));
       });
-      if (raced) void refreshTotal();
+      if (countUnsettled) void refreshTotal();
       return;
     }
     notify(OLDER_PAGE_FAILED);
@@ -1153,7 +1167,10 @@ async function loadMore(): Promise<void> {
       notify(OLDER_PAGE_FAILED);
     }
   } finally {
-    if (currentPageRead === controller) currentPageRead = null;
+    if (currentPageRead === controller) {
+      currentPageRead = null;
+      eventsDuringPageRead = null;
+    }
     setLoadingMore(false);
   }
 }
@@ -1216,7 +1233,7 @@ function readEvent(frame: unknown): WsEvent | undefined {
 function admitArrivals(arrivals: readonly MessageSummary[]): void {
   if (arrivals.length === 0) return;
   if (search()) {
-    scheduleSearchRefresh();
+    scheduleListRefresh();
     return;
   }
   const f = filters();
@@ -1280,7 +1297,12 @@ function patchMessage(
     return;
   }
   const current = findMessage(id);
-  if (current === undefined) return;
+  if (current === undefined) {
+    if (typeof patch !== "function" && mayStartMatching(patch, filters())) {
+      scheduleListRefresh();
+    }
+    return;
+  }
   const patched = apply(current);
   const f = filters();
   const was = matchesFilters(current, f);
@@ -1289,6 +1311,33 @@ function patchMessage(
     replaceRow(patched);
     if (was !== is) setStoredTotal((t) => Math.max(0, t + (is ? 1 : -1)));
   });
+}
+
+/**
+ * Whether `patch` could make a message the list does not hold match `f`.
+ *
+ * Only a change to a field a filter narrows on can, and only towards the
+ * filter: a message marked read cannot enter the unread filter. That keeps the
+ * echo of a change that took a row out of the filters, after the list let the
+ * row go, from reading the list again.
+ */
+function mayStartMatching(
+  patch: Partial<MessageSummary>,
+  f: FilterState,
+): boolean {
+  const narrowed =
+    (f.starred && patch.is_starred !== undefined) ||
+    (f.unread && patch.is_read !== undefined) ||
+    (f.tags.length > 0 && patch.tags !== undefined);
+  if (!narrowed) return false;
+  if (f.starred && patch.is_starred === false) return false;
+  if (f.unread && patch.is_read === true) return false;
+  const tags = patch.tags;
+  return (
+    tags === undefined ||
+    f.tags.length === 0 ||
+    f.tags.some((t) => tags.includes(t))
+  );
 }
 
 /** The events a list read may have been served without. */
@@ -1405,6 +1454,7 @@ function recordRelease(id: string, record: ReleaseRecord): void {
     data: { id, ...record },
   };
   eventsDuringRead?.push(event);
+  eventsDuringPageRead?.push(event);
   applyEvent(event);
 }
 
@@ -1451,8 +1501,10 @@ function flushEvents(): void {
     fetchMessages().catch(() => notify("Could not catch up with live mail."));
     return;
   }
-  if (eventsDuringRead !== null) {
-    eventsDuringRead.push(...events.filter(isReplayable));
+  if (eventsDuringRead !== null || eventsDuringPageRead !== null) {
+    const replayable = events.filter(isReplayable);
+    eventsDuringRead?.push(...replayable);
+    eventsDuringPageRead?.push(...replayable);
   }
   batch(() => applyEvents(events));
 }
@@ -1570,12 +1622,13 @@ function disconnectWebSocket(): void {
   currentPageRead?.abort();
   currentPageRead = null;
   eventsDuringRead = null;
+  eventsDuringPageRead = null;
   setLoading(false);
-  if (searchRefreshTimer !== null) {
-    clearTimeout(searchRefreshTimer);
-    searchRefreshTimer = null;
+  if (listRefreshTimer !== null) {
+    clearTimeout(listRefreshTimer);
+    listRefreshTimer = null;
   }
-  searchStale = false;
+  listStale = false;
 }
 
 export {
@@ -1587,7 +1640,7 @@ export {
   MAX_TAG_FILTERS,
   LIST_READ_ATTEMPTS,
   PAGE_SIZE,
-  SEARCH_REFRESH_WINDOW_MS,
+  LIST_REFRESH_WINDOW_MS,
   SOCKET_OPEN_DEADLINE_MS,
   flushPendingDelete,
   liveSummary,
