@@ -1530,6 +1530,32 @@ describe("arrivals while the reader is scrolled away", () => {
     expect(total()).toBe(rows.length);
   });
 
+  it("counts an arrival that commits between the pages of a held resync once", async () => {
+    const rows = range(PAGE_SIZE + 50);
+    serve(rows);
+    await fetchMessages();
+    await loadMore();
+    setLiveHeld(true);
+    listMessages.mockImplementation(
+      async ({ limit, before }: { limit: number; before?: string }) => {
+        if (before === undefined) {
+          return page(rows.slice(0, limit), rows.length, rows[limit - 1].id);
+        }
+        deliver(arrival(-1));
+        const start = rows.findIndex((m) => m.id === before) + 1;
+        return page(rows.slice(start, start + limit), rows.length + 1, null);
+      },
+    );
+
+    await resync();
+
+    expect(ids()).toEqual(rows.map((m) => m.id));
+    expect(heldArrivals()).toBe(1);
+    expect(total()).toBe(rows.length + 1);
+    setLiveHeld(false);
+    expect(ids()[0]).toBe("id--1");
+  });
+
   it("puts the held arrivals on top once the reader is back there", () => {
     setLiveHeld(true);
     deliver(arrival(8));

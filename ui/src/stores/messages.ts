@@ -929,6 +929,10 @@ async function readTopPage(
  * Only the first two pass every loaded row: after the others, a loaded row
  * below the last one met may lie further down or be gone, so it stays until an
  * older-page read finds out.
+ *
+ * The total is the first page's: only that page can hold an arrival, so one
+ * that commits while older pages are read is in neither the rows nor the count,
+ * and replaying its event counts it once.
  */
 async function readLoadedWindow(
   view: View,
@@ -936,6 +940,7 @@ async function readLoadedWindow(
 ): Promise<LandedRead> {
   const tail = messages().at(-1)?.id;
   const read: MessageSummary[] = [];
+  let total: number | undefined;
   let metAny = false;
   let sinceLoaded = 0;
   let before: string | undefined;
@@ -948,6 +953,7 @@ async function readLoadedWindow(
       },
       signal,
     );
+    total ??= res.total;
     let metTail = false;
     for (const m of res.messages) {
       read.push(m);
@@ -966,7 +972,7 @@ async function readLoadedWindow(
       : read.length > MAX_LIVE_ROWS;
     if (passedAll || outranLoaded) {
       return {
-        total: res.total,
+        total,
         ids: new Set(read.map((m) => m.id)),
         show: () => reconcileWindow(read, passedAll, ended, view),
       };
