@@ -1,17 +1,18 @@
 ---
-description: "Upgrade RustMail to 0.8, 0.10 and later: the automatic database upgrade, where the backup goes, and how to roll back."
+description: "Upgrade RustMail to 0.8, 0.10, 0.11 and later: the automatic database upgrade, where the backup goes, and how to roll back."
 ---
 
 # Upgrading
 
-Two RustMail releases store messages in a new database layout:
+Three RustMail releases store messages in a new database layout:
 
 | Release | Layout | Upgrades databases written by |
 |---|---|---|
 | 0.8 | schema 1: bodies and metadata in separate tables | 0.7 and earlier |
 | 0.10 | schema 2: each message's source stored compressed, bodies read from it | 0.7 and earlier, 0.8 and 0.9 |
+| 0.11 | schema 3: schema 2 plus each message's last [release](/features/release#recorded-releases) | 0.7 and earlier, 0.8, 0.9 and 0.10 |
 
-The first time a newer version starts on an older database, it upgrades that database automatically, in one step even when it skips a release. There is nothing to run by hand, and no API changes.
+The first time a newer version starts on an older database, it upgrades that database automatically, in one step even when it skips a release. There is nothing to run by hand. The API only gains fields: schema 3 adds `released_at` and `release_outcome` to every message.
 
 This page covers what happens during that upgrade, where the backup goes, and how to go back.
 
@@ -20,8 +21,8 @@ This page covers what happens during that upgrade, where the backup goes, and ho
 Before the SMTP and HTTP listeners start, RustMail:
 
 1. Takes a lock file next to the database, `rustmail.db.migration-lock`.
-2. Builds the new database beside the old one, as `rustmail.db.migrating`, copying messages in batches.
-3. Verifies the copy against the old database (counts, search index, integrity checks), and every compressed message against the source it came from.
+2. Builds the new database beside the old one, as `rustmail.db.migrating`. From 0.9 or earlier it copies messages in batches; from 0.10 it writes one consistent copy of the whole file (SQLite `VACUUM INTO`) and then adds the two release columns to it.
+3. Verifies the copy against the old database (counts, search index, integrity checks), and every compressed message against the source it came from. A copy of a 0.10 database is checked against the original's messages, flags, tags and attachments, the search index and an integrity check.
 4. Swaps the files: the old database becomes the backup (see [The backup](#the-backup)) and the copy becomes `rustmail.db`.
 
 The old database is only read, never modified. If a check fails, RustMail exits with an error, keeps `rustmail.db.migrating` for a bug report, and leaves `rustmail.db` as it was. The next start checks the same copy again; delete it to have RustMail build a new one.
@@ -44,7 +45,9 @@ SMTP and HTTP are not available until the upgrade finishes. Mail sent to RustMai
 
 ### Stopping and resuming
 
-You can stop RustMail during the upgrade (`Ctrl+C` or `SIGTERM`). It finishes the batch in progress, logs `Storage migration paused at N/T; it resumes on next start`, and exits. The next start picks up where it stopped. If the old database was changed in the meantime (for example by an older RustMail), the copy is rebuilt from scratch. A copy that RustMail 0.8 or 0.9 left behind is rebuilt in the new layout, unless they were stopped while swapping it in: then it is swapped in and upgraded again on the same start.
+You can stop RustMail during the upgrade (`Ctrl+C` or `SIGTERM`). It finishes the batch in progress, logs `Storage migration paused at N/T; it resumes on next start`, and exits. The next start picks up where it stopped. An upgrade from 0.10 is one copy rather than batches: if it is stopped or killed before the copy is finished, the next start deletes the partial copy and makes a new one. The release columns, the record of where the copy came from and the new schema version are written in one transaction, so a copy is either finished or rebuilt, never half upgraded. If the old database was changed in the meantime (for example by an older RustMail), the copy is rebuilt from scratch. A copy that RustMail 0.8, 0.9 or 0.10 left behind is rebuilt in the new layout, unless they were stopped while swapping it in: then it is swapped in and upgraded again on the same start.
+
+If 0.10 is started while an upgrade to 0.11 is unfinished, it refuses to start and names the leftover `rustmail.db.migrating` or the state it does not recognize; it writes nothing. Start 0.11 or later again to finish the upgrade.
 
 If an upgrade from 0.7 or earlier is stopped, finish it by starting 0.10.1 or later again. If 0.8 or 0.9 starts on it instead, it discards the unfinished copy and runs its own upgrade to schema 1, which the next start of 0.10.1 or later then takes on.
 
@@ -52,7 +55,7 @@ A copy left by 0.10.0 is the exception. Do not start 0.8 or 0.9 while a `rustmai
 
 ### Disk space
 
-During the upgrade both files exist side by side, so you need room for the old database **plus** the new one. The new file is smaller than the old one: upgrading 100,000 small text messages from 0.9 shrank the database from 466 MB to 101 MB. Mail that is mostly attachments shrinks less, since attachments are usually compressed already. If the disk fills, RustMail exits with:
+During the upgrade both files exist side by side, so you need room for the old database **plus** the new one. From 0.9 or earlier the new file is smaller than the old one: upgrading 100,000 small text messages from 0.9 shrank the database from 466 MB to 101 MB. From 0.10 the new file is about the size of the old one, so you need room for a second copy of it. Mail that is mostly attachments shrinks less, since attachments are usually compressed already. If the disk fills, RustMail exits with:
 
 ```
 migrating <db> needs about N MB free next to it (estimate); the existing database is untouched; free space and restart to resume
@@ -82,6 +85,7 @@ The database from before the upgrade is kept next to the new one, named after th
 |---|---|
 | 0.7 or earlier | `rustmail.db.schema0.bak` |
 | 0.8 or 0.9 | `rustmail.db.schema1.bak` |
+| 0.10 | `rustmail.db.schema2.bak` |
 
 It sits in the same directory as the database:
 
@@ -90,9 +94,9 @@ It sits in the same directory as the database:
 | macOS (default path, Homebrew) | `~/Library/Application Support/rustmail/` |
 | Linux (default path) | `~/.local/share/rustmail/` |
 | Docker | `/data/` in the data volume |
-| Custom `--db-path` / `RUSTMAIL_DB_PATH` | next to `<db-path>`, as `<db-path>.schema0.bak` or `<db-path>.schema1.bak` |
+| Custom `--db-path` / `RUSTMAIL_DB_PATH` | next to `<db-path>`, as `<db-path>.schema0.bak`, `<db-path>.schema1.bak` or `<db-path>.schema2.bak` |
 
-If you upgraded through both releases, both backups are there. RustMail never deletes them. Every start logs each one's path and size (`event="storage_backup"`) as a reminder.
+If you upgraded through several of these releases, each one's backup is there. RustMail never deletes them. Every start logs each one's path and size (`event="storage_backup"`) as a reminder.
 
 **When it is safe to delete:** once you have checked that your mail looks right in the new version and you do not plan to go back to the version that wrote the backup. After you delete it, `rustmail restore-backup` has nothing to restore.
 
@@ -111,14 +115,14 @@ Older binaries cannot read a newer layout. Restore the backup **with the new bin
 
 3. Install and start the older version.
 
-`restore-backup` puts back the backup of the upgrade that produced the current database: `rustmail.db.schema1.bak` if you upgraded from 0.8 or 0.9, `rustmail.db.schema0.bak` if you upgraded from 0.7 or earlier. To go back further, from 0.9 to 0.7 for example, run `restore-backup` again with the 0.8 or 0.9 binary.
+`restore-backup` puts back the backup of the upgrade that produced the current database: `rustmail.db.schema2.bak` if you upgraded from 0.10, `rustmail.db.schema1.bak` if you upgraded from 0.8 or 0.9, `rustmail.db.schema0.bak` if you upgraded from 0.7 or earlier. To go back further, from 0.11 to 0.9 for example, run `restore-backup` with 0.11 to get back to 0.10, then again with the 0.10.1 binary to get back to 0.9.
 
-`restore-backup` takes the same lock as the upgrade, so it refuses to run while another RustMail holds it, and it refuses while another process still has the database open. It renames the current database to `rustmail.db.schema2-<timestamp>` (it never deletes it) and moves the backup back to `rustmail.db`.
+`restore-backup` takes the same lock as the upgrade, so it refuses to run while another RustMail holds it, and it refuses while another process still has the database open. It renames the current database to `rustmail.db.schema3-<timestamp>` (it never deletes it) and moves the backup back to `rustmail.db`.
 
-If `restore-backup` is stopped between those two moves, `rustmail.db` is missing; run `restore-backup` again and it finishes the restore, after the same checks. It takes the newest `rustmail.db.schema2-<timestamp>` as the file it moved away, reads from it which backup belongs back, and leaves every kept file as it is. It refuses instead when the files do not show that state, for example when no `rustmail.db.schema2-<timestamp>` sits beside the backup or the newest one is not a schema-2 database, and its message says which file to move by hand.
+If `restore-backup` is stopped between those two moves, `rustmail.db` is missing; run `restore-backup` again and it finishes the restore, after the same checks. It takes the newest `rustmail.db.schema3-<timestamp>` as the file it moved away, reads from it which backup belongs back, and leaves every kept file as it is. It refuses instead when the files do not show that state, for example when no `rustmail.db.schema3-<timestamp>` sits beside the backup or the newest one is not a schema-3 database, and its message says which file to move by hand. A restore that 0.10 was stopped in leaves `rustmail.db.schema2-<timestamp>` instead: finish it with 0.10.1.
 
 ::: warning Mail received after the upgrade is not restored
-The backup holds the mailbox as it was when you upgraded. Mail received after that, and any changes such as deletions or read flags, exist only in the kept file (`rustmail.db.schema2-<timestamp>`). Starting the new version again on the restored file upgrades it again.
+The backup holds the mailbox as it was when you upgraded. Mail received after that, and any changes such as deletions or read flags, exist only in the kept file (`rustmail.db.schema3-<timestamp>`). Starting the new version again on the restored file upgrades it again.
 :::
 
 ### Docker
@@ -134,7 +138,8 @@ Then change the image tag in your Compose file to the older version and start it
 
 Older binaries refuse the upgraded file at startup and write nothing to it:
 
-- RustMail 0.8 and 0.9 exit with an error naming the file: `<db> is schema 2, written by a newer rustmail; this binary supports schema 1`.
+- RustMail 0.10 exits with an error naming the file: ``<db> is schema 3, written by a newer rustmail; this binary supports schema 2. Upgrade rustmail, or run `rustmail restore-backup` with that newer binary.``
+- RustMail 0.8 and 0.9 exit with an error naming the file: `<db> is schema 3, written by a newer rustmail; this binary supports schema 1`.
 - RustMail 0.7.0 and earlier exit with an SQL error ending in `no such column: message_id`.
 
 Your data is intact. Reinstall the new version, run `rustmail restore-backup`, then downgrade.
