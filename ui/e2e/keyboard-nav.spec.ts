@@ -637,6 +637,28 @@ test.describe("global shortcuts", () => {
     expect(backend.calls.deleted).toEqual([]);
   });
 
+  test("Enter on Cancel keeps the inbox", async ({ page }) => {
+    const backend = await openInbox(page);
+
+    await page.keyboard.press("Shift+D");
+    const cancel = page.getByRole("button", { name: "Cancel", exact: true });
+    await cancel.focus();
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(backend.calls.deleted).toEqual([]);
+  });
+
+  test("Enter confirms while no dialog button has focus", async ({ page }) => {
+    const backend = await openInbox(page);
+
+    await page.keyboard.press("Shift+D");
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Enter");
+
+    await expect.poll(() => backend.calls.deleted).toEqual(["/messages"]);
+  });
+
   test("shortcuts stay out of the way while a confirmation is open", async ({
     page,
   }) => {
