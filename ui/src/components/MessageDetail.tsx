@@ -34,7 +34,12 @@ import {
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
-import type { AuthResults, Message, ReleaseTarget } from "../lib/types";
+import type {
+  AuthResults,
+  Message,
+  MessageSummary,
+  ReleaseTarget,
+} from "../lib/types";
 import {
   createPaneRead,
   failed,
@@ -368,8 +373,8 @@ const ACTION_CLASS =
  * dialog lists exactly who receives it and Enter does not confirm. A message
  * released before says so, since this would send it again.
  */
-async function confirmRelease(
-  message: Message,
+export async function confirmRelease(
+  message: MessageSummary,
   target: ReleaseTarget,
 ): Promise<void> {
   const previous = recordedRelease(liveSummary(message));

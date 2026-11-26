@@ -5,6 +5,8 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   maxWidth?: string;
+  /** Where the panel sits: centred, or near the top so its height can change without moving it. */
+  align?: "center" | "top";
   children: JSX.Element;
 }
 
@@ -22,7 +24,9 @@ export default function Modal(props: ModalProps) {
 
   return (
     <Show when={props.open}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div
+        class={`fixed inset-0 z-50 flex justify-center p-4 ${props.align === "top" ? "items-start pt-[15vh]" : "items-center"}`}
+      >
         <div
           class="absolute inset-0 bg-black/50 backdrop-blur-sm animate-fade-in"
           onClick={() => props.onClose()}
