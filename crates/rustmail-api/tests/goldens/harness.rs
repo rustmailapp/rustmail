@@ -223,6 +223,8 @@ async fn store_legacy_and_migrate() -> (MessageRepository, Vec<Stored>, TempDir)
         is_starred: false,
         tags: "[]".to_string(),
         created_at: written.created_at,
+        released_at: None,
+        release_outcome: None,
       },
     });
   }

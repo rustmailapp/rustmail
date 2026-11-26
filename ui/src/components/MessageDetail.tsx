@@ -60,6 +60,7 @@ import Tooltip from "./Tooltip";
 import { confirm } from "./ConfirmDialog";
 import { releaseTarget } from "../stores/server";
 import { relayLabel, release, releasing } from "../stores/release";
+import { recordedRelease, releaseWarning } from "../lib/release";
 
 type View = "preview" | "text" | "raw";
 
@@ -364,17 +365,20 @@ const ACTION_CLASS =
  * Asks before releasing `message`, naming the relay and every recipient.
  *
  * A release is real mail to the captured envelope, Bcc included, so the
- * dialog lists exactly who receives it and Enter does not confirm.
+ * dialog lists exactly who receives it and Enter does not confirm. A message
+ * released before says so, since this would send it again.
  */
 async function confirmRelease(
   message: Message,
   target: ReleaseTarget,
 ): Promise<void> {
+  const previous = recordedRelease(liveSummary(message));
   const confirmed = await confirm({
     title: "Release this message?",
     message: `RustMail sends it as captured through ${relayLabel(target)} to every envelope recipient below, Bcc included. This is real mail and cannot be recalled.`,
     confirmLabel: "Release",
     list: { label: "Envelope recipients", items: message.recipients },
+    warning: previous === null ? undefined : releaseWarning(previous),
     enterConfirms: false,
   });
   if (confirmed) {

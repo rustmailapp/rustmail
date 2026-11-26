@@ -9,6 +9,28 @@ import * as z from "zod/mini";
  * what the standard build does for the same schemas.
  */
 
+/** How a recorded release ended: delivered, or cut off with its fate unknown. */
+export const releaseOutcome = z.enum(["sent", "unknown"]);
+
+const releaseFields = {
+  released_at: z.string(),
+  release_outcome: releaseOutcome,
+};
+
+/** The release recorded on a message, as a release answer carries it. */
+export const releaseRecord = z.object(releaseFields);
+
+/**
+ * A message's recorded release, `null` while it was never released.
+ *
+ * A server older than release recording leaves both fields out, which means
+ * the same as never released.
+ */
+const recordedRelease = {
+  released_at: z._default(z.nullable(z.string()), null),
+  release_outcome: z._default(z.nullable(releaseOutcome), null),
+};
+
 export const messageSummary = z.object({
   id: z.string(),
   sender: z.string(),
@@ -20,6 +42,7 @@ export const messageSummary = z.object({
   is_starred: z.boolean(),
   tags: z.array(z.string()),
   created_at: z.string(),
+  ...recordedRelease,
 });
 
 export const message = z.extend(messageSummary, {
@@ -95,6 +118,10 @@ export const wsEvent = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("message:tags"),
     data: z.extend(identified, { tags: z.array(z.string()) }),
+  }),
+  z.object({
+    type: z.literal("message:released"),
+    data: z.extend(identified, releaseFields),
   }),
   z.object({ type: z.literal("messages:clear") }),
 ]);

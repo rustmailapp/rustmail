@@ -35,6 +35,8 @@ While a release is in flight the button is disabled. The outcome appears as a no
 - **Failed** (`502`): the relay could not be reached, failed the TLS handshake, or refused the message. Nothing was delivered.
 - **Outcome unknown**: the relay did not confirm the message (`504`), the browser lost the connection, or the server answered any other error. The relay may already have the message, so check it before releasing the same message again. This notice stays until you dismiss it.
 
+Once a release has been recorded on the message (see [Recorded releases](#recorded-releases)), the confirmation warns above the recipients before a second send: **Already released at 13:05** when the relay accepted it, or **A release at 13:05 may have been delivered** when the outcome was unknown. The time is local, with the date when it was not today. The **Release** button stays enabled. The details rail shows the same release on a **Released** line, with its time and `sent` or `outcome unknown`. Other open tabs update as soon as the release is recorded.
+
 The UI reads the relay from [`GET /api/v1/info`](#server-info) and sends that exact host and port, so a server restarted with a different relay rejects the release instead of sending through a relay you did not confirm.
 
 ## Endpoint
@@ -57,10 +59,27 @@ Request body:
 Success response:
 
 ```json
-{ "released": true }
+{
+  "released": true,
+  "released_at": "2026-11-26T13:05:09Z",
+  "release_outcome": "sent"
+}
 ```
 
 RustMail first checks the relay with a connection that sends no message (greeting, EHLO, TLS, NOOP, QUIT). If that fails, nothing was sent and the release answers `502`. It then sends the message; an SMTP error reply is also a `502`. If the connection breaks off, or the whole exchange passes 30 seconds, after the message may have been handed over, the server answers `504` with `"code": "release_outcome_unknown"`: check the relay before retrying.
+
+## Recorded releases
+
+Each message records its last release that may have reached the relay, in two fields that the message list, the message detail and `message:new` carry:
+
+| Field | Value |
+|---|---|
+| `released_at` | When it was released, UTC (`YYYY-MM-DDTHH:MM:SSZ`), or `null` |
+| `release_outcome` | `sent` when the relay accepted it (`200`), `unknown` when it did not confirm it (`504`), or `null` |
+
+A release that answers `502`, `400` or `403` delivered nothing and records nothing. A `sent` release replaces an earlier `unknown` one; an `unknown` release does not replace an earlier `sent` one, so a delivery the relay confirmed is never hidden. The `200` and `504` bodies carry `released_at` and `release_outcome` as the message holds them after the release, and every WebSocket client gets a [`message:released`](/features/websocket#message-released) event with the same values.
+
+The record is kept in the database, so it survives a restart. Recording it changed the database layout: the first start of this version upgrades an existing database and keeps a backup, see [Upgrading](/getting-started/upgrading).
 
 ## Server info
 

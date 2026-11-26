@@ -39,6 +39,13 @@ pub enum WsEvent {
   /// A message's tags were updated.
   #[serde(rename = "message:tags")]
   MessageTags { id: String, tags: Vec<String> },
+  /// A release was recorded on a message; carries the release it now holds.
+  #[serde(rename = "message:released")]
+  MessageReleased {
+    id: String,
+    released_at: String,
+    release_outcome: rustmail_storage::ReleaseOutcome,
+  },
   /// All messages were cleared.
   #[serde(rename = "messages:clear")]
   MessagesClear,
@@ -259,6 +266,8 @@ mod tests {
       is_starred: false,
       tags: "[]".into(),
       created_at: "2026-09-23T00:00:00Z".into(),
+      released_at: None,
+      release_outcome: None,
     });
     let decoded = WsFrame::encode(&event).unwrap().decode().unwrap();
 

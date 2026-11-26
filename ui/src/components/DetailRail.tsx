@@ -20,6 +20,7 @@ import {
   type CopyFeedback,
 } from "../lib/clipboard";
 import { extractLinks, type MessageLink } from "../lib/links";
+import { recordedRelease, releaseSummary } from "../lib/release";
 import type {
   Attachment,
   AuthCheck,
@@ -183,6 +184,7 @@ export default function DetailRail(props: {
 }
 
 function SummaryList(props: { message: Message }) {
+  const release = () => recordedRelease(liveSummary(props.message));
   return (
     <dl class="grid grid-cols-[3.25rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-xs">
       <dt class="text-zinc-500 dark:text-zinc-400">From</dt>
@@ -201,6 +203,16 @@ function SummaryList(props: { message: Message }) {
       <dd class="text-zinc-800 dark:text-zinc-200">
         {formatSize(props.message.size)}
       </dd>
+      <Show when={release()}>
+        {(record) => (
+          <>
+            <dt class="text-zinc-500 dark:text-zinc-400">Released</dt>
+            <dd class="text-zinc-800 dark:text-zinc-200">
+              {releaseSummary(record())}
+            </dd>
+          </>
+        )}
+      </Show>
       <dt class="text-zinc-500 dark:text-zinc-400 pt-0.5">Tags</dt>
       <dd>
         <TagEditor message={props.message} />

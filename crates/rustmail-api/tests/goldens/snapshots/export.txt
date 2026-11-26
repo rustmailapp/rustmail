@@ -15,7 +15,7 @@ body: == raw:welcome (273 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:welcome}.json"
-content-length: 476
+content-length: 518
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -37,7 +37,9 @@ body-json:
   "is_read": true,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:newsletter_html}/export
@@ -57,7 +59,7 @@ body: == raw:newsletter_html (331 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:newsletter_html}.json"
-content-length: 441
+content-length: 483
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -81,7 +83,9 @@ body-json:
   "tags": [
     "newsletter"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:receipt_alternative}/export
@@ -101,7 +105,7 @@ body: == raw:receipt_alternative (460 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:receipt_alternative}.json"
-content-length: 394
+content-length: 436
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -127,7 +131,9 @@ body-json:
     "work",
     "finance"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:latin1_subject}/export
@@ -147,7 +153,7 @@ body: == raw:latin1_subject (327 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:latin1_subject}.json"
-content-length: 368
+content-length: 410
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -169,7 +175,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:invoice_reminder}/export
@@ -189,7 +197,7 @@ body: == raw:invoice_reminder (283 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:invoice_reminder}.json"
-content-length: 455
+content-length: 497
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -214,7 +222,9 @@ body-json:
     "work",
     "urgent"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:auth_headers}/export
@@ -234,7 +244,7 @@ body: == raw:auth_headers (719 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:auth_headers}.json"
-content-length: 348
+content-length: 390
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -256,7 +266,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:folded_headers}/export
@@ -276,7 +288,7 @@ body: == raw:folded_headers (461 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:folded_headers}.json"
-content-length: 365
+content-length: 407
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -298,7 +310,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:no_subject_no_content_type}/export
@@ -318,7 +332,7 @@ body: == raw:no_subject_no_content_type (205 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:no_subject_no_content_type}.json"
-content-length: 407
+content-length: 449
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -342,7 +356,9 @@ body-json:
   "tags": [
     "personal"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:like_wildcards_subject}/export
@@ -362,7 +378,7 @@ body: == raw:like_wildcards_subject (245 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:like_wildcards_subject}.json"
-content-length: 391
+content-length: 433
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -384,7 +400,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:headers_only}/export
@@ -404,7 +422,7 @@ body: == raw:headers_only (160 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:headers_only}.json"
-content-length: 295
+content-length: 337
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -426,7 +444,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_crlf76}/export
@@ -446,7 +466,7 @@ body: == raw:base64_crlf76 (3252 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_crlf76}.json"
-content-length: 351
+content-length: 393
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -470,7 +490,9 @@ body-json:
   "tags": [
     "work"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_unwrapped}/export
@@ -490,7 +512,7 @@ body: == raw:base64_unwrapped (2498 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_unwrapped}.json"
-content-length: 348
+content-length: 390
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -512,7 +534,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_lf_only}/export
@@ -532,7 +556,7 @@ body: == raw:base64_lf_only (2092 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_lf_only}.json"
-content-length: 372
+content-length: 414
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -554,7 +578,9 @@ body-json:
   "is_read": false,
   "is_starred": true,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_trailing_whitespace}/export
@@ -574,7 +600,7 @@ body: == raw:base64_trailing_whitespace (2067 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_trailing_whitespace}.json"
-content-length: 380
+content-length: 422
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -596,7 +622,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_stray_bytes}/export
@@ -616,7 +644,7 @@ body: == raw:base64_stray_bytes (1759 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_stray_bytes}.json"
-content-length: 409
+content-length: 451
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -638,7 +666,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:quoted_printable_octet_stream}/export
@@ -658,7 +688,7 @@ body: == raw:quoted_printable_octet_stream (2175 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:quoted_printable_octet_stream}.json"
-content-length: 382
+content-length: 424
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -680,7 +710,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:binary_and_8bit}/export
@@ -700,7 +732,7 @@ body: == raw:binary_and_8bit (1605 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:binary_and_8bit}.json"
-content-length: 351
+content-length: 393
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -722,7 +754,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:text_attachments}/export
@@ -742,7 +776,7 @@ body: == raw:text_attachments (1490 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:text_attachments}.json"
-content-length: 374
+content-length: 416
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -766,7 +800,9 @@ body-json:
   "tags": [
     "work"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:nested_related}/export
@@ -786,7 +822,7 @@ body: == raw:nested_related (7350 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:nested_related}.json"
-content-length: 426
+content-length: 468
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -810,7 +846,9 @@ body-json:
   "tags": [
     "urgent"
   ],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:rfc822_plain}/export
@@ -830,7 +868,7 @@ body: == raw:rfc822_plain (645 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:rfc822_plain}.json"
-content-length: 358
+content-length: 400
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -852,7 +890,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:rfc822_base64}/export
@@ -872,7 +912,7 @@ body: == raw:rfc822_base64 (748 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:rfc822_base64}.json"
-content-length: 377
+content-length: 419
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -894,7 +934,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:digest_without_content_types}/export
@@ -914,7 +956,7 @@ body: == raw:digest_without_content_types (456 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:digest_without_content_types}.json"
-content-length: 299
+content-length: 341
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -936,7 +978,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:part_without_content_type}/export
@@ -956,7 +1000,7 @@ body: == raw:part_without_content_type (467 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:part_without_content_type}.json"
-content-length: 377
+content-length: 419
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -978,7 +1022,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:base64_malformed}/export
@@ -998,7 +1044,7 @@ body: == raw:base64_malformed (541 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:base64_malformed}.json"
-content-length: 368
+content-length: 410
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1020,7 +1066,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 >>> GET /api/v1/messages/{msg:large_10mib}/export
@@ -1040,7 +1088,7 @@ body: == raw:large_10mib (10469086 bytes)
 <<< 200 OK
 cache-control: no-store
 content-disposition: attachment; filename="{msg:large_10mib}.json"
-content-length: 393
+content-length: 435
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -1062,7 +1110,9 @@ body-json:
   "is_read": false,
   "is_starred": false,
   "tags": [],
-  "created_at": "{timestamp}"
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
 }
 
 ## errors

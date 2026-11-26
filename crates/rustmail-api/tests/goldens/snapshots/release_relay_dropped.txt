@@ -14,4 +14,36 @@ body-json:
   "error": "SMTP delivery failed"
 }
 
+## a release the relay never took is not recorded
+
+>>> GET /api/v1/messages/{msg:welcome}
+<<< 200 OK
+cache-control: no-store
+content-length: 518
+content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
+content-type: application/json
+referrer-policy: no-referrer
+vary: accept-encoding
+x-content-type-options: nosniff
+x-frame-options: DENY
+body-json:
+{
+  "id": "{msg:welcome}",
+  "sender": "alice@example.com",
+  "recipients": [
+    "bob@example.test"
+  ],
+  "subject": "Welcome aboard",
+  "text_body": "Hello Bob,\r\n\r\nwelcome to the quarterly planning group.\r\n\r\nRegards,\r\nAlice\r\n",
+  "html_body": "<html><body>Hello Bob,<br/><br/>welcome to the quarterly planning group.<br/><br/>Regards,<br/>Alice<br/></body></html>",
+  "size": 273,
+  "has_attachments": false,
+  "is_read": true,
+  "is_starred": false,
+  "tags": [],
+  "created_at": "{timestamp}",
+  "released_at": null,
+  "release_outcome": null
+}
+
 relay received in plaintext, before dropping the connection: EHLO, STARTTLS

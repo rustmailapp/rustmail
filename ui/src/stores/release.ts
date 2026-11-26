@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import * as api from "../lib/api";
 import type { ReleaseTarget } from "../lib/types";
+import { recordRelease } from "./messages";
 import { notify } from "./notices";
 
 const BAD_REQUEST = 400;
@@ -62,6 +63,10 @@ function recipientCount(count: number): string {
 /**
  * Sends message `id` to the relay and reports the outcome as a notice.
  *
+ * The release the server records, on a delivery or on an outcome it could not
+ * tell, is applied to the message at once, so this tab warns before a second
+ * send without waiting for the broadcast.
+ *
  * A second call for a message whose release is still in flight does nothing,
  * so a repeated click cannot send it twice.
  */
@@ -74,11 +79,15 @@ export async function release(
   setInFlight((current) => new Set(current).add(id));
   const relay = relayLabel(target);
   try {
-    await api.releaseMessage(id, target);
+    const recorded = await api.releaseMessage(id, target);
+    if (recorded !== null) recordRelease(id, recorded);
     notify(`Released to ${recipientCount(recipients)} through ${relay}.`, {
       tone: "success",
     });
   } catch (error) {
+    if (error instanceof api.ReleaseError && error.recorded !== null) {
+      recordRelease(id, error.recorded);
+    }
     notify(releaseFailure(error, relay), {
       persistent: outcomeUnknown(error),
     });

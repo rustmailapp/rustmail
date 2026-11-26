@@ -13,6 +13,8 @@ export interface ConfirmDialogOptions {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** A caution about this particular confirmation, shown above the list. */
+  warning?: string;
   /** Items the confirmation acts on, listed under the message. */
   list?: { label: string; items: readonly string[] };
   /**
@@ -76,6 +78,13 @@ export default function ConfirmDialog() {
               <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                 {state().options.message}
               </p>
+              <Show when={state().options.warning}>
+                {(warning) => (
+                  <p class="mt-3 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                    {warning()}
+                  </p>
+                )}
+              </Show>
               <Show when={state().options.list}>
                 {(list) => (
                   <div class="mt-3">

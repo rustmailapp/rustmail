@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 use crate::state::{AppState, DEFAULT_RELEASE_PORT, ReleaseTarget, ServerInfo, WsEvent};
-use rustmail_storage::{MessageFilter, PageStart, StorageError};
+use rustmail_storage::{MessageFilter, PageStart, Release, ReleaseOutcome, StorageError};
 
 /// Captured mail is immutable once stored, so anything derived from a
 /// message's bytes can be cached indefinitely. `private` keeps shared caches
@@ -798,11 +798,32 @@ pub async fn release_message(
     }
   };
 
-  let response = match send_to_relay(&mailer, &envelope, &raw, RELEASE_TIMEOUT).await {
-    RelayOutcome::Sent => (
-      StatusCode::OK,
-      Json(serde_json::json!({ "released": true })),
+  let release_state = state.clone();
+  let release_id = id.clone();
+  let release = tokio::spawn(async move {
+    let outcome = send_to_relay(&mailer, &envelope, &raw, RELEASE_TIMEOUT).await;
+    let recorded = match &outcome {
+      RelayOutcome::Sent => record_release(&release_state, &release_id, ReleaseOutcome::Sent).await,
+      RelayOutcome::Unknown(_) => {
+        record_release(&release_state, &release_id, ReleaseOutcome::Unknown).await
+      }
+      RelayOutcome::NotSent(_) => None,
+    };
+    (outcome, recorded)
+  });
+  let (outcome, recorded) = match release.await {
+    Ok(finished) => finished,
+    Err(error) => (
+      RelayOutcome::Unknown(format!("the release task did not complete: {error}")),
+      None,
     ),
+  };
+  let response = match outcome {
+    RelayOutcome::Sent => {
+      let mut body = serde_json::json!({ "released": true });
+      merge_release(&mut body, recorded);
+      (StatusCode::OK, Json(body))
+    }
     RelayOutcome::NotSent(reason) => {
       tracing::error!(error = %reason, message_id = %id, "SMTP delivery failed");
       (
@@ -812,15 +833,45 @@ pub async fn release_message(
     }
     RelayOutcome::Unknown(reason) => {
       tracing::warn!(error = %reason, message_id = %id, "Release relay did not confirm the message");
-      (
-        StatusCode::GATEWAY_TIMEOUT,
-        Json(
-          serde_json::json!({ "error": RELEASE_OUTCOME_UNKNOWN, "code": RELEASE_OUTCOME_UNKNOWN_CODE }),
-        ),
-      )
+      let mut body = serde_json::json!({ "error": RELEASE_OUTCOME_UNKNOWN, "code": RELEASE_OUTCOME_UNKNOWN_CODE });
+      merge_release(&mut body, recorded);
+      (StatusCode::GATEWAY_TIMEOUT, Json(body))
     }
   };
   Ok(response.into_response())
+}
+
+/// Records a release that may have reached the relay and tells every client.
+///
+/// The relay has already answered, so a failure to record is logged and the
+/// response still reports what the relay did. Runs with the send in its own
+/// task, so a client that disconnects mid-release cannot cancel the record.
+async fn record_release(state: &AppState, id: &str, outcome: ReleaseOutcome) -> Option<Release> {
+  match state.repo.record_release(id, outcome).await {
+    Ok(release) => {
+      state.broadcast(WsEvent::MessageReleased {
+        id: id.to_string(),
+        released_at: release.released_at.clone(),
+        release_outcome: release.release_outcome,
+      });
+      Some(release)
+    }
+    Err(error) => {
+      tracing::error!(error = %error, message_id = %id, outcome = outcome.as_str(), "Could not record the release on the message");
+      None
+    }
+  }
+}
+
+/// Adds the recorded release, if any, to a release response body.
+fn merge_release(body: &mut serde_json::Value, release: Option<Release>) {
+  if let (Some(object), Some(release)) = (body.as_object_mut(), release) {
+    object.insert("released_at".into(), release.released_at.into());
+    object.insert(
+      "release_outcome".into(),
+      release.release_outcome.as_str().into(),
+    );
+  }
 }
 
 /// The captured envelope a release sends again, exactly as captured.
@@ -1634,5 +1685,101 @@ mod relay_transport_tests {
 
     assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
     relay.abort();
+  }
+}
+
+#[cfg(test)]
+mod release_record_tests {
+  use super::{merge_release, record_release};
+  use crate::state::{AppState, WsFrame};
+  use rustmail_storage::{MessageRepository, Release, ReleaseOutcome, initialize_database};
+  use tokio::sync::broadcast;
+
+  async fn state_with_message() -> (AppState, String, broadcast::Receiver<WsFrame>) {
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+      .connect("sqlite::memory:")
+      .await
+      .unwrap();
+    initialize_database(&pool).await.unwrap();
+    let repo = MessageRepository::new(pool);
+    let id = repo
+      .insert(
+        "a@example.test",
+        &["b@example.test".to_string()],
+        b"Subject: released\r\n\r\nbody",
+      )
+      .await
+      .unwrap()
+      .id;
+    let (ws_tx, ws_rx) = broadcast::channel::<WsFrame>(8);
+    (AppState::new(repo, ws_tx, None, None), id, ws_rx)
+  }
+
+  #[tokio::test]
+  async fn a_recorded_release_is_stored_and_broadcast_as_message_released() {
+    let (state, id, mut ws_rx) = state_with_message().await;
+
+    let release = record_release(&state, &id, ReleaseOutcome::Unknown)
+      .await
+      .unwrap();
+
+    assert_eq!(release.release_outcome, ReleaseOutcome::Unknown);
+    let stored = state.repo.get(&id).await.unwrap();
+    assert_eq!(
+      stored.released_at.as_deref(),
+      Some(release.released_at.as_str())
+    );
+    assert_eq!(stored.release_outcome, Some(ReleaseOutcome::Unknown));
+    let frame: serde_json::Value =
+      serde_json::from_str(ws_rx.try_recv().unwrap().text().as_str()).unwrap();
+    assert_eq!(
+      frame,
+      serde_json::json!({
+        "type": "message:released",
+        "data": { "id": id, "released_at": release.released_at, "release_outcome": "unknown" }
+      })
+    );
+  }
+
+  #[tokio::test]
+  async fn a_release_of_a_message_deleted_meanwhile_records_and_broadcasts_nothing() {
+    let (state, id, mut ws_rx) = state_with_message().await;
+    state.repo.delete(&id).await.unwrap();
+
+    let release = record_release(&state, &id, ReleaseOutcome::Sent).await;
+
+    assert_eq!(release, None);
+    assert!(ws_rx.try_recv().is_err());
+  }
+
+  #[test]
+  fn the_recorded_release_is_added_to_the_response_body() {
+    let mut body = serde_json::json!({ "released": true });
+
+    merge_release(
+      &mut body,
+      Some(Release {
+        released_at: "2026-11-26T13:05:09Z".into(),
+        release_outcome: ReleaseOutcome::Sent,
+      }),
+    );
+
+    assert_eq!(
+      body,
+      serde_json::json!({
+        "released": true,
+        "released_at": "2026-11-26T13:05:09Z",
+        "release_outcome": "sent"
+      })
+    );
+  }
+
+  #[test]
+  fn a_release_that_could_not_be_recorded_leaves_the_body_as_it_was() {
+    let mut body = serde_json::json!({ "released": true });
+
+    merge_release(&mut body, None);
+
+    assert_eq!(body, serde_json::json!({ "released": true }));
   }
 }

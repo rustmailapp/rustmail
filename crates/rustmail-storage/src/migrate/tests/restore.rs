@@ -25,7 +25,7 @@ async fn migrated_with_new_mail(db: &Path, count: usize) -> String {
 }
 
 fn kept_files(db: &Path) -> Vec<PathBuf> {
-  let prefix = format!("{}.schema2-", db.file_name().unwrap().to_string_lossy());
+  let prefix = format!("{}.schema3-", db.file_name().unwrap().to_string_lossy());
   let mut kept: Vec<PathBuf> = std::fs::read_dir(db.parent().unwrap())
     .unwrap()
     .map(|entry| entry.unwrap().path())
@@ -309,9 +309,9 @@ async fn a_restore_is_refused_beside_a_stray_migration_copy() {
   assert_untouched(&db, &db_contents, &backup_bytes).await;
 }
 
-const INTERRUPTED_KEPT_SUFFIX: &str = ".schema2-20260101T000000Z";
-const OLDER_KEPT_SUFFIX: &str = ".schema2-20250101T000000Z";
-const SECOND_CYCLE_KEPT_SUFFIX: &str = ".schema2-99991231T235959Z";
+const INTERRUPTED_KEPT_SUFFIX: &str = ".schema3-20260101T000000Z";
+const OLDER_KEPT_SUFFIX: &str = ".schema3-20250101T000000Z";
+const SECOND_CYCLE_KEPT_SUFFIX: &str = ".schema3-99991231T235959Z";
 
 /// Copies the database's write-ahead log into it and closes it, as a restore
 /// does before its first rename.
