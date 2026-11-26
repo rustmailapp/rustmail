@@ -6,7 +6,7 @@ description: "See DKIM, SPF and DMARC results for every captured email in RustMa
 
 RustMail parses email authentication headers and displays them in the **Authentication** section of the message details rail. No other local mail catcher offers this.
 
-On a window 1300px wide or more, the details rail sits beside the message. Below that it becomes a drawer over the message body, opened with the **Details** button or `i`; while the drawer is closed, compact SPF and DKIM badges next to the Preview / Text / Raw switch show the first verdict of each.
+On a window 1300px wide or more, the details rail sits beside the message. Below that it becomes a drawer over the message body, opened with the **Details** button or `i`. On the wide layout `i` collapses the rail instead. While the drawer or the collapsed rail hides the details, compact SPF and DKIM badges next to the Preview / Text / Raw switch show the first verdict of each.
 
 ## What It Shows
 

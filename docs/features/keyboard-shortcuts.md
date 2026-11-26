@@ -19,7 +19,7 @@ These work anywhere in the UI.
 | `D` | Delete all messages |
 | `s` | Star or unstar the selected message |
 | `/` | Focus search bar |
-| `i` | Open or close the message details drawer (windows under 1300px wide) |
+| `i` | Collapse or expand the details rail; on windows under 1300px wide, open or close the details drawer |
 | `Esc` | Close the details drawer first; otherwise clear active filters, or close the message detail panel |
 
 `d` leaves the message out of the list straight away, but waits a few seconds

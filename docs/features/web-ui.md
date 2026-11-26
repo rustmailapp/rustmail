@@ -19,7 +19,9 @@ On a window at least 1300px wide the UI has three panes and a status bar:
 
 The message pane switches between **Preview** (the rendered [HTML body](/features/html-preview)), **Text** and **Raw**.
 
-Below 1300px the details rail becomes a drawer over the message body. Open it with the **Details** button or `i`, and close it with `i` or `Esc`. See [Keyboard Shortcuts](/features/keyboard-shortcuts).
+With a message selected, `i` or the **Details** panel button next to its actions collapses the details rail, giving its width to the message; while the rail is collapsed, compact SPF, DKIM and attachment badges sit next to the Preview / Text / Raw switch. The choice is kept in the browser's local storage, so the rail stays collapsed across reloads.
+
+Below 1300px the details rail becomes a drawer over the message body. Open it with the **Details** button or `i`, and close it with `i` or `Esc`. The drawer always starts closed, whatever the rail was set to. See [Keyboard Shortcuts](/features/keyboard-shortcuts).
 
 ## Theme and palettes
 

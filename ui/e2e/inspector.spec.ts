@@ -16,6 +16,14 @@ function details(page: Page) {
   return page.getByRole("complementary", { name: "Message details" });
 }
 
+function messagePane(page: Page) {
+  return page.getByRole("region", { name: "Message", exact: true });
+}
+
+function railButton(page: Page) {
+  return page.getByRole("button", { name: "Details", exact: true });
+}
+
 function heading(page: Page, subject: string) {
   return page.getByRole("heading", { name: subject, exact: true });
 }
@@ -119,16 +127,126 @@ test.describe("details rail", () => {
     await expect(details(page)).not.toContainText("sender-0@example.test");
   });
 
-  test("keeps the rail beside the message and ignores i", async ({ page }) => {
+  test("i collapses and expands the rail", async ({ page }) => {
     await mockInbox(page, INBOX_SIZE);
     await page.goto("/");
     await expect(heading(page, "Message 0")).toBeVisible();
+    const button = railButton(page);
     await expect(details(page)).toBeVisible();
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+    await expect(button).toHaveAttribute("aria-controls", "message-details");
+    await expect(messagePane(page).getByText("SPF")).toHaveCount(0);
+    const wideMessage = await messagePane(page).boundingBox();
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeHidden();
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+    await expect(messagePane(page).getByText("SPF")).toBeVisible();
+    await expect
+      .poll(async () => (await messagePane(page).boundingBox())?.width)
+      .toBeGreaterThan(wideMessage?.width ?? Infinity);
 
     await page.keyboard.press("i");
 
     await expect(details(page)).toBeVisible();
-    await expect(page.getByRole("button", { name: "Details" })).toHaveCount(0);
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("hands focus to the rail button when it collapses around it", async ({
+    page,
+  }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    const showHeaders = details(page).getByRole("button", {
+      name: "Show headers",
+    });
+    await showHeaders.focus();
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeHidden();
+    await expect(railButton(page)).toBeFocused();
+  });
+
+  test("describes the rail button with a tooltip that follows the state", async ({
+    page,
+  }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    const button = railButton(page);
+
+    await button.hover();
+
+    const hide = page.getByRole("tooltip", { name: /Hide details/ });
+    await expect(hide).toBeVisible();
+    await expect(hide.locator("kbd")).toHaveText("i");
+    await expect(button).toHaveAccessibleDescription(/^Hide details/);
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeHidden();
+    await expect(button).toHaveAccessibleDescription(/^Show details/);
+  });
+
+  test("the rail button toggles it too", async ({ page }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    const button = railButton(page);
+
+    await button.click();
+    await expect(details(page)).toBeHidden();
+    await button.click();
+    await expect(details(page)).toBeVisible();
+  });
+
+  test("keeps the rail collapsed across a reload", async ({ page }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    await expect(heading(page, "Message 0")).toBeVisible();
+    await page.keyboard.press("i");
+    await expect(details(page)).toBeHidden();
+
+    await page.reload();
+
+    await expect(heading(page, "Message 0")).toBeVisible();
+    await expect(details(page)).toBeHidden();
+    await expect(railButton(page)).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("does not toggle the rail without a selection", async ({ page }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    await expect(heading(page, "Message 0")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(selectedOption(page)).toHaveCount(0);
+
+    await page.keyboard.press("i");
+
+    await expect(details(page)).toBeVisible();
+    await expect(railButton(page)).toHaveCount(0);
+  });
+
+  test("a collapsed rail does not open the drawer on a narrow window", async ({
+    page,
+  }) => {
+    await mockInbox(page, INBOX_SIZE);
+    await page.goto("/");
+    await expect(heading(page, "Message 0")).toBeVisible();
+    await page.keyboard.press("i");
+    await expect(details(page)).toBeHidden();
+
+    await page.setViewportSize(NARROW_VIEWPORT);
+
+    await expect(railButton(page)).toHaveText("Details");
+    await expect(details(page)).toHaveCount(0);
+    await page.keyboard.press("i");
+    await expect(details(page)).toBeVisible();
+
+    await page.setViewportSize(WIDE_VIEWPORT);
+
+    await expect(railButton(page)).toHaveText("");
+    await expect(details(page)).toBeHidden();
   });
 });
 

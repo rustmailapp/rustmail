@@ -1,7 +1,9 @@
 import {
+  createEffect,
   createSignal,
   createMemo,
   For,
+  on,
   onCleanup,
   onMount,
   Show,
@@ -19,6 +21,7 @@ import {
 import {
   closeDetails,
   detailsDrawerOpen,
+  detailsRailOpen,
   toggleDetails,
   wideLayout,
 } from "../stores/layout";
@@ -47,6 +50,7 @@ import DetailRail, {
 import {
   DownloadIcon,
   InfoIcon,
+  PanelRightIcon,
   PaperclipIcon,
   StarIcon,
   TrashIcon,
@@ -81,6 +85,7 @@ const RAW_PREVIEW_LIMIT_BYTES = 128 * 1024;
 const SELECTION_SETTLE_MS = 120;
 
 const DETAILS_ID = "message-details";
+const RAIL_TOGGLE_ID = "details-rail-toggle";
 const HUE_TURN = 360;
 const MESSAGE_LIST_SELECTOR = '[role="listbox"][aria-label="Messages"]';
 
@@ -147,6 +152,21 @@ export default function MessageDetail() {
     return list === undefined ? undefined : downloadable(list);
   });
   const toggleHeaders = () => setHeadersOpen((open) => !open);
+  let rail: HTMLElement | undefined;
+
+  createEffect(
+    on(
+      detailsRailOpen,
+      (open) => {
+        if (open || !rail?.contains(document.activeElement)) return;
+        const target =
+          document.getElementById(RAIL_TOGGLE_ID) ??
+          document.querySelector<HTMLElement>(MESSAGE_LIST_SELECTOR);
+        target?.focus({ preventScroll: true });
+      },
+      { defer: true },
+    ),
+  );
 
   return (
     <>
@@ -179,7 +199,7 @@ export default function MessageDetail() {
                       />
                     </Show>
                   </div>
-                  <Show when={!wideLayout() && !detailsDrawerOpen()}>
+                  <Show when={!detailsRailOpen() && !detailsDrawerOpen()}>
                     <CompactChecks
                       auth={reads.auth}
                       attachmentCount={files()?.length ?? 0}
@@ -216,35 +236,39 @@ export default function MessageDetail() {
       </section>
       <Show when={wideLayout()}>
         <aside
+          ref={rail}
           id={DETAILS_ID}
           aria-label="Message details"
-          class="app-panel w-80 shrink-0 overflow-y-auto"
+          class="details-rail app-panel shrink-0 overflow-hidden"
+          data-collapsed={detailsRailOpen() ? undefined : ""}
         >
-          <Show
-            when={loaded()}
-            fallback={
-              <Show
-                when={selectedId()}
-                fallback={
-                  <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
-                    Details of the selected message show here.
-                  </p>
-                }
-              >
-                <ReadState read={message} label="the message details" />
-              </Show>
-            }
-          >
-            {(msg) => (
-              <DetailRail
-                message={msg()}
-                reads={reads}
-                files={files()}
-                headersOpen={headersOpen()}
-                onToggleHeaders={toggleHeaders}
-              />
-            )}
-          </Show>
+          <div class="w-80 h-full overflow-y-auto">
+            <Show
+              when={loaded()}
+              fallback={
+                <Show
+                  when={selectedId()}
+                  fallback={
+                    <p class="p-4 text-xs text-zinc-500 dark:text-zinc-400">
+                      Details of the selected message show here.
+                    </p>
+                  }
+                >
+                  <ReadState read={message} label="the message details" />
+                </Show>
+              }
+            >
+              {(msg) => (
+                <DetailRail
+                  message={msg()}
+                  reads={reads}
+                  files={files()}
+                  headersOpen={headersOpen()}
+                  onToggleHeaders={toggleHeaders}
+                />
+              )}
+            </Show>
+          </div>
         </aside>
       </Show>
     </>
@@ -367,6 +391,27 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
         </p>
       </div>
       <div class="flex items-center gap-2 shrink-0">
+        <Show when={wideLayout()}>
+          <Tooltip
+            label={detailsRailOpen() ? "Hide details" : "Show details"}
+            shortcut="i"
+          >
+            {(trigger) => (
+              <button
+                ref={trigger.ref}
+                id={RAIL_TOGGLE_ID}
+                onClick={toggleDetails}
+                aria-label="Details"
+                aria-describedby={trigger.describedBy}
+                aria-expanded={detailsRailOpen()}
+                aria-controls={DETAILS_ID}
+                class="rounded-lg border border-zinc-200 dark:border-zinc-700/70 p-1.5 text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-700 dark:hover:text-zinc-200 transition cursor-pointer"
+              >
+                <PanelRightIcon class="size-4" />
+              </button>
+            )}
+          </Tooltip>
+        </Show>
         <Show when={!wideLayout()}>
           <button
             onClick={toggleDetails}
