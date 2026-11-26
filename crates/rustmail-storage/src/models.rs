@@ -41,6 +41,12 @@ pub struct Message {
   pub tags: String,
   /// ISO 8601 timestamp of when the message was received.
   pub created_at: String,
+  /// ISO 8601 UTC timestamp of the release recorded on the message, if any.
+  #[serde(default)]
+  pub released_at: Option<String>,
+  /// What the release recorded on the message ended with, if any.
+  #[serde(default)]
+  pub release_outcome: Option<ReleaseOutcome>,
 }
 
 /// Lightweight message representation for list/search results.
@@ -66,6 +72,43 @@ pub struct MessageSummary {
   )]
   pub tags: String,
   pub created_at: String,
+  #[serde(default)]
+  pub released_at: Option<String>,
+  #[serde(default)]
+  pub release_outcome: Option<ReleaseOutcome>,
+}
+
+/// How a release of a message to the relay ended, when it may have
+/// delivered it.
+///
+/// A release the relay never took is not recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
+pub enum ReleaseOutcome {
+  /// The relay accepted the message.
+  Sent,
+  /// The exchange broke off once the relay may have had the message.
+  Unknown,
+}
+
+impl ReleaseOutcome {
+  /// The value stored in `messages.release_outcome`.
+  pub fn as_str(self) -> &'static str {
+    match self {
+      Self::Sent => "sent",
+      Self::Unknown => "unknown",
+    }
+  }
+}
+
+/// The release recorded on a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
+pub struct Release {
+  /// ISO 8601 UTC timestamp of the release.
+  pub released_at: String,
+  /// What the release ended with.
+  pub release_outcome: ReleaseOutcome,
 }
 
 /// Lightweight attachment metadata for list responses (no binary content).
@@ -136,6 +179,8 @@ mod tests {
       is_starred: false,
       tags: r#"["ci"]"#.into(),
       created_at: "2026-09-23T00:00:00Z".into(),
+      released_at: None,
+      release_outcome: None,
     };
 
     let json = serde_json::to_string(&summary).unwrap();

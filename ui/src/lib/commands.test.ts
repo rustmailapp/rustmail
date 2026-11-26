@@ -17,6 +17,8 @@ const MESSAGE: MessageSummary = {
   is_starred: false,
   tags: [],
   created_at: "2026-01-01T00:00:00Z",
+  released_at: null,
+  release_outcome: null,
 };
 
 function state(overrides: Partial<CommandState> = {}): CommandState {

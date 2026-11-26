@@ -133,6 +133,8 @@ paths:
                     is_starred: false
                     tags: []
                     created_at: '2026-03-21T10:00:00Z'
+                    released_at: null
+                    release_outcome: null
                 total: 1
                 next_cursor: null
                 limit: 50
@@ -207,6 +209,8 @@ paths:
                 is_starred: false
                 tags: []
                 created_at: '2026-03-21T10:00:00Z'
+                released_at: '2026-03-21T10:05:00Z'
+                release_outcome: sent
         '404':
           $ref: '#/components/responses/NotFound'
         '503':
@@ -526,7 +530,10 @@ paths:
               port: 587
       responses:
         '200':
-          description: The relay accepted the message
+          description: >
+            The relay accepted the message. The release is recorded on the
+            message, `message:released` is sent to every WebSocket client, and
+            the body carries the release the message now holds.
           content:
             application/json:
               schema:
@@ -536,8 +543,18 @@ paths:
                   released:
                     type: boolean
                     const: true
+                  released_at:
+                    type: string
+                    format: date-time
+                    description: >
+                      When the recorded release happened, UTC. Absent only if
+                      the release could not be recorded.
+                  release_outcome:
+                    $ref: '#/components/schemas/ReleaseOutcome'
               example:
                 released: true
+                released_at: '2026-03-21T10:05:00Z'
+                release_outcome: sent
         '400':
           description: >
             `port` is not one of 25, 465, 587 or 2525, or the captured envelope
@@ -611,14 +628,31 @@ paths:
           description: >
             The relay did not confirm the message: the exchange broke off or
             passed 30 seconds after the message may already have been handed
-            over. Check the relay before releasing the same message again.
+            over. Check the relay before releasing the same message again. The
+            release is recorded as `unknown` unless the message already holds a
+            `sent` one, `message:released` is sent to every WebSocket client,
+            and the body carries the release the message now holds, which is
+            that earlier `sent` one when there is one.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      released_at:
+                        type: string
+                        format: date-time
+                        description: >
+                          When the recorded release happened, UTC. Absent only
+                          if the release could not be recorded.
+                      release_outcome:
+                        $ref: '#/components/schemas/ReleaseOutcome'
               example:
                 error: 'The relay did not confirm the message. It may have been delivered: check the relay before releasing it again.'
                 code: release_outcome_unknown
+                released_at: '2026-03-21T10:05:00Z'
+                release_outcome: unknown
 
   /api/v1/messages/{id}/auth:
     parameters:
@@ -789,6 +823,7 @@ paths:
         | `message:read` | `{ "id": "<ulid>", "is_read": true \| false }` |
         | `message:starred` | `{ "id": "<ulid>", "is_starred": true \| false }` |
         | `message:tags` | `{ "id": "<ulid>", "tags": ["tag1", "tag2"] }` |
+        | `message:released` | `{ "id": "<ulid>", "released_at": "<UTC timestamp>", "release_outcome": "sent" \| "unknown" }`, the release the message holds after one was recorded |
         | `messages:clear` | _(no data field)_ |
 
 
@@ -901,6 +936,8 @@ components:
         - is_starred
         - tags
         - created_at
+        - released_at
+        - release_outcome
       properties:
         id:
           type: string
@@ -949,6 +986,28 @@ components:
             When the message was received, UTC, to the second
             (`YYYY-MM-DDTHH:MM:SSZ`)
           example: '2026-03-21T10:00:00Z'
+        released_at:
+          type: [string, 'null']
+          format: date-time
+          description: >
+            When the message was last released to the relay with a result that
+            may have delivered it, UTC, to the second; `null` when it never
+            was. A `sent` release is kept over a later `unknown` one.
+          example: null
+        release_outcome:
+          oneOf:
+            - $ref: '#/components/schemas/ReleaseOutcome'
+            - type: 'null'
+          description: What that release ended with; `null` when there is none
+          example: null
+
+    ReleaseOutcome:
+      type: string
+      enum: [sent, unknown]
+      description: >
+        `sent`: the relay accepted the message. `unknown`: the relay did not
+        confirm it and may have it. A release the relay never took is not
+        recorded.
 
     Message:
       allOf:

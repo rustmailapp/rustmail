@@ -88,6 +88,21 @@ Fired when a message's tags are updated.
 }
 ```
 
+### `message:released`
+
+Fired when a release that may have reached the relay is recorded on a message. `data` is the release the message now holds, so a `sent` release stays when a later one ends `unknown` (see [Recorded releases](/features/release#recorded-releases)).
+
+```json
+{
+  "type": "message:released",
+  "data": {
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    "released_at": "2026-11-26T13:05:09Z",
+    "release_outcome": "sent"
+  }
+}
+```
+
 ### `messages:clear`
 
 Fired when all messages are deleted. This event has no `data` field.

@@ -42,7 +42,7 @@ pub use error::{MigrationRefusal, RestoreRefusal, StorageError};
 pub use migrate::{
   MigrationReport, Preparation, RestoreReport, prepare_database_file, restore_backup,
 };
-pub use models::{Attachment, AttachmentSummary, Message, MessageSummary};
+pub use models::{Attachment, AttachmentSummary, Message, MessageSummary, Release, ReleaseOutcome};
 pub use prepared::PreparedMessage;
 pub use query::{Cursor, MessageFilter, PageStart};
 pub use repo::{MessageRepository, format_iso8601};

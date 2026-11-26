@@ -13,6 +13,8 @@ export interface ConfirmDialogOptions {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** A caution about this particular confirmation, shown above the list. */
+  warning?: string;
   /** Items the confirmation acts on, listed under the message. */
   list?: { label: string; items: readonly string[] };
   /**
@@ -49,13 +51,18 @@ function close(confirmed: boolean) {
 
 export default function ConfirmDialog() {
   const titleId = createUniqueId();
+  let dialog: HTMLDivElement | undefined;
   function onKeyDown(e: KeyboardEvent) {
     const state = dialogState();
     if (!state || state.options.enterConfirms === false) return;
-    if (e.key === "Enter" && !e.repeat) {
-      e.stopPropagation();
-      close(true);
+    if (e.key !== "Enter") return;
+    e.stopPropagation();
+    const focused = document.activeElement;
+    if (focused instanceof HTMLButtonElement && dialog?.contains(focused)) {
+      return;
     }
+    e.preventDefault();
+    if (!e.repeat) close(true);
   }
 
   onMount(() => document.addEventListener("keydown", onKeyDown, true));
@@ -65,7 +72,12 @@ export default function ConfirmDialog() {
     <Show when={dialogState()}>
       {(state) => (
         <Modal open={true} onClose={() => close(false)} maxWidth="max-w-sm">
-          <div role="dialog" aria-modal="true" aria-labelledby={titleId}>
+          <div
+            ref={dialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+          >
             <div class="px-6 pt-5 pb-2">
               <h3
                 id={titleId}
@@ -76,6 +88,13 @@ export default function ConfirmDialog() {
               <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                 {state().options.message}
               </p>
+              <Show when={state().options.warning}>
+                {(warning) => (
+                  <p class="mt-3 rounded-md border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/20 px-2.5 py-1.5 text-xs font-medium text-amber-800 dark:text-amber-300">
+                    {warning()}
+                  </p>
+                )}
+              </Show>
               <Show when={state().options.list}>
                 {(list) => (
                   <div class="mt-3">

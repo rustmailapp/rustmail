@@ -43,7 +43,7 @@ docker run -p 1025:1025 -p 8025:8025 -e RUSTMAIL_EPHEMERAL=true smyile/rustmail:
 
 ## Upgrading
 
-Upgrading to 0.8 or 0.10 migrates the database in `/data` on the first start, before SMTP and HTTP come up. The volume must be writable and have room for the old and the new database side by side; the old one is kept as `/data/rustmail.db.schema0.bak` (from 0.7 or earlier) or `/data/rustmail.db.schema1.bak` (from 0.8 or 0.9). Pin the image tag so you control when this happens. See [Upgrading](/getting-started/upgrading) for timings, the health check, and how to restore the backup.
+Upgrading to 0.8, 0.10 or 0.11 migrates the database in `/data` on the first start, before SMTP and HTTP come up. The volume must be writable and have room for the old and the new database side by side; the old one is kept as `/data/rustmail.db.schema0.bak` (from 0.7 or earlier), `/data/rustmail.db.schema1.bak` (from 0.8 or 0.9) or `/data/rustmail.db.schema2.bak` (from 0.10). Pin the image tag so you control when this happens. See [Upgrading](/getting-started/upgrading) for timings, the health check, and how to restore the backup.
 
 ## Environment Variables
 
