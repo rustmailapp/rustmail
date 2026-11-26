@@ -786,7 +786,7 @@ async fn open_repository(db_url: &str, in_memory: bool) -> Result<MessageReposit
 
 fn install_rustls_crypto_provider() {
   if rustls::crypto::CryptoProvider::get_default().is_none() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
   }
 }
 

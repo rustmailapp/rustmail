@@ -52,7 +52,7 @@ fn load_test_tls_config() -> TlsConfig {
   let key_file = std::fs::File::open(starttls_key_path()).unwrap();
 
   if rustls::crypto::CryptoProvider::get_default().is_none() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
   }
 
   let certs = CertificateDer::pem_reader_iter(cert_file)
@@ -80,7 +80,7 @@ fn load_test_cert_der() -> CertificateDer<'static> {
 
 fn test_tls_connector() -> TlsConnector {
   if rustls::crypto::CryptoProvider::get_default().is_none() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let _ = rustls::crypto::ring::default_provider().install_default();
   }
 
   let mut root_store = rustls::RootCertStore::empty();
