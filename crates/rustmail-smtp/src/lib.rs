@@ -28,10 +28,14 @@
 //!
 //! // Receive captured emails, answering for each one: the session holds its
 //! // SMTP reply until the outcome comes back, and an unanswered delivery is
-//! // reported to the sender as a temporary failure.
+//! // reported to the sender as a temporary failure. Claim each message before
+//! // storing it: a session past its deadline withdraws an unclaimed message
+//! // and tells the sender to retry, so storing it anyway would capture it twice.
 //! let (msg, ack) = rx.recv().await.unwrap().into_parts();
-//! println!("From: {}", msg.sender);
-//! ack.stored();
+//! if ack.begin_write() {
+//!   println!("From: {}", msg.sender);
+//!   ack.stored();
+//! }
 //! # Ok(())
 //! # }
 //! ```

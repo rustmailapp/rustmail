@@ -601,26 +601,24 @@ async fn store_group(
   fallback_deadline: Instant,
   announce: &(dyn Fn(&MessageSummary) + Sync),
 ) -> Vec<MessageSummary> {
-  let mut prepared = Vec::with_capacity(group.len());
+  let mut messages = Vec::with_capacity(group.len());
+  let mut acks = Vec::with_capacity(group.len());
   for (received, ack) in group {
+    if !ack.begin_write() {
+      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
+      continue;
+    }
     match prepare(received).await {
-      Ok(message) => prepared.push((message, ack)),
+      Ok(message) => {
+        messages.push(message);
+        acks.push(ack);
+      }
       Err(e) => {
         ack.rejected();
         tracing::error!(error = %e, "Refused a message that could not be parsed; the sender was asked to retry");
       }
     }
   }
-  let (messages, acks): (Vec<_>, Vec<_>) = prepared
-    .into_iter()
-    .filter(|(_, ack)| {
-      let claimed = ack.begin_write();
-      if !claimed {
-        warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
-      }
-      claimed
-    })
-    .unzip();
   if messages.is_empty() {
     return Vec::new();
   }
