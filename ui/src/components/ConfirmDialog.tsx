@@ -49,13 +49,18 @@ function close(confirmed: boolean) {
 
 export default function ConfirmDialog() {
   const titleId = createUniqueId();
+  let dialog: HTMLDivElement | undefined;
   function onKeyDown(e: KeyboardEvent) {
     const state = dialogState();
     if (!state || state.options.enterConfirms === false) return;
-    if (e.key === "Enter") {
-      e.stopPropagation();
-      close(true);
+    if (e.key !== "Enter") return;
+    e.stopPropagation();
+    const focused = document.activeElement;
+    if (focused instanceof HTMLButtonElement && dialog?.contains(focused)) {
+      return;
     }
+    e.preventDefault();
+    close(true);
   }
 
   onMount(() => document.addEventListener("keydown", onKeyDown, true));
@@ -65,7 +70,12 @@ export default function ConfirmDialog() {
     <Show when={dialogState()}>
       {(state) => (
         <Modal open={true} onClose={() => close(false)} maxWidth="max-w-sm">
-          <div role="dialog" aria-modal="true" aria-labelledby={titleId}>
+          <div
+            ref={dialog}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={titleId}
+          >
             <div class="px-6 pt-5 pb-2">
               <h3
                 id={titleId}
