@@ -1,26 +1,13 @@
-import {
-  createMemo,
-  createResource,
-  createSignal,
-  onCleanup,
-  Show,
-  type JSX,
-} from "solid-js";
+import { createMemo, Show, type JSX } from "solid-js";
 import {
   hasMore,
   socketLive,
   total,
   visibleMessages,
 } from "../stores/messages";
-import * as api from "../lib/api";
-import {
-  COPIED_FEEDBACK_MS,
-  MANUAL_COPY_HINT,
-  MANUAL_COPY_HINT_MS,
-  writeClipboard,
-  type CopyFeedback,
-} from "../lib/clipboard";
-import { CopyIcon } from "./icons";
+import { serverInfo, smtpEndpoint } from "../stores/server";
+import { smtpAddress } from "../lib/smtp";
+import CopyButton from "./CopyButton";
 
 const ENDPOINT_TITLE =
   "The SMTP port this server listens on. Docker or proxy port mappings can expose a different one.";
@@ -47,16 +34,13 @@ function Hint(props: { keys: string[]; label: string }) {
 /**
  * The bottom bar: whether mail arrives live, where to send it, and the keys.
  *
- * The server's details are read once. A failed read says the SMTP address is
- * unknown rather than retrying: nothing on the page depends on it, and the
- * reload that would fix a stale server fixes this too.
+ * A failed read of the server's details says the SMTP address is unknown.
  */
 export default function StatusBar() {
-  const [info] = createResource(() => api.getInfo());
-  const ready = () => (info.state === "ready" ? info() : undefined);
+  const ready = () => (serverInfo.state === "ready" ? serverInfo() : undefined);
   const endpoint = () => {
-    const server = ready();
-    return server ? `${location.hostname}:${server.smtp_port}` : undefined;
+    const smtp = smtpEndpoint();
+    return smtp ? smtpAddress(smtp.host, smtp.port) : undefined;
   };
   const unread = createMemo(
     () => visibleMessages().filter((m) => !m.is_read).length,
@@ -70,25 +54,7 @@ export default function StatusBar() {
     return seenLive ? "Reconnecting" : "Connecting";
   });
 
-  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let endpointText: HTMLSpanElement | undefined;
-  onCleanup(() => clearTimeout(feedbackTimer));
-
-  function showFeedback(kind: CopyFeedback, durationMs: number): void {
-    setFeedback(kind);
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => setFeedback(null), durationMs);
-  }
-
-  async function copy(text: string): Promise<void> {
-    if (await writeClipboard(text)) {
-      showFeedback("copied", COPIED_FEEDBACK_MS);
-      return;
-    }
-    if (endpointText) window.getSelection()?.selectAllChildren(endpointText);
-    showFeedback("manual", MANUAL_COPY_HINT_MS);
-  }
 
   return (
     <footer class="app-panel flex items-center gap-4 px-3 h-8 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
@@ -106,7 +72,7 @@ export default function StatusBar() {
       <Show
         when={endpoint()}
         fallback={
-          <Show when={info.state === "errored"}>
+          <Show when={serverInfo.state === "errored"}>
             <span class="text-zinc-500 dark:text-zinc-400">SMTP unknown</span>
           </Show>
         }
@@ -122,25 +88,11 @@ export default function StatusBar() {
                 {address()}
               </span>
             </span>
-            <button
-              onClick={() => copy(address())}
-              aria-label={
-                feedback() === "copied"
-                  ? "Copied"
-                  : feedback() === "manual"
-                    ? MANUAL_COPY_HINT
-                    : "Copy the SMTP address"
-              }
-              title={feedback() === "copied" ? "Copied" : "Copy"}
-              class="rounded p-0.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
-            >
-              <CopyIcon class="size-3" />
-            </button>
-            <Show when={feedback() === "manual"}>
-              <span class="text-zinc-600 dark:text-zinc-300">
-                {MANUAL_COPY_HINT}
-              </span>
-            </Show>
+            <CopyButton
+              text={address()}
+              label="Copy the SMTP address"
+              source={() => endpointText}
+            />
           </span>
         )}
       </Show>
