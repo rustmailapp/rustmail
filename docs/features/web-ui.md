@@ -38,6 +38,15 @@ The gear icon in the header opens **Settings**. Under **Appearance**:
 
 Both choices are kept in the browser's local storage, so they apply per browser rather than per server. A palette saved by an older version moves to its replacement: Copper & Teal to Tide, Classic and Ember to Graphite, Dawn to RustMail.
 
+## Density
+
+Under **Settings** > **Layout**, **Density** sets how much of the inbox fits on screen:
+
+- **Comfortable** (the default): two lines per message, the subject and time over the sender, the first recipient and up to three tags.
+- **Compact**: one line per message, with the sender, subject, attachment and tag count, and the time on the right. Hover the count for the tag names; recipients and tags are also in the details rail.
+
+Like the theme, the density is kept in the browser's local storage.
+
 ## Details rail
 
 | Section | Contents |

@@ -27,18 +27,23 @@ import {
   heldRefresh,
   setLiveHeld,
 } from "../stores/messages";
+import { density, type Density } from "../stores/density";
 import { formatDate } from "../lib/format";
-import { PaperclipIcon, StarIcon } from "./icons";
+import { PaperclipIcon, StarIcon, TagIcon } from "./icons";
 import { EmptyInbox } from "./Onboarding";
 import type { MessageSummary } from "../lib/types";
 
 /**
- * Starting guess for a row's height, in pixels.
+ * Starting guess for a row's height in each density, in pixels.
  *
  * Rows are measured once rendered, so this only has to be close enough to size
- * the scrollbar before anything is on screen.
+ * the scrollbar before anything is on screen. Compact rows have a fixed height,
+ * which this matches exactly so rows that were never mounted take no jump.
  */
-const ROW_ESTIMATE_PX = 56;
+const ROW_ESTIMATE_PX: Record<Density, number> = {
+  comfortable: 56,
+  compact: 32,
+};
 const OVERSCAN_ROWS = 8;
 /** Distance from the end of the loaded list that starts the next page. */
 const LOAD_MORE_ROW_THRESHOLD = 10;
@@ -77,7 +82,7 @@ export default function Inbox() {
     },
     getScrollElement: () => scroller ?? null,
     getItemKey: (index) => filteredMessages()[index]?.id ?? index,
-    estimateSize: () => ROW_ESTIMATE_PX,
+    estimateSize: () => ROW_ESTIMATE_PX[density()],
     overscan: OVERSCAN_ROWS,
   });
 
@@ -90,14 +95,25 @@ export default function Inbox() {
     }
   });
 
+  function revealSelected(id: string | null): void {
+    if (!id) return;
+    const index = untrack(() =>
+      filteredMessages().findIndex((m) => m.id === id),
+    );
+    if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
+  }
+
+  createEffect(on(selectedId, revealSelected));
+
   createEffect(
-    on(selectedId, (id) => {
-      if (!id) return;
-      const index = untrack(() =>
-        filteredMessages().findIndex((m) => m.id === id),
-      );
-      if (index >= 0) virtualizer.scrollToIndex(index, { align: "auto" });
-    }),
+    on(
+      density,
+      () => {
+        virtualizer.measure();
+        revealSelected(untrack(selectedId));
+      },
+      { defer: true },
+    ),
   );
 
   /**
@@ -267,7 +283,7 @@ function routeLine(msg: MessageSummary): string {
 function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
   const msg = props.msg;
   const isSelected = () => selectedId() === msg().id;
-  const emphasised = () => isSelected() || !msg().is_read;
+  const compact = () => density() === "compact";
 
   return (
     <div
@@ -278,73 +294,161 @@ function MessageRow(props: { msg: Accessor<MessageSummary>; index: number }) {
       aria-setsize={listSize()}
       data-id={msg().id}
       onClick={() => selectMessage(msg())}
-      class={`group/row w-full text-left rounded-lg px-2.5 py-2 transition cursor-pointer ${
+      class={`group/row w-full text-left rounded-lg transition cursor-pointer ${
+        compact() ? "h-[30px] px-1.5" : "px-2.5 py-2"
+      } ${
         isSelected()
           ? "inbox-row-selected"
           : "hover:bg-zinc-100/80 dark:hover:bg-zinc-800/50"
       }`}
     >
-      <div class="flex items-start gap-2.5">
-        <div class="flex-shrink-0 flex flex-col items-center gap-1 pt-0.5">
-          <div
-            class={`size-2 rounded-full mt-1 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
-          />
-          <button
-            tabIndex={-1}
-            onClick={(e) => {
-              e.stopPropagation();
-              starMessage(msg().id, !msg().is_starred);
-            }}
-            class="cursor-pointer"
-            title={msg().is_starred ? "Unstar" : "Star"}
+      <Show
+        when={compact()}
+        fallback={<ComfortableRow msg={msg} selected={isSelected()} />}
+      >
+        <CompactRow msg={msg} selected={isSelected()} />
+      </Show>
+    </div>
+  );
+}
+
+/** Classes for a row's secondary text, which brightens on the selected row. */
+function secondaryText(selected: boolean): string {
+  return selected
+    ? "text-zinc-600 dark:text-zinc-300"
+    : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400";
+}
+
+function StarButton(props: { msg: Accessor<MessageSummary>; class?: string }) {
+  return (
+    <button
+      tabIndex={-1}
+      onClick={(e) => {
+        e.stopPropagation();
+        starMessage(props.msg().id, !props.msg().is_starred);
+      }}
+      class={`cursor-pointer ${props.class ?? ""}`}
+      title={props.msg().is_starred ? "Unstar" : "Star"}
+    >
+      <StarIcon
+        class={`size-3.5 transition ${props.msg().is_starred ? "text-amber-700 dark:text-amber-400" : "text-zinc-500 hover:text-amber-800 dark:hover:text-amber-400"}`}
+        filled={props.msg().is_starred}
+      />
+    </button>
+  );
+}
+
+/**
+ * One line per message: sender, subject, markers and time.
+ *
+ * The row height is fixed so it always matches the virtualizer's estimate, and
+ * the star keeps a 24px hit area inside it.
+ */
+function CompactRow(props: {
+  msg: Accessor<MessageSummary>;
+  selected: boolean;
+}) {
+  const msg = props.msg;
+  const emphasised = () => props.selected || !msg().is_read;
+
+  return (
+    <div class="flex h-full items-center gap-1.5">
+      <div
+        class={`size-2 flex-shrink-0 rounded-full ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
+      />
+      <StarButton
+        msg={msg}
+        class="flex size-6 flex-shrink-0 items-center justify-center rounded-md"
+      />
+      <span
+        class={`w-[30%] max-w-48 flex-shrink-0 truncate text-[13px] leading-5 ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : secondaryText(props.selected)}`}
+      >
+        {msg().sender || "(no sender)"}
+      </span>
+      <span
+        class={`min-w-0 flex-1 truncate text-[13px] leading-5 ${emphasised() ? "font-medium text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
+      >
+        {msg().subject || "(no subject)"}
+      </span>
+      <Show when={msg().has_attachments}>
+        <PaperclipIcon class="size-3 flex-shrink-0 text-zinc-400 dark:text-zinc-500" />
+      </Show>
+      <Show when={msg().tags.length > 0}>
+        <span
+          title={msg().tags.join(", ")}
+          class={`flex flex-shrink-0 items-center gap-0.5 text-[11px] tabular-nums ${secondaryText(props.selected)}`}
+        >
+          <TagIcon class="size-3" />
+          <span aria-hidden="true">{msg().tags.length}</span>
+          <span class="sr-only">Tags: {msg().tags.join(", ")}</span>
+        </span>
+      </Show>
+      <span
+        class={`flex-shrink-0 text-[11px] leading-4 tabular-nums ${secondaryText(props.selected)}`}
+      >
+        {formatDate(msg().created_at)}
+      </span>
+    </div>
+  );
+}
+
+/** Two lines per message: subject and time, then sender, recipients and tags. */
+function ComfortableRow(props: {
+  msg: Accessor<MessageSummary>;
+  selected: boolean;
+}) {
+  const msg = props.msg;
+  const isSelected = () => props.selected;
+  const emphasised = () => isSelected() || !msg().is_read;
+
+  return (
+    <div class="flex items-start gap-2.5">
+      <div class="flex-shrink-0 flex flex-col items-center gap-1 pt-0.5">
+        <div
+          class={`size-2 rounded-full mt-1 ${msg().is_read ? "bg-transparent" : "bg-orange-500"}`}
+        />
+        <StarButton msg={msg} />
+      </div>
+      <div class="flex-1 min-w-0">
+        <div class="flex items-baseline justify-between gap-2">
+          <span
+            class={`text-sm leading-5 truncate ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
           >
-            <StarIcon
-              class={`size-3.5 transition ${msg().is_starred ? "text-amber-700 dark:text-amber-400" : "text-zinc-500 hover:text-amber-800 dark:hover:text-amber-400"}`}
-              filled={msg().is_starred}
-            />
-          </button>
+            {msg().subject || "(no subject)"}
+          </span>
+          <span
+            class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
+          >
+            {formatDate(msg().created_at)}
+          </span>
         </div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-baseline justify-between gap-2">
-            <span
-              class={`text-sm leading-5 truncate ${emphasised() ? "font-semibold text-zinc-900 dark:text-zinc-50" : "text-zinc-600 dark:text-zinc-400"}`}
-            >
-              {msg().subject || "(no subject)"}
-            </span>
-            <span
-              class={`text-[11px] leading-4 tabular-nums flex-shrink-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
-            >
-              {formatDate(msg().created_at)}
-            </span>
-          </div>
-          <div class="flex items-center gap-1.5 mt-0.5">
-            <span
-              class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
-            >
-              {routeLine(msg())}
-            </span>
-            <Show when={msg().has_attachments}>
-              <PaperclipIcon class="size-3 flex-shrink-0 text-zinc-400 dark:text-zinc-500" />
-            </Show>
-            <Show when={msg().tags.length > 0}>
-              <div class="ml-auto flex gap-1 flex-shrink-0">
-                <For each={msg().tags.slice(0, 3)}>
-                  {(tag) => (
-                    <span class="inline-block px-1.5 rounded-md text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
-                      {tag}
-                    </span>
-                  )}
-                </For>
-                <Show when={msg().tags.length > 3}>
-                  <span
-                    class={`text-[10px] ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
-                  >
-                    +{msg().tags.length - 3}
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <span
+            class={`text-xs leading-4 truncate min-w-0 ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
+          >
+            {routeLine(msg())}
+          </span>
+          <Show when={msg().has_attachments}>
+            <PaperclipIcon class="size-3 flex-shrink-0 text-zinc-400 dark:text-zinc-500" />
+          </Show>
+          <Show when={msg().tags.length > 0}>
+            <div class="ml-auto flex gap-1 flex-shrink-0">
+              <For each={msg().tags.slice(0, 3)}>
+                {(tag) => (
+                  <span class="inline-block px-1.5 rounded-md text-[10px] font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
+                    {tag}
                   </span>
-                </Show>
-              </div>
-            </Show>
-          </div>
+                )}
+              </For>
+              <Show when={msg().tags.length > 3}>
+                <span
+                  class={`text-[10px] ${isSelected() ? "text-zinc-600 dark:text-zinc-300" : "text-zinc-500 group-hover/row:text-zinc-600 dark:text-zinc-400 dark:group-hover/row:text-zinc-400"}`}
+                >
+                  +{msg().tags.length - 3}
+                </span>
+              </Show>
+            </div>
+          </Show>
         </div>
       </div>
     </div>

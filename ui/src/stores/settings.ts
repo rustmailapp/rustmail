@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 
-export type SettingsTab = "appearance";
+export type SettingsTab = "appearance" | "layout";
 
 const [settingsOpen, setSettingsOpen] = createSignal(false);
 const [settingsTab, setSettingsTab] = createSignal<SettingsTab>("appearance");
