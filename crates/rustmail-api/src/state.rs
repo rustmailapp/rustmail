@@ -9,6 +9,8 @@ use crate::origin::Origin;
 use crate::ws::WsTimings;
 
 const MAX_WS_CONNECTIONS: usize = 50;
+/// Port a release goes to when `--release-host` names none.
+pub(crate) const DEFAULT_RELEASE_PORT: u16 = 587;
 /// Longest an API request may run before it is answered `503`.
 ///
 /// Well past any read or bulk delete on a 100k mailbox, so it only cuts off a
@@ -86,6 +88,15 @@ pub struct ServerInfo {
   pub smtp_port: u16,
 }
 
+/// The relay a release is forwarded to, as `GET /api/v1/info` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ReleaseTarget {
+  /// The only host a release may name.
+  pub host: String,
+  /// The port a release goes to when the request names none.
+  pub port: u16,
+}
+
 /// Shared application state passed to all axum handlers.
 #[derive(Clone)]
 pub struct AppState {
@@ -129,6 +140,14 @@ impl AppState {
       ws_timings: WsTimings::default(),
       api_timeout: API_REQUEST_TIMEOUT,
     }
+  }
+
+  /// The relay release forwards to, or `None` while release is disabled.
+  pub fn release_target(&self) -> Option<ReleaseTarget> {
+    self.release_host.as_ref().map(|host| ReleaseTarget {
+      host: host.clone(),
+      port: self.release_port.unwrap_or(DEFAULT_RELEASE_PORT),
+    })
   }
 
   /// Lets browser pages on `origins` open the WebSocket.

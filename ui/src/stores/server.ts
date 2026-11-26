@@ -1,6 +1,7 @@
 import { createResource, createRoot } from "solid-js";
 import * as api from "../lib/api";
 import { smtpHost } from "../lib/smtp";
+import type { ReleaseTarget } from "../lib/types";
 
 /**
  * The server's own details, read once.
@@ -16,4 +17,9 @@ function smtpEndpoint(): { host: string; port: number } | undefined {
   return { host: smtpHost(location.hostname), port: serverInfo().smtp_port };
 }
 
-export { serverInfo, smtpEndpoint };
+/** The relay a release goes through, or `null` while it is off or unknown. */
+function releaseTarget(): ReleaseTarget | null {
+  return serverInfo.state === "ready" ? serverInfo().release : null;
+}
+
+export { serverInfo, smtpEndpoint, releaseTarget };

@@ -34,7 +34,7 @@ import {
 import * as api from "../lib/api";
 import { formatDate, formatSize } from "../lib/format";
 import { debounced } from "../lib/reactive";
-import type { AuthResults, Message } from "../lib/types";
+import type { AuthResults, Message, ReleaseTarget } from "../lib/types";
 import {
   createPaneRead,
   failed,
@@ -52,10 +52,14 @@ import {
   InfoIcon,
   PanelRightIcon,
   PaperclipIcon,
+  SendIcon,
   StarIcon,
   TrashIcon,
 } from "./icons";
 import Tooltip from "./Tooltip";
+import { confirm } from "./ConfirmDialog";
+import { releaseTarget } from "../stores/server";
+import { relayLabel, release, releasing } from "../stores/release";
 
 type View = "preview" | "text" | "raw";
 
@@ -356,6 +360,28 @@ function NothingSelected() {
 const ACTION_CLASS =
   "p-1.5 transition cursor-pointer first:rounded-l-lg last:rounded-r-lg hover:bg-zinc-100 dark:hover:bg-zinc-800";
 
+/**
+ * Asks before releasing `message`, naming the relay and every recipient.
+ *
+ * A release is real mail to the captured envelope, Bcc included, so the
+ * dialog lists exactly who receives it and Enter does not confirm.
+ */
+async function confirmRelease(
+  message: Message,
+  target: ReleaseTarget,
+): Promise<void> {
+  const confirmed = await confirm({
+    title: "Release this message?",
+    message: `RustMail sends it as captured through ${relayLabel(target)} to every envelope recipient below, Bcc included. This is real mail and cannot be recalled.`,
+    confirmLabel: "Release",
+    list: { label: "Envelope recipients", items: message.recipients },
+    enterConfirms: false,
+  });
+  if (confirmed) {
+    await release(message.id, target, message.recipients.length);
+  }
+}
+
 function MessageHeader(props: { message: Message; reads: RailReads }) {
   const sender = () => parseSender(props.message.sender);
   const starred = () => liveSummary(props.message).is_starred;
@@ -464,6 +490,33 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
               </a>
             )}
           </Tooltip>
+          <Show when={releaseTarget()}>
+            {(target) => (
+              <Tooltip
+                label={
+                  releasing(props.message.id)
+                    ? "Releasing..."
+                    : `Release via ${relayLabel(target())}`
+                }
+              >
+                {(trigger) => (
+                  <button
+                    ref={trigger.ref}
+                    aria-label="Release"
+                    aria-describedby={trigger.describedBy}
+                    aria-disabled={releasing(props.message.id)}
+                    onClick={() => {
+                      if (releasing(props.message.id)) return;
+                      void confirmRelease(props.message, target());
+                    }}
+                    class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-700 dark:hover:text-red-300 aria-disabled:opacity-50 aria-disabled:cursor-wait`}
+                  >
+                    <SendIcon class="size-4" />
+                  </button>
+                )}
+              </Tooltip>
+            )}
+          </Show>
           <Tooltip label="Delete" shortcut="d">
             {(trigger) => (
               <button

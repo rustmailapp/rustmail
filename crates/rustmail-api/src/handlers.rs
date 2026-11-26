@@ -3,8 +3,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
-use crate::state::{AppState, WsEvent};
+use crate::state::{AppState, DEFAULT_RELEASE_PORT, ReleaseTarget, ServerInfo, WsEvent};
 use rustmail_storage::{MessageFilter, PageStart, StorageError};
 
 /// Captured mail is immutable once stored, so anything derived from a
@@ -499,11 +500,23 @@ pub async fn assert_count(
   }
 }
 
+/// What `GET /api/v1/info` answers: the [`ServerInfo`] plus the release relay.
+#[derive(Serialize)]
+struct InfoResponse<'a> {
+  #[serde(flatten)]
+  info: &'a ServerInfo,
+  release: Option<ReleaseTarget>,
+}
+
 /// Reports the server's version and SMTP port, as set by
-/// [`AppState::with_server_info`].
+/// [`AppState::with_server_info`], and the relay release forwards to.
 pub async fn get_info(State(state): State<AppState>) -> axum::response::Response {
-  match state.server_info {
-    Some(info) => Json(info.as_ref()).into_response(),
+  match &state.server_info {
+    Some(info) => Json(InfoResponse {
+      info,
+      release: state.release_target(),
+    })
+    .into_response(),
     None => (
       StatusCode::NOT_FOUND,
       Json(serde_json::json!({ "error": "Server info is not configured" })),
@@ -614,18 +627,87 @@ impl RelaySecurity {
   }
 }
 
+/// Longest a release may spend on the relay, from connecting to its last reply.
+///
+/// lettre's own timeout bounds only the TCP connect, so a relay that stalls
+/// after it would hold the request open indefinitely. This stays under the
+/// UI's release deadline so the server answers before the browser gives up.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
+const RELEASE_OUTCOME_UNKNOWN: &str = "The relay did not confirm the message. It may have been delivered: check the relay before releasing it again.";
+const RELEASE_OUTCOME_UNKNOWN_CODE: &str = "release_outcome_unknown";
+
 fn relay_transport(
   host: &str,
   port: u16,
   security: RelaySecurity,
+  tls_parameters: lettre::transport::smtp::client::TlsParameters,
 ) -> Result<lettre::AsyncSmtpTransport<lettre::Tokio1Executor>, lettre::transport::smtp::Error> {
+  use lettre::transport::smtp::client::Tls;
   use lettre::{AsyncSmtpTransport, Tokio1Executor};
 
-  let builder = match security {
-    RelaySecurity::ImplicitTls => AsyncSmtpTransport::<Tokio1Executor>::relay(host),
-    RelaySecurity::RequiredStartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host),
-  }?;
-  Ok(builder.port(port).build())
+  let (builder, tls) = match security {
+    RelaySecurity::ImplicitTls => (
+      AsyncSmtpTransport::<Tokio1Executor>::relay(host)?,
+      Tls::Wrapper(tls_parameters),
+    ),
+    RelaySecurity::RequiredStartTls => (
+      AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)?,
+      Tls::Required(tls_parameters),
+    ),
+  };
+  Ok(builder.port(port).tls(tls).build())
+}
+
+/// How a release attempt against the relay ended.
+#[derive(Debug)]
+enum RelayOutcome {
+  /// The relay accepted the message.
+  Sent,
+  /// The relay never took the message: it could not be reached, failed the
+  /// handshake, or answered with a refusal.
+  NotSent(String),
+  /// The exchange broke off or ran out of time once the message may already
+  /// have been handed over; the relay may have it.
+  Unknown(String),
+}
+
+/// Whether `error` proves the relay did not take the message: an SMTP
+/// refusal, or a client or TLS failure that stops the send before any data.
+fn refused_before_delivery(error: &lettre::transport::smtp::Error) -> bool {
+  error.is_permanent() || error.is_transient() || error.is_client() || error.is_tls()
+}
+
+/// Releases `raw` to the relay within `deadline`.
+///
+/// The relay is probed first, connect to `QUIT`, because a lettre error does
+/// not say how far the exchange got: once data may have been sent, only an
+/// SMTP refusal proves the message was not delivered. A relay that cannot
+/// even complete the probe never saw the message.
+async fn send_to_relay(
+  mailer: &lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
+  envelope: &lettre::address::Envelope,
+  raw: &[u8],
+  deadline: Duration,
+) -> RelayOutcome {
+  use lettre::AsyncTransport;
+
+  let started = tokio::time::Instant::now();
+  match tokio::time::timeout(deadline, mailer.test_connection()).await {
+    Ok(Ok(true)) => {}
+    Ok(Ok(false)) => return RelayOutcome::NotSent("the relay did not answer NOOP".into()),
+    Ok(Err(e)) => return RelayOutcome::NotSent(e.to_string()),
+    Err(_) => {
+      return RelayOutcome::NotSent("the relay did not finish the handshake in time".into());
+    }
+  }
+
+  let remaining = deadline.saturating_sub(started.elapsed());
+  match tokio::time::timeout(remaining, mailer.send_raw(envelope, raw)).await {
+    Ok(Ok(_)) => RelayOutcome::Sent,
+    Ok(Err(e)) if refused_before_delivery(&e) => RelayOutcome::NotSent(e.to_string()),
+    Ok(Err(e)) => RelayOutcome::Unknown(e.to_string()),
+    Err(_) => RelayOutcome::Unknown("the relay did not answer in time".into()),
+  }
 }
 
 pub async fn release_message(
@@ -660,12 +742,14 @@ pub async fn release_message(
     );
   }
 
-  let port = body.port.unwrap_or(allowed_port.unwrap_or(587));
+  let port = body
+    .port
+    .unwrap_or(allowed_port.unwrap_or(DEFAULT_RELEASE_PORT));
   if allowed_port.is_some() && Some(port) != allowed_port {
     return Ok(
       (
         StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": format!("Release only allowed on configured port: {}", allowed_port.unwrap_or(587)) })),
+        Json(serde_json::json!({ "error": format!("Release only allowed on configured port: {}", allowed_port.unwrap_or(DEFAULT_RELEASE_PORT)) })),
       )
         .into_response(),
     );
@@ -685,54 +769,58 @@ pub async fn release_message(
   let raw = state.repo.get_raw(&id).await?;
   let msg = state.repo.get(&id).await?;
 
-  match release_envelope(&msg.sender, &msg.recipients) {
-    Ok(envelope) => {
-      use lettre::AsyncTransport;
-
-      let mailer = match relay_transport(&body.host, port, RelaySecurity::for_port(port)) {
-        Ok(m) => m,
-        Err(e) => {
-          tracing::error!(error = %e, "TLS setup failed for relay host");
-          return Ok(
-            (
-              StatusCode::BAD_GATEWAY,
-              Json(
-                serde_json::json!({ "error": "Failed to establish TLS connection to relay host" }),
-              ),
-            )
-              .into_response(),
-          );
-        }
-      };
-
-      match mailer.send_raw(&envelope, &raw).await {
-        Ok(_) => Ok(
-          (
-            StatusCode::OK,
-            Json(serde_json::json!({ "released": true })),
-          )
-            .into_response(),
-        ),
-        Err(e) => {
-          tracing::error!(error = %e, "SMTP delivery failed");
-          Ok(
-            (
-              StatusCode::BAD_GATEWAY,
-              Json(serde_json::json!({ "error": "SMTP delivery failed" })),
-            )
-              .into_response(),
-          )
-        }
-      }
+  let envelope = match release_envelope(&msg.sender, &msg.recipients) {
+    Ok(envelope) => envelope,
+    Err(reason) => {
+      return Ok(
+        (
+          StatusCode::BAD_REQUEST,
+          Json(serde_json::json!({ "error": format!("Invalid envelope: {reason}") })),
+        )
+          .into_response(),
+      );
     }
-    Err(reason) => Ok(
-      (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": format!("Invalid envelope: {reason}") })),
-      )
-        .into_response(),
+  };
+
+  let mailer = match lettre::transport::smtp::client::TlsParameters::new(body.host.clone())
+    .and_then(|tls| relay_transport(&body.host, port, RelaySecurity::for_port(port), tls))
+  {
+    Ok(m) => m,
+    Err(e) => {
+      tracing::error!(error = %e, "TLS setup failed for relay host");
+      return Ok(
+        (
+          StatusCode::BAD_GATEWAY,
+          Json(serde_json::json!({ "error": "Failed to establish TLS connection to relay host" })),
+        )
+          .into_response(),
+      );
+    }
+  };
+
+  let response = match send_to_relay(&mailer, &envelope, &raw, RELEASE_TIMEOUT).await {
+    RelayOutcome::Sent => (
+      StatusCode::OK,
+      Json(serde_json::json!({ "released": true })),
     ),
-  }
+    RelayOutcome::NotSent(reason) => {
+      tracing::error!(error = %reason, message_id = %id, "SMTP delivery failed");
+      (
+        StatusCode::BAD_GATEWAY,
+        Json(serde_json::json!({ "error": "SMTP delivery failed" })),
+      )
+    }
+    RelayOutcome::Unknown(reason) => {
+      tracing::warn!(error = %reason, message_id = %id, "Release relay did not confirm the message");
+      (
+        StatusCode::GATEWAY_TIMEOUT,
+        Json(
+          serde_json::json!({ "error": RELEASE_OUTCOME_UNKNOWN, "code": RELEASE_OUTCOME_UNKNOWN_CODE }),
+        ),
+      )
+    }
+  };
+  Ok(response.into_response())
 }
 
 /// The captured envelope a release sends again, exactly as captured.
@@ -1211,14 +1299,22 @@ mod relay_transport_tests {
   use super::*;
   use lettre::AsyncTransport;
   use lettre::address::Envelope;
-  use std::time::Duration;
+  use lettre::transport::smtp::client::{Certificate, TlsParameters};
+  use rustls::pki_types::pem::PemObject;
+  use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+  use rustmail_smtp::{Delivery, SmtpServer, SmtpServerConfig, TlsConfig};
+  use std::sync::Arc;
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::TcpListener;
+  use tokio::sync::mpsc;
+  use tokio_rustls::TlsAcceptor;
 
   const LOOPBACK: &str = "127.0.0.1";
   const STARTTLS_SUBMISSION_PORT: u16 = 2525;
   const TLS_HANDSHAKE_RECORD: u8 = 0x16;
   const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
+  const STALL_DEADLINE: Duration = Duration::from_millis(200);
+  const SCRIPTED_DEADLINE: Duration = Duration::from_secs(2);
   const GREETING: &[u8] = b"220 relay.test ESMTP\r\n";
   const EHLO_WITH_STARTTLS: &[u8] = b"250-relay.test\r\n250 STARTTLS\r\n";
   const EHLO_WITHOUT_STARTTLS: &[u8] = b"250 relay.test\r\n";
@@ -1239,7 +1335,8 @@ mod relay_transport_tests {
   }
 
   async fn send_through(port: u16, security: RelaySecurity) -> bool {
-    let mailer = relay_transport(LOOPBACK, port, security).unwrap();
+    let tls = TlsParameters::new(LOOPBACK.to_string()).unwrap();
+    let mailer = relay_transport(LOOPBACK, port, security, tls).unwrap();
     tokio::time::timeout(EXCHANGE_TIMEOUT, mailer.send_raw(&envelope(), RAW_MESSAGE))
       .await
       .expect("the client never gave up on the relay")
@@ -1337,5 +1434,205 @@ mod relay_transport_tests {
       .unwrap()
       .unwrap();
     assert_eq!(first_byte, TLS_HANDSHAKE_RECORD);
+  }
+
+  const RELAY_CERT: &[u8] =
+    include_bytes!("../../rustmail-server/tests/fixtures/starttls-cert.pem");
+  const RELAY_KEY: &[u8] = include_bytes!("../../rustmail-server/tests/fixtures/starttls-key.pem");
+  const STUFFED_RAW_MESSAGE: &[u8] =
+    b"From: sender@example.com\r\nTo: rcpt@example.com\r\nSubject: release\r\n\r\nFirst line.\r\n.A line that starts with a dot.\r\n.\r\nLast line.\r\n";
+
+  fn relay_tls_config() -> TlsConfig {
+    let certs = CertificateDer::pem_slice_iter(RELAY_CERT)
+      .collect::<Result<Vec<_>, _>>()
+      .unwrap();
+    let key = PrivateKeyDer::from_pem_slice(RELAY_KEY).unwrap();
+    let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+      rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(certs, key)
+    .unwrap();
+    TlsConfig {
+      server_config: Arc::new(server_config),
+    }
+  }
+
+  async fn starttls_relay() -> (u16, mpsc::Receiver<Delivery>) {
+    let (listener, port) = loopback_listener().await;
+    let (deliveries, received) = mpsc::channel(1);
+    let config = SmtpServerConfig {
+      tls: Some(relay_tls_config()),
+      ..SmtpServerConfig::default()
+    };
+    tokio::spawn(async move { SmtpServer::new(config, deliveries).serve(listener).await });
+    (port, received)
+  }
+
+  fn trusting_relay_cert() -> TlsParameters {
+    TlsParameters::builder(LOOPBACK.to_string())
+      .add_root_certificate(Certificate::from_pem(RELAY_CERT).unwrap())
+      .build_rustls()
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn a_release_through_a_trusted_starttls_relay_delivers_the_captured_envelope_and_source() {
+    let (port, mut received) = starttls_relay().await;
+    let envelope = release_envelope(
+      "sender@example.com",
+      r#"["rcpt@example.com","cc@example.com","hidden-bcc@example.com"]"#,
+    )
+    .unwrap();
+    let mailer = relay_transport(
+      LOOPBACK,
+      port,
+      RelaySecurity::RequiredStartTls,
+      trusting_relay_cert(),
+    )
+    .unwrap();
+
+    let relay = tokio::spawn(async move {
+      let (message, ack) = received.recv().await.unwrap().into_parts();
+      ack.stored();
+      message
+    });
+    let outcome = send_to_relay(&mailer, &envelope, STUFFED_RAW_MESSAGE, EXCHANGE_TIMEOUT).await;
+    let message = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+
+    assert!(matches!(outcome, RelayOutcome::Sent), "{outcome:?}");
+    assert_eq!(message.sender, "sender@example.com");
+    assert_eq!(
+      message.recipients,
+      [
+        "rcpt@example.com",
+        "cc@example.com",
+        "hidden-bcc@example.com"
+      ]
+    );
+    assert_eq!(message.raw, STUFFED_RAW_MESSAGE);
+  }
+
+  #[tokio::test]
+  async fn a_relay_that_stalls_before_any_data_is_a_release_that_was_not_sent() {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(async move {
+      let (mut socket, _) = listener.accept().await.unwrap();
+      socket.write_all(GREETING).await.unwrap();
+      let mut sink = Vec::new();
+      let _ = socket.read_to_end(&mut sink).await;
+    });
+    let mailer = relay_transport(
+      LOOPBACK,
+      port,
+      RelaySecurity::RequiredStartTls,
+      trusting_relay_cert(),
+    )
+    .unwrap();
+
+    let outcome = send_to_relay(&mailer, &envelope(), RAW_MESSAGE, STALL_DEADLINE).await;
+
+    assert!(matches!(outcome, RelayOutcome::NotSent(_)), "{outcome:?}");
+    relay.abort();
+  }
+
+  #[derive(Clone, Copy)]
+  enum AfterData {
+    Disconnect,
+    Stall,
+  }
+
+  async fn read_command<S: tokio::io::AsyncBufRead + Unpin>(stream: &mut S) -> Option<String> {
+    let mut line = String::new();
+    match stream.read_line(&mut line).await {
+      Ok(0) | Err(_) => None,
+      Ok(_) => Some(line.trim_end().to_ascii_uppercase()),
+    }
+  }
+
+  async fn scripted_relay(listener: TcpListener, after_data: AfterData) {
+    let acceptor = TlsAcceptor::from(relay_tls_config().server_config);
+    loop {
+      let (socket, _) = listener.accept().await.unwrap();
+      let mut plain = BufReader::new(socket);
+      plain.get_mut().write_all(GREETING).await.unwrap();
+      while let Some(command) = read_command(&mut plain).await {
+        if command.starts_with("EHLO") {
+          plain.get_mut().write_all(EHLO_WITH_STARTTLS).await.unwrap();
+        } else if command == "STARTTLS" {
+          plain
+            .get_mut()
+            .write_all(b"220 go ahead\r\n")
+            .await
+            .unwrap();
+          break;
+        }
+      }
+      let mut secure = BufReader::new(acceptor.accept(plain.into_inner()).await.unwrap());
+      while let Some(command) = read_command(&mut secure).await {
+        if command == "QUIT" {
+          secure.get_mut().write_all(b"221 bye\r\n").await.unwrap();
+          break;
+        }
+        if command != "DATA" {
+          secure.get_mut().write_all(b"250 ok\r\n").await.unwrap();
+          continue;
+        }
+        secure
+          .get_mut()
+          .write_all(b"354 go ahead\r\n")
+          .await
+          .unwrap();
+        while read_command(&mut secure)
+          .await
+          .is_some_and(|line| line != ".")
+        {}
+        match after_data {
+          AfterData::Disconnect => return,
+          AfterData::Stall => std::future::pending::<()>().await,
+        }
+      }
+    }
+  }
+
+  async fn release_through_scripted_relay(
+    after_data: AfterData,
+  ) -> (RelayOutcome, tokio::task::JoinHandle<()>) {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(scripted_relay(listener, after_data));
+    let mailer = relay_transport(
+      LOOPBACK,
+      port,
+      RelaySecurity::RequiredStartTls,
+      trusting_relay_cert(),
+    )
+    .unwrap();
+
+    let outcome = send_to_relay(&mailer, &envelope(), RAW_MESSAGE, SCRIPTED_DEADLINE).await;
+    (outcome, relay)
+  }
+
+  #[tokio::test]
+  async fn a_relay_that_disconnects_after_the_data_leaves_the_outcome_unknown() {
+    let (outcome, relay) = release_through_scripted_relay(AfterData::Disconnect).await;
+
+    assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
+    tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .expect("the relay never received the whole message")
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_relay_that_stalls_after_the_data_leaves_the_outcome_unknown() {
+    let (outcome, relay) = release_through_scripted_relay(AfterData::Stall).await;
+
+    assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
+    relay.abort();
   }
 }

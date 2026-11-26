@@ -6,6 +6,8 @@ import {
   getInfo,
   getMessage,
   listMessages,
+  RELEASE_REQUEST_TIMEOUT_MS,
+  releaseMessage,
   REQUEST_TIMEOUT_MS,
   ResponseShapeError,
 } from "./api";
@@ -366,25 +368,81 @@ describe("list reads", () => {
 describe("server info", () => {
   it("returns the version and SMTP port the server reports", async () => {
     fetchMock.mockResolvedValue(
-      Response.json({ version: "0.8.1", smtp_port: 1025 }),
+      Response.json({ version: "0.8.1", smtp_port: 1025, release: null }),
     );
 
     await expect(getInfo()).resolves.toEqual({
       version: "0.8.1",
       smtp_port: 1025,
+      release: null,
     });
     expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/v1/info");
   });
 
   it("rejects a drifted body, naming the route", async () => {
     fetchMock.mockResolvedValue(
-      Response.json({ version: "0.8.1", smtp_port: "1025" }),
+      Response.json({ version: "0.8.1", smtp_port: "1025", release: null }),
     );
 
     await expect(getInfo()).rejects.toMatchObject({
       name: "ResponseShapeError",
       message:
         "GET /info returned an unexpected shape: smtp_port should be number",
+    });
+  });
+
+  it("returns the release relay when the server has one", async () => {
+    const release = { host: "smtp.example.test", port: 587 };
+    fetchMock.mockResolvedValue(
+      Response.json({ version: "0.8.1", smtp_port: 1025, release }),
+    );
+
+    await expect(getInfo()).resolves.toMatchObject({ release });
+  });
+});
+
+describe("release", () => {
+  const TARGET = { host: "smtp.example.test", port: 465 };
+
+  it("posts the confirmed relay to the message's release route", async () => {
+    fetchMock.mockResolvedValue(Response.json({ released: true }));
+
+    await releaseMessage("msg 1", TARGET);
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe("/api/v1/messages/msg%201/release");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(TARGET);
+  });
+
+  it("waits past a read's deadline for the relay to answer", async () => {
+    const signal = stallFetch();
+
+    const write = expect(releaseMessage("msg-1", TARGET)).rejects.toMatchObject(
+      { name: "TimeoutError" },
+    );
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(signal()?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(
+      RELEASE_REQUEST_TIMEOUT_MS - REQUEST_TIMEOUT_MS,
+    );
+
+    await write;
+    expect(signal()?.aborted).toBe(true);
+  });
+
+  it("carries the code a server-side relay timeout answers with", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        { error: "timed out", code: "release_outcome_unknown" },
+        { status: 504 },
+      ),
+    );
+
+    await expect(releaseMessage("msg-1", TARGET)).rejects.toMatchObject({
+      status: 504,
+      code: "release_outcome_unknown",
     });
   });
 });

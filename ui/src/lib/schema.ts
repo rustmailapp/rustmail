@@ -64,9 +64,15 @@ export const authResults = z.object({
   arc: z.array(authCheck),
 });
 
+export const releaseTarget = z.object({
+  host: z.string(),
+  port: z.number(),
+});
+
 export const serverInfo = z.object({
   version: z.string(),
   smtp_port: z.number(),
+  release: z.nullable(releaseTarget),
 });
 
 /** The part of an error body a client acts on: its machine-readable `code`. */
