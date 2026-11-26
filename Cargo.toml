@@ -48,6 +48,7 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 dirs = "6.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-tungstenite = "0.28"
 yaml-rust2 = "0.13"
 
 rustmail-smtp = { path = "crates/rustmail-smtp" }
