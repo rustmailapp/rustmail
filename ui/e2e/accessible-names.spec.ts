@@ -82,3 +82,59 @@ test("the tag menu says it is open, takes focus and gives it back", async ({
   await expect(trigger).toHaveAttribute("aria-expanded", "false");
   await expect(trigger).toBeFocused();
 });
+
+/** Describes whatever has focus, to compare where two key presses landed. */
+function focusedElement(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const element = document.activeElement;
+    return element ? element.outerHTML.slice(0, 200) : "none";
+  });
+}
+
+test("Tab past the last tag closes the menu where Tab from Tags would land", async ({
+  page,
+}) => {
+  await openInbox(page);
+  const trigger = page.getByRole("button", { name: /^Tags/ });
+  await trigger.focus();
+  await page.keyboard.press("Tab");
+  const afterTrigger = await focusedElement(page);
+
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("group", { name: "Tags" });
+  await menu.getByRole("button").last().focus();
+  await page.keyboard.press("Tab");
+
+  await expect(menu).toBeHidden();
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  expect(await focusedElement(page)).toBe(afterTrigger);
+});
+
+test("Shift+Tab before the first tag closes the menu on Tags", async ({
+  page,
+}) => {
+  await openInbox(page);
+  const trigger = page.getByRole("button", { name: /^Tags/ });
+  await trigger.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("group", { name: "Tags" });
+  await expect(menu.getByRole("button").first()).toBeFocused();
+
+  await page.keyboard.press("Shift+Tab");
+
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
+test("Tab between tags keeps the menu open", async ({ page }) => {
+  await openInbox(page);
+  await page.getByRole("button", { name: /^Tags/ }).focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByRole("group", { name: "Tags" });
+
+  await page.keyboard.press("Tab");
+
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("button").nth(1)).toBeFocused();
+});
