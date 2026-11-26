@@ -124,6 +124,29 @@ test.describe("inbox density", () => {
     expect(await firstRowHeight(page)).toBe(COMFORTABLE_ROW_PX);
   });
 
+  test("Settings tabs move with the arrow keys and keep one tab stop", async ({
+    page,
+  }) => {
+    await openInbox(page);
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
+    const appearance = page.getByRole("tab", { name: "Appearance" });
+    const layout = page.getByRole("tab", { name: "Layout" });
+    await appearance.focus();
+
+    await page.keyboard.press("ArrowRight");
+
+    await expect(layout).toBeFocused();
+    await expect(layout).toHaveAttribute("aria-selected", "true");
+    await expect(appearance).toHaveAttribute("tabindex", "-1");
+    await expect(page.getByRole("tabpanel", { name: "Layout" })).toContainText(
+      "Density",
+    );
+
+    await page.keyboard.press("ArrowRight");
+    await expect(appearance).toBeFocused();
+    await expect(appearance).toHaveAttribute("aria-selected", "true");
+  });
+
   test("Compact shrinks the rows and survives a reload", async ({ page }) => {
     await openInbox(page);
     await openLayoutSettings(page);

@@ -25,6 +25,29 @@ const TABS: { value: SettingsTab; label: string; icon: string }[] = [
   },
 ];
 
+const SETTINGS_PANEL_ID = "settings-panel";
+
+function tabId(tab: SettingsTab): string {
+  return `settings-tab-${tab}`;
+}
+
+/** Arrow keys, Home and End move between tabs, selecting as focus moves. */
+function handleTabKeyDown(e: KeyboardEvent) {
+  const current = TABS.findIndex((tab) => tab.value === settingsTab());
+  const last = TABS.length - 1;
+  const targets: Record<string, number | undefined> = {
+    ArrowRight: current === last ? 0 : current + 1,
+    ArrowLeft: current === 0 ? last : current - 1,
+    Home: 0,
+    End: last,
+  };
+  const next = TABS[targets[e.key] ?? -1];
+  if (!next) return;
+  e.preventDefault();
+  setSettingsTab(next.value);
+  document.getElementById(tabId(next.value))?.focus();
+}
+
 export default function Settings() {
   return (
     <Modal open={settingsOpen()} onClose={() => setSettingsOpen(false)}>
@@ -53,14 +76,18 @@ export default function Settings() {
       <div
         role="tablist"
         aria-label="Settings sections"
+        onKeyDown={handleTabKeyDown}
         class="flex border-b border-zinc-200 dark:border-zinc-800 px-6 gap-1"
       >
         <For each={TABS}>
           {(tab) => (
             <button
               role="tab"
+              id={tabId(tab.value)}
               onClick={() => setSettingsTab(tab.value)}
               aria-selected={settingsTab() === tab.value}
+              aria-controls={SETTINGS_PANEL_ID}
+              tabIndex={settingsTab() === tab.value ? 0 : -1}
               class={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 -mb-px transition cursor-pointer ${
                 settingsTab() === tab.value
                   ? "border-orange-500 text-zinc-900 dark:text-zinc-100"
@@ -86,7 +113,12 @@ export default function Settings() {
         </For>
       </div>
 
-      <div class="px-6 py-5 max-h-[60vh] overflow-y-auto">
+      <div
+        role="tabpanel"
+        id={SETTINGS_PANEL_ID}
+        aria-labelledby={tabId(settingsTab())}
+        class="px-6 py-5 max-h-[60vh] overflow-y-auto"
+      >
         <Show when={settingsTab() === "appearance"}>
           <AppearanceTab />
         </Show>
