@@ -61,8 +61,8 @@ Each webhook is an HTTP POST with `Content-Type: application/json`. The body is 
 - **Fire-and-forget**: the webhook is dispatched in a background task and does not block message processing.
 - **5-second timeout**: if the endpoint doesn't respond within 5 seconds, the request is abandoned.
 - **No retries**: failed deliveries are logged as warnings and not retried.
-- **No queue**: webhooks are sent in real time as messages arrive. If the endpoint is down, those notifications are lost.
-- **10 at a time**: at most 10 deliveries are in flight at once; further ones wait for a free slot.
+- **10 at a time**: at most 10 deliveries are in flight at once; further ones wait in a queue of up to 1024 notifications.
+- **Dropped when full**: if the endpoint is slow or down long enough to fill the queue, new notifications are dropped and a warning with the dropped count is logged. Nothing is persisted, so queued notifications are also lost on shutdown.
 - **No local or private IP literals**: RustMail refuses to start if the URL's host is `localhost` or a loopback, private, link-local or other reserved IP address. Host names are not resolved, so a name that points at such an address is accepted.
 
 ## Example: Slack Notification
