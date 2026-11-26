@@ -1020,7 +1020,8 @@ impl<'a> Migration<'a> {
   /// The source lock is released before the renames, so an older rustmail on
   /// the same file can commit and close in between. The backup is therefore
   /// fingerprinted again once it is in place; if it is no longer the database
-  /// the copy was made from, both renames are undone and the swap is refused,
+  /// the copy was made from, or cannot be read to tell, both renames are
+  /// undone and the swap is refused,
   /// so the next start rebuilds the copy instead of losing that write.
   async fn swap(&self, fingerprint: &str) -> Result<(), StorageError> {
     refuse_open_files(self.paths, &[&self.paths.db, &self.paths.migrating]).await?;
@@ -1038,10 +1039,12 @@ impl<'a> Migration<'a> {
     rename(&self.paths.db, &self.backup).await?;
     rename(&self.paths.migrating, &self.paths.db).await?;
     sync_parent(&self.paths.db).await?;
-    if fingerprint_of(&self.backup, self.source).await? != fingerprint {
+    let checked = fingerprint_of(&self.backup, self.source).await;
+    if !matches!(&checked, Ok(print) if print == fingerprint) {
       rename(&self.paths.db, &self.paths.migrating).await?;
       rename(&self.backup, &self.paths.db).await?;
       sync_parent(&self.paths.db).await?;
+      checked?;
       return Err(
         MigrationRefusal::SourceChangedDuringSwap {
           database: self.paths.db.clone(),
