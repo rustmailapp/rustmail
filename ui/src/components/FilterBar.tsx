@@ -23,6 +23,7 @@ import {
   listSize,
   MAX_TAG_FILTERS,
 } from "../stores/messages";
+import { focusableIn } from "./focusable";
 import { CheckIcon, ChevronDownIcon, SearchIcon, TagIcon } from "./icons";
 
 const TAG_SEARCH_THRESHOLD = 8;
@@ -96,10 +97,34 @@ function TagDropdown() {
     if (focusWasInside) triggerRef?.focus();
   }
 
+  /**
+   * Closes the menu when Tab leaves it, landing where Tab would from the
+   * trigger: the menu is portalled to the end of the page, so the browser
+   * would otherwise send focus out of it.
+   */
+  function tabOut(e: KeyboardEvent) {
+    if (!dropdownRef || !triggerRef) return;
+    const items = focusableIn(dropdownRef);
+    const edge = e.shiftKey ? items[0] : items[items.length - 1];
+    if (document.activeElement !== edge) return;
+    e.preventDefault();
+    setOpen(false);
+    if (e.shiftKey) {
+      triggerRef.focus();
+      return;
+    }
+    const page = focusableIn(document);
+    const next = page[page.indexOf(triggerRef) + 1] ?? triggerRef;
+    next.focus();
+  }
+
   function handleKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && open()) {
+    if (!open()) return;
+    if (e.key === "Escape") {
       e.stopPropagation();
       close();
+    } else if (e.key === "Tab") {
+      tabOut(e);
     }
   }
 
