@@ -88,7 +88,7 @@ struct ServeArgs {
   #[arg(long, env = "RUSTMAIL_WEBHOOK_URL")]
   webhook_url: Option<String>,
 
-  /// Allowed release target in host:port format (e.g., smtp.example.com:587)
+  /// Allowed release target in host:port format (e.g., smtp.example.com:587 or [2001:db8::25]:587)
   #[arg(long, env = "RUSTMAIL_RELEASE_HOST")]
   release_host: Option<String>,
 
@@ -940,13 +940,53 @@ fn parse_bind_addr(bind: &str) -> Result<std::net::IpAddr> {
   })
 }
 
-fn parse_release_host(s: &str) -> (String, Option<u16>) {
-  if let Some((host, port_str)) = s.rsplit_once(':')
-    && let Ok(port) = port_str.parse::<u16>()
-  {
-    return (host.to_string(), Some(port));
+/// Splits `--release-host` into host and optional port.
+///
+/// An IPv6 address is taken bare (`::1`) or in brackets (`[::1]:2525`), and
+/// the host comes back without brackets, the form lettre and the TLS server
+/// name expect. A bare IPv6 address never carries a port: every colon belongs
+/// to the address, so `[addr]:port` is the only way to give one.
+fn parse_release_host(s: &str) -> Result<(String, Option<u16>)> {
+  if let Some(rest) = s.strip_prefix('[') {
+    let (addr, after) = rest
+      .split_once(']')
+      .ok_or_else(|| anyhow::anyhow!("release host {s:?} opens a bracket it never closes"))?;
+    if addr.parse::<std::net::Ipv6Addr>().is_err() {
+      anyhow::bail!("release host {s:?} has no IPv6 address in its brackets");
+    }
+    let port = match after {
+      "" => None,
+      _ => {
+        let port = after
+          .strip_prefix(':')
+          .ok_or_else(|| anyhow::anyhow!("release host {s:?} must be [addr] or [addr]:port"))?;
+        Some(parse_release_port(s, port)?)
+      }
+    };
+    return Ok((addr.to_string(), port));
   }
-  (s.to_string(), None)
+  match s.split_once(':') {
+    None if s.is_empty() => anyhow::bail!("release host is empty"),
+    None => Ok((s.to_string(), None)),
+    Some((host, port)) if !port.contains(':') => {
+      if host.is_empty() {
+        anyhow::bail!("release host {s:?} has a port but no host");
+      }
+      Ok((host.to_string(), Some(parse_release_port(s, port)?)))
+    }
+    Some(_) => {
+      if s.parse::<std::net::Ipv6Addr>().is_err() {
+        anyhow::bail!("release host {s:?} is not an IPv6 address; write a port as [addr]:port");
+      }
+      Ok((s.to_string(), None))
+    }
+  }
+}
+
+fn parse_release_port(host: &str, port: &str) -> Result<u16> {
+  port
+    .parse()
+    .map_err(|_| anyhow::anyhow!("release host {host:?} has an invalid port {port:?}"))
 }
 
 /// Most ids one `messages:delete` event carries, which keeps a sweep of any
@@ -1093,7 +1133,12 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
     warn!(error = %e, "Failed to refresh query planner statistics at startup");
   }
 
-  let (release_host, release_port) = args.release_host.as_deref().map(parse_release_host).unzip();
+  let (release_host, release_port) = args
+    .release_host
+    .as_deref()
+    .map(parse_release_host)
+    .transpose()?
+    .unzip();
   let release_host: Option<String> = release_host;
   let release_port: Option<u16> = release_port.flatten();
 
@@ -1269,6 +1314,81 @@ async fn run_serve(args: ServeArgs) -> Result<()> {
   }
 
   Ok(())
+}
+
+#[cfg(test)]
+mod release_host_tests {
+  use super::parse_release_host;
+
+  fn parsed(s: &str) -> (String, Option<u16>) {
+    parse_release_host(s).unwrap()
+  }
+
+  fn refusal(s: &str) -> String {
+    format!("{:#}", parse_release_host(s).unwrap_err())
+  }
+
+  #[test]
+  fn a_name_with_and_without_a_port() {
+    assert_eq!(
+      parsed("smtp.example.com:587"),
+      ("smtp.example.com".into(), Some(587))
+    );
+    assert_eq!(
+      parsed("smtp.example.com"),
+      ("smtp.example.com".into(), None)
+    );
+  }
+
+  #[test]
+  fn an_ipv4_address_with_and_without_a_port() {
+    assert_eq!(parsed("10.0.0.5:2525"), ("10.0.0.5".into(), Some(2525)));
+    assert_eq!(parsed("10.0.0.5"), ("10.0.0.5".into(), None));
+  }
+
+  #[test]
+  fn a_bare_ipv6_address_is_the_whole_host() {
+    assert_eq!(parsed("::1"), ("::1".into(), None));
+    assert_eq!(parsed("2001:db8::25"), ("2001:db8::25".into(), None));
+  }
+
+  #[test]
+  fn a_bracketed_ipv6_address_loses_its_brackets() {
+    assert_eq!(parsed("[::1]:2525"), ("::1".into(), Some(2525)));
+    assert_eq!(parsed("[2001:db8::25]"), ("2001:db8::25".into(), None));
+  }
+
+  #[test]
+  fn an_ipv6_address_is_kept_as_written() {
+    assert_eq!(parsed("2001:0DB8::0025"), ("2001:0DB8::0025".into(), None));
+    assert_eq!(
+      parsed("[2001:0DB8::0025]:587"),
+      ("2001:0DB8::0025".into(), Some(587))
+    );
+  }
+
+  #[test]
+  fn a_bare_ipv6_address_with_a_port_points_to_brackets() {
+    let message = refusal("fd00::1:99999");
+    assert!(message.contains("[addr]:port"), "{message}");
+  }
+
+  #[test]
+  fn malformed_values_are_refused() {
+    for value in [
+      "",
+      ":587",
+      "smtp.example.com:",
+      "smtp.example.com:smtp",
+      "smtp.example.com:70000",
+      "[::1",
+      "[smtp.example.com]:587",
+      "[::1]2525",
+      "[::1]:",
+    ] {
+      assert!(parse_release_host(value).is_err(), "{value:?} was accepted");
+    }
+  }
 }
 
 #[cfg(test)]

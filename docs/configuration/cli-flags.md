@@ -22,7 +22,7 @@ Configuration is resolved in this precedence order: **CLI flags > environment va
 | `--ephemeral` | `RUSTMAIL_EPHEMERAL` | `false` | Use in-memory SQLite. No data is written to disk. |
 | `--webhook-url` | `RUSTMAIL_WEBHOOK_URL` | — | HTTP endpoint to POST to on every new message. |
 | `--log-level` | `RUSTMAIL_LOG_LEVEL` | `info` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`. |
-| `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`). Release is disabled unless set. |
+| `--release-host` | `RUSTMAIL_RELEASE_HOST` | — | Allowed SMTP target for email release in `host:port` format (e.g. `smtp.example.com:587`, `[2001:db8::25]:587`). Release is disabled unless set. |
 | `--allowed-origin` | `RUSTMAIL_ALLOWED_ORIGINS` | — | Extra origin allowed to open the WebSocket, as `scheme://host[:port]`. Repeat the flag or comma-separate the variable. The origin RustMail is served on is always allowed. |
 | `--allowed-host` | `RUSTMAIL_ALLOWED_HOSTS` | — | Host name browsers may reach RustMail on, as a bare name. Repeat the flag or comma-separate the variable. IP addresses and `localhost` are always answered. |
 | `--ws-buffer` | `RUSTMAIL_WS_BUFFER` | `4096` | WebSocket events buffered for each client. A client that falls further behind is disconnected and resyncs when it reconnects. Must be at least `1`. |

@@ -1494,6 +1494,28 @@ mod relay_transport_tests {
   }
 
   #[tokio::test]
+  async fn a_bare_ipv6_relay_host_reaches_the_relay() {
+    const IPV6_LOOPBACK: &str = "::1";
+    let listener = TcpListener::bind((IPV6_LOOPBACK, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let relay = tokio::spawn(plaintext_commands_until_close(listener, EHLO_WITH_STARTTLS));
+
+    let tls = TlsParameters::new(IPV6_LOOPBACK.to_string()).unwrap();
+    let mailer =
+      relay_transport(IPV6_LOOPBACK, port, RelaySecurity::RequiredStartTls, tls).unwrap();
+    let sent = tokio::time::timeout(EXCHANGE_TIMEOUT, mailer.send_raw(&envelope(), RAW_MESSAGE))
+      .await
+      .expect("the client never gave up on the relay");
+    assert!(sent.is_err());
+
+    let commands = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(commands.last().map(String::as_str), Some("STARTTLS"));
+  }
+
+  #[tokio::test]
   async fn starttls_relay_refuses_to_send_when_the_upgrade_is_not_offered() {
     let (listener, port) = loopback_listener().await;
     let relay = tokio::spawn(plaintext_commands_until_close(
