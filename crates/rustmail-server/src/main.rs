@@ -858,17 +858,19 @@ fn validate_webhook_url(url: &str) -> Result<reqwest::Url> {
   }
 
   let host = parsed
-    .host_str()
+    .host()
     .ok_or_else(|| anyhow::anyhow!("webhook URL has no host"))?;
   let origin = format!("{}://{host}", parsed.scheme());
 
-  if host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]" {
-    anyhow::bail!("webhook URL must not point to localhost: {}", origin);
-  }
-
-  if let Ok(ip) = host.parse::<std::net::IpAddr>()
-    && is_private_ip(ip)
-  {
+  let ip = match host {
+    url::Host::Domain("localhost") => {
+      anyhow::bail!("webhook URL must not point to localhost: {}", origin)
+    }
+    url::Host::Domain(_) => None,
+    url::Host::Ipv4(v4) => Some(std::net::IpAddr::V4(v4)),
+    url::Host::Ipv6(v6) => Some(std::net::IpAddr::V6(v6)),
+  };
+  if ip.is_some_and(is_private_ip) {
     anyhow::bail!(
       "webhook URL must not point to a private/reserved IP: {}",
       origin
@@ -1300,6 +1302,30 @@ mod webhook_url_tests {
     let message = rejection("http://user:secret@[not-a-host/secret-path");
     assert!(message.starts_with("invalid webhook URL: "), "{message}");
     assert!(!message.contains("secret"), "{message}");
+  }
+
+  #[test]
+  fn ipv6_literals_for_local_and_private_addresses_are_rejected() {
+    let urls = [
+      "http://[::1]/",
+      "http://[::]/",
+      "http://[fd00::1]/",
+      "http://[fc00::1]/",
+      "http://[fe80::1]/",
+      "http://[::ffff:10.0.0.1]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://[::ffff:192.168.1.1]/",
+    ];
+    let accepted: Vec<&str> = urls
+      .into_iter()
+      .filter(|url| validate_webhook_url(url).is_ok())
+      .collect();
+    assert!(accepted.is_empty(), "accepted: {accepted:?}");
+  }
+
+  #[test]
+  fn a_public_ipv6_literal_is_accepted() {
+    assert!(validate_webhook_url("http://[2001:4860:4860::8888]/").is_ok());
   }
 
   #[test]
