@@ -51,6 +51,7 @@ import {
   StarIcon,
   TrashIcon,
 } from "./icons";
+import Tooltip from "./Tooltip";
 
 type View = "preview" | "text" | "raw";
 
@@ -385,37 +386,55 @@ function MessageHeader(props: { message: Message; reads: RailReads }) {
           </button>
         </Show>
         <div class="inline-flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700/70 divide-x divide-zinc-200 dark:divide-zinc-700/70">
-          <button
-            onClick={() => starMessage(props.message.id, !starred())}
-            class={ACTION_CLASS}
-            classList={{
-              "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200":
-                starred(),
-              "text-zinc-500 dark:text-zinc-400 hover:text-amber-800 dark:hover:text-amber-400":
-                !starred(),
-            }}
-            title={starred() ? "Unstar" : "Star"}
-          >
-            <StarIcon class="size-4" filled={starred()} />
-          </button>
-          <a
-            href={api.exportUrl(props.message.id, "eml")}
-            download={`${props.message.id}.eml`}
-            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100`}
-            title="Download .eml"
-          >
-            <DownloadIcon class="size-4" />
-          </a>
-          <button
-            onClick={() => {
-              setSelectedId(null);
-              deleteWithUndo(props.message.id);
-            }}
-            class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-700 dark:hover:text-red-300`}
-            title="Delete"
-          >
-            <TrashIcon class="size-4" />
-          </button>
+          <Tooltip label={starred() ? "Unstar" : "Star"} shortcut="s">
+            {(trigger) => (
+              <button
+                ref={trigger.ref}
+                aria-label={starred() ? "Unstar" : "Star"}
+                aria-describedby={trigger.describedBy}
+                onClick={() => starMessage(props.message.id, !starred())}
+                class={ACTION_CLASS}
+                classList={{
+                  "text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200":
+                    starred(),
+                  "text-zinc-500 dark:text-zinc-400 hover:text-amber-800 dark:hover:text-amber-400":
+                    !starred(),
+                }}
+              >
+                <StarIcon class="size-4" filled={starred()} />
+              </button>
+            )}
+          </Tooltip>
+          <Tooltip label="Download .eml">
+            {(trigger) => (
+              <a
+                ref={trigger.ref}
+                aria-label="Download .eml"
+                aria-describedby={trigger.describedBy}
+                href={api.exportUrl(props.message.id, "eml")}
+                download={`${props.message.id}.eml`}
+                class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100`}
+              >
+                <DownloadIcon class="size-4" />
+              </a>
+            )}
+          </Tooltip>
+          <Tooltip label="Delete" shortcut="d">
+            {(trigger) => (
+              <button
+                ref={trigger.ref}
+                aria-label="Delete"
+                aria-describedby={trigger.describedBy}
+                onClick={() => {
+                  setSelectedId(null);
+                  deleteWithUndo(props.message.id);
+                }}
+                class={`${ACTION_CLASS} text-zinc-500 dark:text-zinc-400 hover:text-red-700 dark:hover:text-red-300`}
+              >
+                <TrashIcon class="size-4" />
+              </button>
+            )}
+          </Tooltip>
         </div>
       </div>
     </div>

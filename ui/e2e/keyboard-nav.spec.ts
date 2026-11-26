@@ -332,7 +332,7 @@ test.describe("inbox keyboard navigation", () => {
     await arrowDownTo(page, 5);
     const before = await position(page);
 
-    await page.getByTitle("Settings").focus();
+    await page.getByRole("button", { name: "Settings", exact: true }).focus();
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
 
@@ -541,9 +541,7 @@ test.describe("global shortcuts", () => {
     expect(await listOutline(page)).toBe("none");
   });
 
-  test("j takes focus from a detail tab back to the list", async ({
-    page,
-  }) => {
+  test("j takes focus from a detail tab back to the list", async ({ page }) => {
     await openInbox(page);
 
     await page.getByRole("button", { name: "Text", exact: true }).click();
