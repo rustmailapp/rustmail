@@ -252,6 +252,10 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: Too many tags (max 20)
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to parse the request body as JSON: expected ident at line 1 column 2'
         '404':
           $ref: '#/components/responses/NotFound'
         '415':
@@ -560,7 +564,9 @@ paths:
             `port` is not one of 25, 465, 587 or 2525, or the captured envelope
             cannot be sent as captured: it has no recipient, or its sender
             (other than the empty `MAIL FROM:<>`) or any one recipient is not
-            an address a relay accepts. Nothing is sent to the relay then.
+            an address a relay accepts. Nothing is sent to the relay then. A
+            body that is not JSON at all is also a `400`, but as `text/plain`
+            from the JSON extractor.
           content:
             application/json:
               schema:
@@ -578,6 +584,10 @@ paths:
                   summary: a captured recipient is not a relayable address
                   value:
                     error: 'Invalid envelope: a captured recipient is not an address a relay accepts'
+            text/plain:
+              schema:
+                type: string
+              example: 'Failed to parse the request body as JSON: expected ident at line 1 column 2'
         '403':
           description: >
             Release is disabled (no `--release-host`), `host` is not the
@@ -808,9 +818,10 @@ paths:
         Upgrade to a WebSocket connection to receive real-time inbox events.
         Each event is one JSON text frame of the form
         `{"type": "<event>", "data": {...}}`; `messages:clear` has no `data`
-        field. Only events that happen after the connection opens are sent:
-        there is no replay, so fetch `GET /api/v1/messages` to build the
-        initial view. Frames the client sends carry no meaning to the server.
+        field; the `WsEvent` schema describes every frame. Only events that
+        happen after the connection opens are sent: there is no replay, so
+        fetch `GET /api/v1/messages` to build the initial view. Frames the
+        client sends carry no meaning to the server.
 
 
         **Event types:**
@@ -1236,6 +1247,115 @@ components:
           items:
             $ref: '#/components/schemas/AuthCheck'
           description: ARC (Authenticated Received Chain) results
+
+    WsEvent:
+      description: >
+        One WebSocket text frame. `type` names the event and `data` carries
+        its payload; `messages:clear` has no `data`.
+      oneOf:
+        - $ref: '#/components/schemas/WsMessageNew'
+        - $ref: '#/components/schemas/WsMessageDelete'
+        - $ref: '#/components/schemas/WsMessageRead'
+        - $ref: '#/components/schemas/WsMessageStarred'
+        - $ref: '#/components/schemas/WsMessageTags'
+        - $ref: '#/components/schemas/WsMessageReleased'
+        - $ref: '#/components/schemas/WsMessagesClear'
+
+    WsMessageNew:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'message:new'
+        data:
+          $ref: '#/components/schemas/MessageSummary'
+
+    WsMessageDelete:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'message:delete'
+        data:
+          type: object
+          required: [id]
+          properties:
+            id:
+              type: string
+              description: ULID of the deleted message
+
+    WsMessageRead:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'message:read'
+        data:
+          type: object
+          required: [id, is_read]
+          properties:
+            id:
+              type: string
+            is_read:
+              type: boolean
+
+    WsMessageStarred:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'message:starred'
+        data:
+          type: object
+          required: [id, is_starred]
+          properties:
+            id:
+              type: string
+            is_starred:
+              type: boolean
+
+    WsMessageTags:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          const: 'message:tags'
+        data:
+          type: object
+          required: [id, tags]
+          properties:
+            id:
+              type: string
+            tags:
+              type: array
+              items:
+                type: string
+
+    WsMessageReleased:
+      type: object
+      required: [type, data]
+      description: The release the message holds after one was recorded
+      properties:
+        type:
+          const: 'message:released'
+        data:
+          type: object
+          required: [id, released_at, release_outcome]
+          properties:
+            id:
+              type: string
+            released_at:
+              type: string
+              format: date-time
+            release_outcome:
+              $ref: '#/components/schemas/ReleaseOutcome'
+
+    WsMessagesClear:
+      type: object
+      required: [type]
+      properties:
+        type:
+          const: 'messages:clear'
 
     DeleteAllResult:
       type: object

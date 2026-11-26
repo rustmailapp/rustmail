@@ -12,12 +12,14 @@
 //! migrates that file. Identical snapshots prove the migration keeps ids,
 //! cursors, search and downloads.
 
+mod contract;
 mod corpus;
 mod golden;
 mod harness;
 #[path = "../../../rustmail-storage/tests/common/legacy_v0_7_0.rs"]
 mod legacy_v0_7_0;
 mod mime;
+mod openapi;
 mod ws_wire;
 
 use std::fmt::Write as _;
@@ -757,6 +759,7 @@ async fn websocket_frames_for_new_update_delete_and_clear(backend: Backend) {
   t.section("frames received, in order");
   loop {
     let frame = client.next_text().await;
+    contract::check_ws_frame(&frame);
     t.note(&frame);
     if frame == r#"{"type":"messages:clear"}"# {
       break;

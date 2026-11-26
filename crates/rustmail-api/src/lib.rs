@@ -148,8 +148,14 @@ fn is_read(method: &Method) -> bool {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
+#[path = "../tests/goldens/openapi.rs"]
+mod openapi;
+
+#[cfg(test)]
 mod tests {
   use super::*;
+  use crate::openapi::spec;
   use axum::body::Body;
   use axum::http::{Method, Request, StatusCode};
   use rustmail_storage::{MessageRepository, initialize_database};
@@ -160,6 +166,8 @@ mod tests {
 
   const SHORT_TIMEOUT: Duration = Duration::from_millis(50);
   const POOL_WAIT: Duration = Duration::from_secs(30);
+  const UNKNOWN_ID: &str = "01J0000000000000000000000Z";
+  const UNTIMED_READS: &[&str] = &["/api/v1/info", "/api/v1/ws"];
 
   async fn single_connection_pool() -> SqlitePool {
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -215,6 +223,55 @@ mod tests {
       .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(body["error"].is_string());
+  }
+
+  #[tokio::test]
+  async fn every_documented_read_times_out_as_documented() {
+    let pool = single_connection_pool().await;
+    let _only_connection = pool.acquire().await.unwrap();
+    let app = short_timeout_router(&pool);
+    let reads = spec().operations().into_iter().filter(|operation| {
+      operation.method == Method::GET.as_str() && !UNTIMED_READS.contains(&operation.path.as_str())
+    });
+
+    for operation in reads {
+      let uri: String = operation
+        .path
+        .split('/')
+        .map(|segment| {
+          if segment.starts_with('{') {
+            UNKNOWN_ID
+          } else {
+            segment
+          }
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+      let response = app
+        .clone()
+        .oneshot(request(Method::GET, &uri))
+        .await
+        .unwrap();
+      let status = response.status();
+      let content_type = response
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+      let bytes = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .unwrap();
+
+      assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{operation}");
+      spec()
+        .check_response(
+          &operation,
+          status.as_u16(),
+          content_type.as_deref(),
+          Some(&bytes),
+        )
+        .unwrap();
+    }
   }
 
   #[tokio::test]
