@@ -63,6 +63,7 @@ const {
   allTags,
   listSize,
   liveSummary,
+  recordRelease,
   heldArrivals,
   heldRefresh,
   setLiveHeld,
@@ -87,6 +88,8 @@ function message(
     is_starred: false,
     tags: [],
     created_at: "2026-01-01T00:00:00Z",
+    released_at: null,
+    release_outcome: null,
     ...over,
   };
 }
@@ -1775,6 +1778,140 @@ describe("resync when the socket opens", () => {
 
     await vi.waitFor(() => expect(loading()).toBe(false));
     expect(filteredMessages().map((m) => m.is_read)).toEqual([true, false]);
+  });
+
+  it("keeps a release recorded while the read is in flight", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+
+    deliver(released("id-0", SENT_AT, "sent"));
+    read.resolve({ messages: range(2), total: 2 });
+
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    expect(filteredMessages().map((m) => m.release_outcome)).toEqual([
+      "sent",
+      null,
+    ]);
+  });
+
+  it("keeps a release this tab recorded while the read is in flight", async () => {
+    const read = deferred<Page>();
+    listMessages.mockReturnValueOnce(read.promise);
+    connectWebSocket();
+    openSocket();
+
+    recordRelease("id-0", { released_at: SENT_AT, release_outcome: "sent" });
+    read.resolve({ messages: range(2), total: 2 });
+
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    expect(filteredMessages()[0]).toMatchObject({
+      released_at: SENT_AT,
+      release_outcome: "sent",
+    });
+  });
+});
+
+const SENT_AT = "2026-11-26T13:05:09Z";
+const LATER_AT = "2026-11-26T13:20:00.500Z";
+
+function released(
+  id: string,
+  released_at: string,
+  release_outcome: "sent" | "unknown",
+): string {
+  return JSON.stringify({
+    type: "message:released",
+    data: { id, released_at, release_outcome },
+  });
+}
+
+describe("recorded releases", () => {
+  beforeEach(async () => {
+    FakeSocket.last = null;
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("location", { protocol: "http:", host: "inbox.test" });
+    await seed(range(2));
+    connectWebSocket();
+  });
+
+  afterEach(() => {
+    disconnectWebSocket();
+    vi.unstubAllGlobals();
+  });
+
+  function recorded(id: string) {
+    const row = filteredMessages().find((m) => m.id === id);
+    return row && { at: row.released_at, outcome: row.release_outcome };
+  }
+
+  it("updates the list row and the open message from the broadcast", () => {
+    setSelectedId("id-0");
+
+    deliver(released("id-0", SENT_AT, "sent"));
+
+    expect(recorded("id-0")).toEqual({ at: SENT_AT, outcome: "sent" });
+    expect(recorded("id-1")).toEqual({ at: null, outcome: null });
+    expect(liveSummary(message(0))).toMatchObject({
+      released_at: SENT_AT,
+      release_outcome: "sent",
+    });
+  });
+
+  it("keeps the open message's release current once its row is let go", async () => {
+    setSelectedId("id-1");
+    await seed([message(0)]);
+    expect(recorded("id-1")).toBeUndefined();
+
+    deliver(released("id-1", SENT_AT, "unknown"));
+
+    expect(liveSummary(message(1))).toMatchObject({
+      released_at: SENT_AT,
+      release_outcome: "unknown",
+    });
+  });
+
+  it("records this tab's own release before the broadcast, and takes the broadcast as a no-op", () => {
+    recordRelease("id-0", { released_at: SENT_AT, release_outcome: "sent" });
+    expect(recorded("id-0")).toEqual({ at: SENT_AT, outcome: "sent" });
+
+    deliver(released("id-0", SENT_AT, "sent"));
+    expect(recorded("id-0")).toEqual({ at: SENT_AT, outcome: "sent" });
+    expect(total()).toBe(2);
+  });
+
+  it("lets a later delivery replace an unknown outcome", () => {
+    deliver(released("id-0", SENT_AT, "unknown"));
+    deliver(released("id-0", LATER_AT, "sent"));
+
+    expect(recorded("id-0")).toEqual({ at: LATER_AT, outcome: "sent" });
+  });
+
+  it("never lets an older record replace a newer one", () => {
+    deliver(released("id-0", LATER_AT, "unknown"));
+    deliver(released("id-0", SENT_AT, "sent"));
+
+    expect(recorded("id-0")).toEqual({ at: LATER_AT, outcome: "unknown" });
+  });
+
+  it("never downgrades a delivery to an unknown outcome at the same instant", () => {
+    deliver(released("id-0", SENT_AT, "sent"));
+    deliver(released("id-0", SENT_AT, "unknown"));
+
+    expect(recorded("id-0")).toEqual({ at: SENT_AT, outcome: "sent" });
+  });
+
+  it("reads an arrival from an older server as never released", () => {
+    const {
+      released_at: _at,
+      release_outcome: _outcome,
+      ...older
+    } = message(9);
+
+    deliver(JSON.stringify({ type: "message:new", data: older }));
+
+    expect(recorded("id-9")).toEqual({ at: null, outcome: null });
   });
 });
 

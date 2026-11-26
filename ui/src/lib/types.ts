@@ -20,6 +20,8 @@ export type AuthResults = z.infer<typeof schema.authResults>;
 export type WsEvent = z.infer<typeof schema.wsEvent>;
 export type ServerInfo = z.infer<typeof schema.serverInfo>;
 export type ReleaseTarget = z.infer<typeof schema.releaseTarget>;
+export type ReleaseOutcome = z.infer<typeof schema.releaseOutcome>;
+export type ReleaseRecord = z.infer<typeof schema.releaseRecord>;
 
 export interface FilterState {
   starred: boolean;

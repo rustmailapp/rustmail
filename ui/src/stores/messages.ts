@@ -4,10 +4,12 @@ import type {
   FilterState,
   ListResponse,
   MessageSummary,
+  ReleaseRecord,
   WsEvent,
 } from "../lib/types";
 import * as api from "../lib/api";
 import * as schema from "../lib/schema";
+import { newerRelease, recordedRelease } from "../lib/release";
 import { notify } from "./notices";
 
 const PAGE_SIZE = 100;
@@ -1202,12 +1204,21 @@ function isKnown(id: string): boolean {
  * Deciding from the row's state rather than from the event keeps this
  * idempotent, so a replay over a page that already reflects it counts nothing.
  */
-function patchMessage(id: string, patch: Partial<MessageSummary>): void {
+function patchMessage(
+  id: string,
+  patch:
+    | Partial<MessageSummary>
+    | ((current: MessageSummary) => Partial<MessageSummary>),
+): void {
+  const apply = (current: MessageSummary): MessageSummary => ({
+    ...current,
+    ...(typeof patch === "function" ? patch(current) : patch),
+  });
   const open = openRow();
-  if (open?.id === id) setOpenRow({ ...open, ...patch });
+  if (open?.id === id) setOpenRow(apply(open));
   const waiting = heldRows.get(id);
   if (waiting !== undefined) {
-    const patched = { ...waiting, ...patch };
+    const patched = apply(waiting);
     if (matchesFilters(patched, filters())) {
       heldRows.set(id, patched);
       return;
@@ -1221,7 +1232,7 @@ function patchMessage(id: string, patch: Partial<MessageSummary>): void {
   }
   const current = findMessage(id);
   if (current === undefined) return;
-  const patched = { ...current, ...patch };
+  const patched = apply(current);
   const f = filters();
   const was = matchesFilters(current, f);
   const is = matchesFilters(patched, f);
@@ -1234,7 +1245,14 @@ function patchMessage(id: string, patch: Partial<MessageSummary>): void {
 /** The events a list read may have been served without. */
 type ReplayableEvent = Extract<
   WsEvent,
-  { type: "message:new" | "message:read" | "message:starred" | "message:tags" }
+  {
+    type:
+      | "message:new"
+      | "message:read"
+      | "message:starred"
+      | "message:tags"
+      | "message:released";
+  }
 >;
 
 function isReplayable(event: WsEvent): event is ReplayableEvent {
@@ -1242,7 +1260,8 @@ function isReplayable(event: WsEvent): event is ReplayableEvent {
     event.type === "message:new" ||
     event.type === "message:read" ||
     event.type === "message:starred" ||
-    event.type === "message:tags"
+    event.type === "message:tags" ||
+    event.type === "message:released"
   );
 }
 
@@ -1299,6 +1318,13 @@ function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
     case "message:tags":
       patchMessage(event.data.id, { tags: event.data.tags });
       break;
+    case "message:released": {
+      const { id, ...incoming } = event.data;
+      patchMessage(id, (current) =>
+        newerRelease(recordedRelease(current), incoming),
+      );
+      break;
+    }
     case "message:delete":
       cancelUndo(event.data.id);
       reconcileDeletion(event.data.id);
@@ -1314,6 +1340,23 @@ function applyEvent(event: Exclude<WsEvent, { type: "message:new" }>): void {
       });
       break;
   }
+}
+
+/**
+ * Records a release this tab made, as the server answered it.
+ *
+ * The server broadcasts the same record to every tab, this one included, but
+ * the answer is here first and a warning against a second send must not wait
+ * on the socket. Applied as the event it stands for, so the broadcast that
+ * follows changes nothing and a list read in flight is replayed with it.
+ */
+function recordRelease(id: string, record: ReleaseRecord): void {
+  const event: ReplayableEvent = {
+    type: "message:released",
+    data: { id, ...record },
+  };
+  eventsDuringRead?.push(event);
+  applyEvent(event);
 }
 
 let queuedEvents: WsEvent[] = [];
@@ -1507,6 +1550,7 @@ export {
   setSelectedId,
   selectMessage,
   starMessage,
+  recordRelease,
   clearInbox,
   clearInboxPrompt,
   moveSelection,

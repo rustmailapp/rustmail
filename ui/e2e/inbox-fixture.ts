@@ -1,5 +1,10 @@
 import type { Page, WebSocketRoute } from "@playwright/test";
+import type * as z from "zod/mini";
+import type * as schema from "../src/lib/schema";
 import type { Message, MessageSummary, WsEvent } from "../src/lib/types";
+
+/** An event as the server may frame it, fields older servers omit left out. */
+export type WsFrame = z.input<typeof schema.wsEvent>;
 
 /** Messages the fake backend holds — enough to force several pages. */
 export const TOTAL_MESSAGES = 600;
@@ -87,6 +92,8 @@ export function summary(index: number): MessageSummary {
     is_starred: false,
     tags: [],
     created_at: new Date(EPOCH + index * 1000).toISOString(),
+    released_at: null,
+    release_outcome: null,
   };
 }
 
@@ -108,7 +115,7 @@ export interface ApiCalls {
 /** Handle on the fake backend: what the UI wrote, and a way to push events. */
 export interface InboxBackend {
   calls: ApiCalls;
-  push(event: WsEvent): Promise<void>;
+  push(event: WsFrame): Promise<void>;
 }
 
 const SOCKET_WAIT_MS = 5000;
@@ -149,7 +156,7 @@ export async function mockInbox(
     socket = ws;
   });
 
-  const broadcast = async (events: WsEvent[]) => {
+  const broadcast = async (events: WsFrame[]) => {
     if (events.length === 0) return;
     const deadline = Date.now() + SOCKET_WAIT_MS;
     while (!socket && Date.now() < deadline) {
@@ -258,7 +265,7 @@ export async function mockInbox(
 
   return {
     calls,
-    push(event: WsEvent) {
+    push(event: WsFrame) {
       return broadcast([event]);
     },
   };
