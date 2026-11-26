@@ -22,3 +22,6 @@ ulid = { workspace = true }
 mail-parser = { workspace = true }
 zstd = { workspace = true }
 time = { workspace = true }
+
+[lints]
+workspace = true

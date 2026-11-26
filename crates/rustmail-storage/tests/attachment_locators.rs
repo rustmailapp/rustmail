@@ -2,6 +2,12 @@
 //! message and which stay stored decoded, and that either way the bytes
 //! served are the bytes the parser produced in context.
 
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 use mail_parser::{MessageParser, MimeHeaders};
 use rustmail_storage::{MessageRepository, StorageError, initialize_database};
 use sqlx::sqlite::SqlitePoolOptions;

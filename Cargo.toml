@@ -18,6 +18,10 @@ repository = "https://github.com/rustmailapp/rustmail"
 homepage = "https://github.com/rustmailapp/rustmail"
 readme = "README.md"
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [workspace.dependencies]
 tokio = { version = "1.44", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }

@@ -1,6 +1,12 @@
 //! A located attachment that no longer decodes to its recorded size is
 //! answered with a 500 and an error log, never with other bytes.
 
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 use std::fmt::{Debug, Write};
 use std::sync::{Arc, Mutex};
 

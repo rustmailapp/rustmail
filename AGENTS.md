@@ -71,7 +71,7 @@ cd ui && pnpm exec tsc -b
 
 ### Rust
 
-- No `unwrap()` in library crates; `unwrap()` only in tests and the binary entrypoint
+- No `unwrap()` or `expect()` outside tests: clippy's `unwrap_used` and `expect_used` are denied workspace-wide (test code is exempt via `clippy.toml` and a crate-level allow in each `tests/` crate). The binary entrypoint may use one only behind a targeted `#[allow(..., reason = "...")]`
 - Error handling: `thiserror` in library crates, `anyhow` in the binary crate
 - Async everywhere — no blocking calls on the tokio runtime
 - Crate-level `lib.rs` re-exports the public API
@@ -97,7 +97,7 @@ Any new dependency must be justified. Prefer well-maintained crates with minimal
 ## Restricted Actions
 
 - Do not add dependencies without justification
-- Do not use `unwrap()` in library crates
+- Do not use `unwrap()` or `expect()` outside tests
 - Do not introduce blocking calls in async code
 - Do not commit secrets, credentials, or `.env` files
 - Do not force push to master

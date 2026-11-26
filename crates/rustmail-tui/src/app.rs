@@ -137,13 +137,13 @@ pub struct App {
 }
 
 impl App {
-  pub fn new(base_url: String, ws_url: String, event_tx: mpsc::Sender<Event>) -> Self {
-    Self {
+  pub fn new(base_url: String, ws_url: String, event_tx: mpsc::Sender<Event>) -> Result<Self> {
+    Ok(Self {
       running: true,
       mode: Mode::Normal,
       focus: Focus::List,
 
-      api: ApiClient::new(base_url),
+      api: ApiClient::new(base_url)?,
       ws_url,
       event_tx,
       tasks: JoinSet::new(),
@@ -196,7 +196,7 @@ impl App {
       preview_area: Rect::default(),
       tab_area: Rect::default(),
       tab_ranges: [(0, 0); 3],
-    }
+    })
   }
 
   pub async fn run(
@@ -1387,7 +1387,8 @@ mod tests {
       "http://127.0.0.1:1".into(),
       "ws://127.0.0.1:1".into(),
       event_tx,
-    );
+    )
+    .unwrap();
     app.messages = (0..count)
       .map(|i| sample_summary(&format!("id-{i}"), i % 2 == 0))
       .collect();
@@ -1502,7 +1503,7 @@ mod tests {
   async fn ws_reconnect_refetches_current_view() {
     let (base_url, requests) = spawn_recording_server().await;
     let (mut events, event_tx) = event::channel();
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx).unwrap();
     app.offset = 50;
     app.search_query = "invoice".into();
     app.selected = 3;
@@ -1665,7 +1666,7 @@ mod tests {
   async fn stale_search_view_refetches_only_after_throttle() {
     let (base_url, requests) = spawn_recording_server().await;
     let (mut events, event_tx) = event::channel();
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx).unwrap();
     app.search_query = "invoice".into();
     app.view_stale = true;
     app.last_fetch_at = Some(Instant::now());
@@ -1690,7 +1691,7 @@ mod tests {
   async fn fresh_view_does_not_refetch_on_tick() {
     let (base_url, requests) = spawn_recording_server().await;
     let (_events, event_tx) = event::channel();
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx).unwrap();
 
     app.refetch_if_stale().await;
 
@@ -1701,7 +1702,7 @@ mod tests {
   async fn show_raw_requests_a_capped_preview() {
     let (base_url, requests) = spawn_recording_server().await;
     let (mut events, event_tx) = event::channel();
-    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx);
+    let mut app = App::new(base_url, "ws://127.0.0.1:1/ws".into(), event_tx).unwrap();
     app.messages = vec![sample_summary("id-0", true)];
 
     app.show_raw().await;
@@ -2102,7 +2103,8 @@ mod tests {
       "http://127.0.0.1:1".into(),
       "ws://127.0.0.1:1/ws".into(),
       event_tx,
-    );
+    )
+    .unwrap();
 
     app.connect_websocket();
     app.shutdown_tasks().await;
@@ -2141,7 +2143,8 @@ mod tests {
       "http://127.0.0.1:1".into(),
       "ws://127.0.0.1:1".into(),
       event_tx,
-    );
+    )
+    .unwrap();
     app.messages = vec![sample_summary("id-0", false)];
     app.pending_preview = Some(1);
     app.preview_loading = true;
@@ -2287,7 +2290,8 @@ mod tests {
       "http://127.0.0.1:1".into(),
       "ws://127.0.0.1:1".into(),
       event_tx,
-    );
+    )
+    .unwrap();
     app.messages = (0..count)
       .map(|i| sample_summary(&format!("id-{i}"), true))
       .collect();
