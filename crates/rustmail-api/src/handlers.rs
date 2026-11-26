@@ -818,7 +818,17 @@ pub async fn release_message(
       None,
     ),
   };
-  let response = match outcome {
+  Ok(release_response(&id, outcome, recorded).into_response())
+}
+
+/// The answer to a release the relay has finished with, carrying the
+/// release recorded on the message, if one was.
+fn release_response(
+  id: &str,
+  outcome: RelayOutcome,
+  recorded: Option<Release>,
+) -> (StatusCode, Json<serde_json::Value>) {
+  match outcome {
     RelayOutcome::Sent => {
       let mut body = serde_json::json!({ "released": true });
       merge_release(&mut body, recorded);
@@ -837,8 +847,7 @@ pub async fn release_message(
       merge_release(&mut body, recorded);
       (StatusCode::GATEWAY_TIMEOUT, Json(body))
     }
-  };
-  Ok(response.into_response())
+  }
 }
 
 /// Records a release that may have reached the relay and tells every client.
