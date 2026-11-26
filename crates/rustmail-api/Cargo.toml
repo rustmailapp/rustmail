@@ -31,6 +31,7 @@ rustmail-storage = { workspace = true }
 [dev-dependencies]
 rustmail-smtp = { workspace = true }
 rustls = { workspace = true }
+tokio-rustls = { workspace = true }
 sqlx = { workspace = true }
 ulid = { workspace = true }
 tokio = { workspace = true }

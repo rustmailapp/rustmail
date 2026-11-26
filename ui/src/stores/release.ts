@@ -49,7 +49,7 @@ export function releaseFailure(error: unknown, relay: string): string {
     case NOT_FOUND:
       return "Could not release the message: it is no longer on the server.";
     case BAD_GATEWAY:
-      return `Release failed: ${relay} could not be reached or refused the message.`;
+      return `Release failed: ${relay} could not be reached or refused the message. Nothing was delivered.`;
     default:
       return "The server refused the release. Reload and check the relay settings. Nothing was sent.";
   }

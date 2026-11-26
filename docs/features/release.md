@@ -32,8 +32,8 @@ While a release is in flight the button is disabled. The outcome appears as a no
 
 - **Released**: the relay accepted the message.
 - **Refused** (`400`, `403`): the server sent nothing.
-- **Failed** (`502`): the relay could not be reached or refused the message.
-- **Outcome unknown**: the relay did not answer within 30 seconds (`504`), the browser lost the connection, or the server answered any other error. The relay may already have the message, so check it before releasing the same message again. This notice stays until you dismiss it.
+- **Failed** (`502`): the relay could not be reached, failed the TLS handshake, or refused the message. Nothing was delivered.
+- **Outcome unknown**: the relay did not confirm the message (`504`), the browser lost the connection, or the server answered any other error. The relay may already have the message, so check it before releasing the same message again. This notice stays until you dismiss it.
 
 The UI reads the relay from [`GET /api/v1/info`](#server-info) and sends that exact host and port, so a server restarted with a different relay rejects the release instead of sending through a relay you did not confirm.
 
@@ -60,7 +60,7 @@ Success response:
 { "released": true }
 ```
 
-The whole exchange with the relay is limited to 30 seconds. Past that the server answers `504` with `"code": "release_outcome_unknown"`. The server does not track how far the exchange got, so a relay that stalled before the message was sent gets the same answer: check the relay before retrying.
+RustMail first checks the relay with a connection that sends no message (greeting, EHLO, TLS, NOOP, QUIT). If that fails, nothing was sent and the release answers `502`. It then sends the message; an SMTP error reply is also a `502`. If the connection breaks off, or the whole exchange passes 30 seconds, after the message may have been handed over, the server answers `504` with `"code": "release_outcome_unknown"`: check the relay before retrying.
 
 ## Server info
 
@@ -93,5 +93,5 @@ Release is locked down to prevent misuse:
 | `400` | Port not in allowlist, or invalid envelope (unparseable sender/recipients) |
 | `403` | Release disabled, host mismatch, or port mismatch |
 | `404` | Message not found |
-| `502` | TLS setup failure or SMTP delivery failure |
-| `504` | The relay did not finish within 30 seconds; the message may have been delivered |
+| `502` | Not delivered: TLS setup failure, relay unreachable, or refused by the relay |
+| `504` | The relay did not confirm the message; it may have been delivered |

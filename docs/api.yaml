@@ -591,8 +591,9 @@ paths:
           $ref: '#/components/responses/BodyMistyped'
         '502':
           description: >
-            The TLS client could not be set up for `host`, or the relay could
-            not be reached, refused the message or dropped the connection.
+            The message was not delivered: the TLS client could not be set up
+            for `host`, the relay could not be reached or failed the
+            handshake, or it refused the message with an SMTP error reply.
           content:
             application/json:
               schema:
@@ -608,15 +609,15 @@ paths:
                     error: Failed to establish TLS connection to relay host
         '504':
           description: >
-            The relay did not finish the exchange within 30 seconds. It may
-            already have accepted the message, so check the relay before
-            releasing the same message again.
+            The relay did not confirm the message: the exchange broke off or
+            passed 30 seconds after the message may already have been handed
+            over. Check the relay before releasing the same message again.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
               example:
-                error: 'The relay did not answer in time. The message may have been delivered: check the relay before releasing it again.'
+                error: 'The relay did not confirm the message. It may have been delivered: check the relay before releasing it again.'
                 code: release_outcome_unknown
 
   /api/v1/messages/{id}/auth:
@@ -1200,8 +1201,8 @@ components:
           description: >
             Machine-readable reason, present only where a client needs to act
             on it. `unknown_cursor`: `before` names no stored message.
-            `release_outcome_unknown`: a release timed out and the relay may
-            have the message.
+            `release_outcome_unknown`: the relay did not confirm a release and
+            may have the message.
 
   responses:
 

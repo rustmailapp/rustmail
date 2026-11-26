@@ -633,7 +633,7 @@ impl RelaySecurity {
 /// after it would hold the request open indefinitely. This stays under the
 /// UI's release deadline so the server answers before the browser gives up.
 const RELEASE_TIMEOUT: Duration = Duration::from_secs(30);
-const RELEASE_OUTCOME_UNKNOWN: &str = "The relay did not answer in time. The message may have been delivered: check the relay before releasing it again.";
+const RELEASE_OUTCOME_UNKNOWN: &str = "The relay did not confirm the message. It may have been delivered: check the relay before releasing it again.";
 const RELEASE_OUTCOME_UNKNOWN_CODE: &str = "release_outcome_unknown";
 
 fn relay_transport(
@@ -663,12 +663,26 @@ fn relay_transport(
 enum RelayOutcome {
   /// The relay accepted the message.
   Sent,
-  /// The relay refused the message or the exchange broke off.
-  Failed(lettre::transport::smtp::Error),
-  /// The relay did not finish within the deadline; it may have the message.
-  TimedOut,
+  /// The relay never took the message: it could not be reached, failed the
+  /// handshake, or answered with a refusal.
+  NotSent(String),
+  /// The exchange broke off or ran out of time once the message may already
+  /// have been handed over; the relay may have it.
+  Unknown(String),
 }
 
+/// Whether `error` proves the relay did not take the message: an SMTP
+/// refusal, or a client or TLS failure that stops the send before any data.
+fn refused_before_delivery(error: &lettre::transport::smtp::Error) -> bool {
+  error.is_permanent() || error.is_transient() || error.is_client() || error.is_tls()
+}
+
+/// Releases `raw` to the relay within `deadline`.
+///
+/// The relay is probed first, connect to `QUIT`, because a lettre error does
+/// not say how far the exchange got: once data may have been sent, only an
+/// SMTP refusal proves the message was not delivered. A relay that cannot
+/// even complete the probe never saw the message.
 async fn send_to_relay(
   mailer: &lettre::AsyncSmtpTransport<lettre::Tokio1Executor>,
   envelope: &lettre::address::Envelope,
@@ -677,10 +691,22 @@ async fn send_to_relay(
 ) -> RelayOutcome {
   use lettre::AsyncTransport;
 
-  match tokio::time::timeout(deadline, mailer.send_raw(envelope, raw)).await {
+  let started = tokio::time::Instant::now();
+  match tokio::time::timeout(deadline, mailer.test_connection()).await {
+    Ok(Ok(true)) => {}
+    Ok(Ok(false)) => return RelayOutcome::NotSent("the relay did not answer NOOP".into()),
+    Ok(Err(e)) => return RelayOutcome::NotSent(e.to_string()),
+    Err(_) => {
+      return RelayOutcome::NotSent("the relay did not finish the handshake in time".into());
+    }
+  }
+
+  let remaining = deadline.saturating_sub(started.elapsed());
+  match tokio::time::timeout(remaining, mailer.send_raw(envelope, raw)).await {
     Ok(Ok(_)) => RelayOutcome::Sent,
-    Ok(Err(e)) => RelayOutcome::Failed(e),
-    Err(_) => RelayOutcome::TimedOut,
+    Ok(Err(e)) if refused_before_delivery(&e) => RelayOutcome::NotSent(e.to_string()),
+    Ok(Err(e)) => RelayOutcome::Unknown(e.to_string()),
+    Err(_) => RelayOutcome::Unknown("the relay did not answer in time".into()),
   }
 }
 
@@ -777,15 +803,15 @@ pub async fn release_message(
       StatusCode::OK,
       Json(serde_json::json!({ "released": true })),
     ),
-    RelayOutcome::Failed(e) => {
-      tracing::error!(error = %e, message_id = %id, "SMTP delivery failed");
+    RelayOutcome::NotSent(reason) => {
+      tracing::error!(error = %reason, message_id = %id, "SMTP delivery failed");
       (
         StatusCode::BAD_GATEWAY,
         Json(serde_json::json!({ "error": "SMTP delivery failed" })),
       )
     }
-    RelayOutcome::TimedOut => {
-      tracing::warn!(message_id = %id, "Release relay did not answer in time");
+    RelayOutcome::Unknown(reason) => {
+      tracing::warn!(error = %reason, message_id = %id, "Release relay did not confirm the message");
       (
         StatusCode::GATEWAY_TIMEOUT,
         Json(
@@ -1281,12 +1307,14 @@ mod relay_transport_tests {
   use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
   use tokio::net::TcpListener;
   use tokio::sync::mpsc;
+  use tokio_rustls::TlsAcceptor;
 
   const LOOPBACK: &str = "127.0.0.1";
   const STARTTLS_SUBMISSION_PORT: u16 = 2525;
   const TLS_HANDSHAKE_RECORD: u8 = 0x16;
   const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(10);
   const STALL_DEADLINE: Duration = Duration::from_millis(200);
+  const SCRIPTED_DEADLINE: Duration = Duration::from_secs(2);
   const GREETING: &[u8] = b"220 relay.test ESMTP\r\n";
   const EHLO_WITH_STARTTLS: &[u8] = b"250-relay.test\r\n250 STARTTLS\r\n";
   const EHLO_WITHOUT_STARTTLS: &[u8] = b"250 relay.test\r\n";
@@ -1491,7 +1519,7 @@ mod relay_transport_tests {
   }
 
   #[tokio::test]
-  async fn a_relay_that_stalls_after_the_greeting_times_the_release_out() {
+  async fn a_relay_that_stalls_before_any_data_is_a_release_that_was_not_sent() {
     let (listener, port) = loopback_listener().await;
     let relay = tokio::spawn(async move {
       let (mut socket, _) = listener.accept().await.unwrap();
@@ -1509,7 +1537,102 @@ mod relay_transport_tests {
 
     let outcome = send_to_relay(&mailer, &envelope(), RAW_MESSAGE, STALL_DEADLINE).await;
 
-    assert!(matches!(outcome, RelayOutcome::TimedOut), "{outcome:?}");
+    assert!(matches!(outcome, RelayOutcome::NotSent(_)), "{outcome:?}");
+    relay.abort();
+  }
+
+  #[derive(Clone, Copy)]
+  enum AfterData {
+    Disconnect,
+    Stall,
+  }
+
+  async fn read_command<S: tokio::io::AsyncBufRead + Unpin>(stream: &mut S) -> Option<String> {
+    let mut line = String::new();
+    match stream.read_line(&mut line).await {
+      Ok(0) | Err(_) => None,
+      Ok(_) => Some(line.trim_end().to_ascii_uppercase()),
+    }
+  }
+
+  async fn scripted_relay(listener: TcpListener, after_data: AfterData) {
+    let acceptor = TlsAcceptor::from(relay_tls_config().server_config);
+    loop {
+      let (socket, _) = listener.accept().await.unwrap();
+      let mut plain = BufReader::new(socket);
+      plain.get_mut().write_all(GREETING).await.unwrap();
+      while let Some(command) = read_command(&mut plain).await {
+        if command.starts_with("EHLO") {
+          plain.get_mut().write_all(EHLO_WITH_STARTTLS).await.unwrap();
+        } else if command == "STARTTLS" {
+          plain
+            .get_mut()
+            .write_all(b"220 go ahead\r\n")
+            .await
+            .unwrap();
+          break;
+        }
+      }
+      let mut secure = BufReader::new(acceptor.accept(plain.into_inner()).await.unwrap());
+      while let Some(command) = read_command(&mut secure).await {
+        if command == "QUIT" {
+          secure.get_mut().write_all(b"221 bye\r\n").await.unwrap();
+          break;
+        }
+        if command != "DATA" {
+          secure.get_mut().write_all(b"250 ok\r\n").await.unwrap();
+          continue;
+        }
+        secure
+          .get_mut()
+          .write_all(b"354 go ahead\r\n")
+          .await
+          .unwrap();
+        while read_command(&mut secure)
+          .await
+          .is_some_and(|line| line != ".")
+        {}
+        match after_data {
+          AfterData::Disconnect => return,
+          AfterData::Stall => std::future::pending::<()>().await,
+        }
+      }
+    }
+  }
+
+  async fn release_through_scripted_relay(
+    after_data: AfterData,
+  ) -> (RelayOutcome, tokio::task::JoinHandle<()>) {
+    let (listener, port) = loopback_listener().await;
+    let relay = tokio::spawn(scripted_relay(listener, after_data));
+    let mailer = relay_transport(
+      LOOPBACK,
+      port,
+      RelaySecurity::RequiredStartTls,
+      trusting_relay_cert(),
+    )
+    .unwrap();
+
+    let outcome = send_to_relay(&mailer, &envelope(), RAW_MESSAGE, SCRIPTED_DEADLINE).await;
+    (outcome, relay)
+  }
+
+  #[tokio::test]
+  async fn a_relay_that_disconnects_after_the_data_leaves_the_outcome_unknown() {
+    let (outcome, relay) = release_through_scripted_relay(AfterData::Disconnect).await;
+
+    assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
+    tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .expect("the relay never received the whole message")
+      .unwrap();
+  }
+
+  #[tokio::test]
+  async fn a_relay_that_stalls_after_the_data_leaves_the_outcome_unknown() {
+    let (outcome, relay) = release_through_scripted_relay(AfterData::Stall).await;
+
+    assert!(matches!(outcome, RelayOutcome::Unknown(_)), "{outcome:?}");
     relay.abort();
   }
 }

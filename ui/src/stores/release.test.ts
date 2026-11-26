@@ -130,7 +130,7 @@ describe("releaseFailure", () => {
 
   it("names the relay when it could not be reached or refused", () => {
     expect(releaseFailure(rejection(502), RELAY)).toBe(
-      `Release failed: ${RELAY} could not be reached or refused the message.`,
+      `Release failed: ${RELAY} could not be reached or refused the message. Nothing was delivered.`,
     );
   });
 
