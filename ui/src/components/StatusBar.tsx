@@ -1,4 +1,4 @@
-import { createMemo, Show, type JSX } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import {
   hasMore,
   socketLive,
@@ -8,23 +8,17 @@ import {
 import { serverInfo, smtpEndpoint } from "../stores/server";
 import { smtpAddress } from "../lib/smtp";
 import CopyButton from "./CopyButton";
+import Kbd from "./Kbd";
+import { commandPaletteKeys } from "../lib/shortcuts";
 
 const ENDPOINT_TITLE =
   "The SMTP port this server listens on. Docker or proxy port mappings can expose a different one.";
-
-function Key(props: { children: JSX.Element }) {
-  return (
-    <kbd class="rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800 px-1 font-mono text-[10px] leading-4 text-zinc-600 dark:text-zinc-300">
-      {props.children}
-    </kbd>
-  );
-}
 
 function Hint(props: { keys: string[]; label: string }) {
   return (
     <span class="inline-flex items-center gap-1">
       {props.keys.map((key) => (
-        <Key>{key}</Key>
+        <Kbd>{key}</Kbd>
       ))}
       <span>{props.label}</span>
     </span>
@@ -111,6 +105,7 @@ export default function StatusBar() {
       </Show>
 
       <span class="ml-auto inline-flex items-center gap-3 text-zinc-500 dark:text-zinc-400">
+        <Hint keys={[commandPaletteKeys()]} label="commands" />
         <Hint keys={["i"]} label="details" />
         <Hint keys={["j", "k"]} label="move" />
         <Hint keys={["/"]} label="search" />

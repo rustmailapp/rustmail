@@ -52,7 +52,7 @@ export default function ConfirmDialog() {
   function onKeyDown(e: KeyboardEvent) {
     const state = dialogState();
     if (!state || state.options.enterConfirms === false) return;
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !e.repeat) {
       e.stopPropagation();
       close(true);
     }

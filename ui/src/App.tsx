@@ -12,6 +12,8 @@ import UndoToast from "./components/UndoToast";
 import Notices from "./components/Notices";
 import StatusBar from "./components/StatusBar";
 import { ConnectApp } from "./components/Onboarding";
+import CommandPalette from "./components/CommandPalette";
+import KeyboardShortcuts from "./components/KeyboardShortcuts";
 import {
   connectWebSocket,
   disconnectWebSocket,
@@ -19,12 +21,11 @@ import {
   total,
   selectedId,
   setSelectedId,
-  selectMessage,
   starMessage,
   clearInbox,
   clearInboxPrompt,
   moveSelection,
-  deleteWithUndo,
+  deleteSelected,
   flushPendingDelete,
   undoDelete,
   hasActiveFilters,
@@ -33,6 +34,12 @@ import {
 } from "./stores/messages";
 import { smtpEndpoint } from "./stores/server";
 import { settingsOpen } from "./stores/settings";
+import {
+  commandPaletteOpen,
+  shortcutsOpen,
+  toggleCommandPalette,
+} from "./stores/commandPalette";
+import { isCommandPaletteChord } from "./lib/shortcuts";
 import {
   closeDetails,
   detailsDrawerOpen,
@@ -58,13 +65,16 @@ export default function App() {
   }
 
   function handleKeydown(e: KeyboardEvent) {
-    if (settingsOpen() || confirmOpen()) return;
+    if (settingsOpen() || confirmOpen() || shortcutsOpen()) return;
+    if (isCommandPaletteChord(e)) {
+      e.preventDefault();
+      if (!e.repeat) toggleCommandPalette();
+      return;
+    }
+    if (commandPaletteOpen()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-    const msgs = filteredMessages();
-    const currentIdx = msgs.findIndex((m) => m.id === selectedId());
 
     switch (e.key) {
       case "j": {
@@ -78,19 +88,7 @@ export default function App() {
         break;
       }
       case "d": {
-        const id = selectedId();
-        if (id) {
-          const next =
-            currentIdx === -1
-              ? null
-              : (msgs[currentIdx + 1] ?? msgs[currentIdx - 1] ?? null);
-          if (next) {
-            selectMessage(next);
-          } else {
-            setSelectedId(null);
-          }
-          deleteWithUndo(id);
-        }
+        deleteSelected();
         break;
       }
       case "u": {
@@ -176,6 +174,8 @@ export default function App() {
       </div>
       <StatusBar />
       <Settings />
+      <CommandPalette />
+      <KeyboardShortcuts />
       <ConfirmDialog />
       <div class="pointer-events-none fixed bottom-14 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
         <Notices />

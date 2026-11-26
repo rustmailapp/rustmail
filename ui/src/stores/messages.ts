@@ -566,6 +566,20 @@ function starMessage(id: string, starred: boolean): void {
     );
 }
 
+/** Marks a message read or unread, saying so when the write does not land. */
+function setMessageRead(id: string, read: boolean): void {
+  const label = quoted(id);
+  api
+    .markRead(id, read)
+    .catch(() =>
+      notify(
+        read
+          ? `Could not mark ${label} as read.`
+          : `Could not mark ${label} as unread.`,
+      ),
+    );
+}
+
 function clearUndoTimer(): void {
   if (undoTimer !== null) {
     clearTimeout(undoTimer);
@@ -727,6 +741,25 @@ function deleteWithUndo(id: string): void {
   setHiddenIds((ids) => (ids.includes(id) ? ids : [...ids, id]));
   setUndoableId(id);
   undoTimer = setTimeout(() => commitDelete(), UNDO_WINDOW_MS);
+}
+
+/**
+ * Deletes the selected message with undo, and selects the one after it, or
+ * the one before when it was the last.
+ */
+function deleteSelected(): void {
+  const id = selectedId();
+  if (!id) return;
+  const msgs = filteredMessages();
+  const index = msgs.findIndex((m) => m.id === id);
+  const next =
+    index === -1 ? null : (msgs[index + 1] ?? msgs[index - 1] ?? null);
+  if (next) {
+    selectMessage(next);
+  } else {
+    setSelectedId(null);
+  }
+  deleteWithUndo(id);
 }
 
 /**
@@ -1507,10 +1540,12 @@ export {
   setSelectedId,
   selectMessage,
   starMessage,
+  setMessageRead,
   clearInbox,
   clearInboxPrompt,
   moveSelection,
   deleteWithUndo,
+  deleteSelected,
   undoDelete,
   undoableId,
   type SelectionTarget,

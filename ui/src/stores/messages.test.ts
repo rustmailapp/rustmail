@@ -45,6 +45,7 @@ const {
   connectWebSocket,
   disconnectWebSocket,
   deleteWithUndo,
+  deleteSelected,
   flushPendingDelete,
   fetchMessages,
   filteredMessages,
@@ -56,6 +57,7 @@ const {
   selectMessage,
   selectedId,
   starMessage,
+  setMessageRead,
   setSearch,
   setSelectedId,
   toggleFilter,
@@ -2468,6 +2470,60 @@ describe("starMessage", () => {
 
     await vi.waitFor(() => expect(markStarred).toHaveBeenCalled());
     expect(notices()).toEqual([]);
+  });
+});
+
+describe("setMessageRead", () => {
+  it("writes the read flag it is given", async () => {
+    await seed(range(2));
+
+    setMessageRead("id-1", false);
+
+    expect(markRead).toHaveBeenCalledExactlyOnceWith("id-1", false);
+  });
+
+  it("names the message that could not be marked unread", async () => {
+    await seed(range(2));
+    markRead.mockRejectedValue(new Error("offline"));
+
+    setMessageRead("id-0", false);
+
+    await vi.waitFor(() =>
+      expect(notices().map((n) => n.text)).toEqual([
+        "Could not mark \u201CSubject 0\u201D as unread.",
+      ]),
+    );
+  });
+});
+
+describe("deleteSelected", () => {
+  it("hides the selected message and selects the one after it", async () => {
+    await seed(range(3));
+    setSelectedId("id-1");
+
+    deleteSelected();
+
+    expect(selectedId()).toBe("id-2");
+    expect(filteredMessages().map((m) => m.id)).toEqual(["id-0", "id-2"]);
+    expect(undoableId()).toBe("id-1");
+  });
+
+  it("selects the one before when the last message goes", async () => {
+    await seed(range(3));
+    setSelectedId("id-2");
+
+    deleteSelected();
+
+    expect(selectedId()).toBe("id-1");
+  });
+
+  it("does nothing with no message selected", async () => {
+    await seed(range(2));
+
+    deleteSelected();
+
+    expect(undoableId()).toBeNull();
+    expect(filteredMessages()).toHaveLength(2);
   });
 });
 

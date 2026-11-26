@@ -659,7 +659,7 @@ test.describe("global shortcuts", () => {
     const backend = await openInbox(page);
     const before = await position(page);
 
-    for (const chord of ["Meta+d", "Control+d", "Meta+j", "Control+k"]) {
+    for (const chord of ["Meta+d", "Control+d", "Meta+j", "Control+j"]) {
       await page.keyboard.press(chord);
     }
 
