@@ -1,6 +1,6 @@
 //! Giving the pages freed by large deletes back to the filesystem.
 //!
-//! Schema-1 files use `auto_vacuum=INCREMENTAL`, so a delete only moves pages
+//! Every file rustmail creates uses `auto_vacuum=INCREMENTAL`, so a delete only moves pages
 //! onto the freelist. [`reclaim`] releases them in bounded steps on the
 //! writer, then truncates the WAL so the file really shrinks.
 

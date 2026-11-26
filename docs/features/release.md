@@ -22,6 +22,8 @@ RUSTMAIL_RELEASE_HOST=smtp.example.com:587 rustmail serve
 
 The `--release-host` value is an allowlist: only this exact host (and port, if specified) can be used as a release target. This prevents SSRF.
 
+An IPv6 address goes in brackets when it has a port (`[2001:db8::25]:587`) and may be bare without one (`2001:db8::25`). RustMail refuses to start on a value it cannot split unambiguously.
+
 ## Web UI
 
 When release is enabled, the message toolbar shows a **Release** button (a paper plane) next to star, download and delete. Without `--release-host` the button is not shown.

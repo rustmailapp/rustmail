@@ -7,6 +7,12 @@
 //! `v0.7.0:crates/rustmail-storage/src/schema.rs`, which is also the last tag
 //! before phase 4.
 
+#![allow(
+  clippy::unwrap_used,
+  clippy::expect_used,
+  reason = "test code, where a panic is the failure report"
+)]
+
 #[path = "common/legacy_v0_7_0.rs"]
 mod legacy_v0_7_0;
 

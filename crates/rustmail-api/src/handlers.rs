@@ -156,26 +156,21 @@ pub async fn get_message(
 const MAX_TAGS: usize = 20;
 const MAX_TAG_LEN: usize = 50;
 
-fn validate_tags(tags: &[String]) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn validate_tags(tags: &[String]) -> Result<(), AppError> {
   if tags.len() > MAX_TAGS {
-    return Err((
-      StatusCode::BAD_REQUEST,
-      Json(serde_json::json!({ "error": format!("Too many tags (max {})", MAX_TAGS) })),
-    ));
+    return Err(AppError::BadRequest(format!(
+      "Too many tags (max {MAX_TAGS})"
+    )));
   }
   for tag in tags {
     if tag.len() > MAX_TAG_LEN {
-      return Err((
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": format!("Tag too long (max {} chars)", MAX_TAG_LEN) })),
-      ));
+      return Err(AppError::BadRequest(format!(
+        "Tag too long (max {MAX_TAG_LEN} chars)"
+      )));
     }
     if tag.is_empty() || tag.chars().any(|c| c.is_control()) {
-      return Err((
-        StatusCode::BAD_REQUEST,
-        Json(
-          serde_json::json!({ "error": "Tags must be non-empty and contain no control characters" }),
-        ),
+      return Err(AppError::BadRequest(
+        "Tags must be non-empty and contain no control characters".to_string(),
       ));
     }
   }
@@ -187,10 +182,8 @@ pub async fn update_message(
   Path(id): Path<String>,
   Json(body): Json<UpdateBody>,
 ) -> Result<impl IntoResponse, AppError> {
-  if let Some(ref tags) = body.tags
-    && let Err(e) = validate_tags(tags)
-  {
-    return Ok(e.into_response());
+  if let Some(ref tags) = body.tags {
+    validate_tags(tags)?;
   }
 
   state
@@ -344,15 +337,7 @@ pub async fn get_raw_message(
   let limit = match params.limit.as_deref() {
     Some(text) => match text.parse::<i64>() {
       Ok(limit) if limit > 0 => Some(limit),
-      _ => {
-        return Ok(
-          (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": RAW_LIMIT_ERROR })),
-          )
-            .into_response(),
-        );
-      }
+      _ => return Err(AppError::BadRequest(RAW_LIMIT_ERROR.to_string())),
     },
     None => None,
   };
@@ -412,28 +397,41 @@ async fn read_header_section(state: &AppState, id: &str) -> Result<Vec<u8>, Stor
   state.repo.get_raw(id).await
 }
 
+/// Reads message `id`'s header section and hands `read` its top-level
+/// headers along with the raw bytes their offsets index into.
+async fn read_root_headers<R>(
+  state: &AppState,
+  id: &str,
+  read: impl FnOnce(&[u8], &[mail_parser::Header<'_>]) -> R,
+) -> Result<R, AppError> {
+  let raw = read_header_section(state, id).await?;
+  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
+  let headers = parsed
+    .as_ref()
+    .and_then(|msg| msg.parts.first())
+    .map(|root| root.headers.as_slice())
+    .unwrap_or_default();
+  Ok(read(&raw, headers))
+}
+
 pub async fn get_headers(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = read_header_section(&state, &id).await?;
-
-  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
-  let headers: Vec<MessageHeader> = parsed
-    .as_ref()
-    .and_then(|msg| msg.parts.first())
-    .map(|root| root.headers.as_slice())
-    .unwrap_or_default()
-    .iter()
-    .map(|h| MessageHeader {
-      name: h.name.as_str().to_string(),
-      value: unfold_header_value(
-        raw
-          .get(h.offset_start as usize..h.offset_end as usize)
-          .unwrap_or_default(),
-      ),
-    })
-    .collect();
+  let headers: Vec<MessageHeader> = read_root_headers(&state, &id, |raw, headers| {
+    headers
+      .iter()
+      .map(|h| MessageHeader {
+        name: h.name.as_str().to_string(),
+        value: unfold_header_value(
+          raw
+            .get(h.offset_start as usize..h.offset_end as usize)
+            .unwrap_or_default(),
+        ),
+      })
+      .collect()
+  })
+  .await?;
 
   Ok((
     StatusCode::OK,
@@ -517,11 +515,7 @@ pub async fn get_info(State(state): State<AppState>) -> axum::response::Response
       release: state.release_target(),
     })
     .into_response(),
-    None => (
-      StatusCode::NOT_FOUND,
-      Json(serde_json::json!({ "error": "Server info is not configured" })),
-    )
-      .into_response(),
+    None => AppError::NotFound("Server info is not configured".to_string()).into_response(),
   }
 }
 
@@ -576,23 +570,13 @@ pub async fn export_message(
         ),
         Err(e) => {
           tracing::error!(error = %e, message_id = %id, "Failed to serialize message for JSON export");
-          Ok(
-            (
-              StatusCode::INTERNAL_SERVER_ERROR,
-              Json(serde_json::json!({ "error": "Internal server error" })),
-            )
-              .into_response(),
-          )
+          Err(AppError::Internal)
         }
       }
     }
-    _ => Ok(
-      (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": "format must be 'eml' or 'json'" })),
-      )
-        .into_response(),
-    ),
+    _ => Err(AppError::BadRequest(
+      "format must be 'eml' or 'json'".to_string(),
+    )),
   }
 }
 
@@ -719,68 +703,38 @@ pub async fn release_message(
   let (allowed_host, allowed_port) = match (&state.release_host, state.release_port) {
     (Some(host), port) => (host.clone(), port),
     _ => {
-      return Ok(
-        (
-          StatusCode::FORBIDDEN,
-          Json(
-            serde_json::json!({ "error": "Email release is disabled. Configure --release-host to enable." }),
-          ),
-        )
-          .into_response(),
-      );
+      return Err(AppError::Forbidden(
+        "Email release is disabled. Configure --release-host to enable.".to_string(),
+      ));
     }
   };
 
   if body.host != allowed_host {
-    return Ok(
-      (
-        StatusCode::FORBIDDEN,
-        Json(
-          serde_json::json!({ "error": format!("Release only allowed to configured host: {}", allowed_host) }),
-        ),
-      )
-        .into_response(),
-    );
+    return Err(AppError::Forbidden(format!(
+      "Release only allowed to configured host: {allowed_host}"
+    )));
   }
 
   let port = body
     .port
     .unwrap_or(allowed_port.unwrap_or(DEFAULT_RELEASE_PORT));
   if allowed_port.is_some() && Some(port) != allowed_port {
-    return Ok(
-      (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({ "error": format!("Release only allowed on configured port: {}", allowed_port.unwrap_or(DEFAULT_RELEASE_PORT)) })),
-      )
-        .into_response(),
-    );
+    return Err(AppError::Forbidden(format!(
+      "Release only allowed on configured port: {}",
+      allowed_port.unwrap_or(DEFAULT_RELEASE_PORT)
+    )));
   }
   if !ALLOWED_SMTP_PORTS.contains(&port) {
-    return Ok(
-      (
-        StatusCode::BAD_REQUEST,
-        Json(
-          serde_json::json!({ "error": format!("Port {} is not an allowed SMTP port (25, 465, 587, 2525)", port) }),
-        ),
-      )
-        .into_response(),
-    );
+    return Err(AppError::BadRequest(format!(
+      "Port {port} is not an allowed SMTP port (25, 465, 587, 2525)"
+    )));
   }
 
-  let raw = state.repo.get_raw(&id).await?;
-  let msg = state.repo.get(&id).await?;
+  let source = state.repo.get_source(&id).await?;
 
-  let envelope = match release_envelope(&msg.sender, &msg.recipients) {
+  let envelope = match release_envelope(&source.sender, &source.recipients) {
     Ok(envelope) => envelope,
-    Err(reason) => {
-      return Ok(
-        (
-          StatusCode::BAD_REQUEST,
-          Json(serde_json::json!({ "error": format!("Invalid envelope: {reason}") })),
-        )
-          .into_response(),
-      );
-    }
+    Err(reason) => return Err(AppError::BadRequest(format!("Invalid envelope: {reason}"))),
   };
 
   let mailer = match lettre::transport::smtp::client::TlsParameters::new(body.host.clone())
@@ -789,20 +743,16 @@ pub async fn release_message(
     Ok(m) => m,
     Err(e) => {
       tracing::error!(error = %e, "TLS setup failed for relay host");
-      return Ok(
-        (
-          StatusCode::BAD_GATEWAY,
-          Json(serde_json::json!({ "error": "Failed to establish TLS connection to relay host" })),
-        )
-          .into_response(),
-      );
+      return Err(AppError::BadGateway(
+        "Failed to establish TLS connection to relay host".to_string(),
+      ));
     }
   };
 
   let release_state = state.clone();
   let release_id = id.clone();
   let release = tokio::spawn(async move {
-    let outcome = send_to_relay(&mailer, &envelope, &raw, RELEASE_TIMEOUT).await;
+    let outcome = send_to_relay(&mailer, &envelope, &source.raw, RELEASE_TIMEOUT).await;
     let recorded = match &outcome {
       RelayOutcome::Sent => record_release(&release_state, &release_id, ReleaseOutcome::Sent).await,
       RelayOutcome::Unknown(_) => {
@@ -839,12 +789,12 @@ fn release_response(
       tracing::error!(error = %reason, message_id = %id, "SMTP delivery failed");
       (
         StatusCode::BAD_GATEWAY,
-        Json(serde_json::json!({ "error": "SMTP delivery failed" })),
+        Json(error_body("SMTP delivery failed", None)),
       )
     }
     RelayOutcome::Unknown(reason) => {
       tracing::warn!(error = %reason, message_id = %id, "Release relay did not confirm the message");
-      let mut body = serde_json::json!({ "error": RELEASE_OUTCOME_UNKNOWN, "code": RELEASE_OUTCOME_UNKNOWN_CODE });
+      let mut body = error_body(RELEASE_OUTCOME_UNKNOWN, Some(RELEASE_OUTCOME_UNKNOWN_CODE));
       merge_release(&mut body, recorded);
       (StatusCode::GATEWAY_TIMEOUT, Json(body))
     }
@@ -927,15 +877,16 @@ pub async fn get_auth_results(
   State(state): State<AppState>,
   Path(id): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-  let raw = read_header_section(&state, &id).await?;
+  let results = read_root_headers(&state, &id, |_, headers| auth_results(headers)).await?;
+  Ok((
+    StatusCode::OK,
+    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
+    Json(results),
+  ))
+}
 
-  let parsed = mail_parser::MessageParser::default().parse_headers(&raw);
-  let headers = parsed
-    .as_ref()
-    .and_then(|msg| msg.parts.first())
-    .map(|root| root.headers.as_slice())
-    .unwrap_or_default();
-
+/// The authentication verdicts a message's top-level headers record.
+fn auth_results(headers: &[mail_parser::Header<'_>]) -> AuthResults {
   let mut dkim = Vec::new();
   let mut spf = Vec::new();
   let mut dmarc = Vec::new();
@@ -973,16 +924,12 @@ pub async fn get_auth_results(
     }
   }
 
-  Ok((
-    StatusCode::OK,
-    [(header::CACHE_CONTROL, IMMUTABLE_MESSAGE_CACHE.to_string())],
-    Json(AuthResults {
-      dkim,
-      spf,
-      dmarc,
-      arc,
-    }),
-  ))
+  AuthResults {
+    dkim,
+    spf,
+    dmarc,
+    arc,
+  }
 }
 
 fn parse_auth_results_header(
@@ -1084,117 +1031,208 @@ const UNKNOWN_CURSOR_CODE: &str = "unknown_cursor";
 const READ_TIMED_OUT: &str =
   "the request ran past the server's time limit; retry it, or narrow it with limit or filters";
 
+/// Every error a handler answers with, rendered as `{"error": ...}` (plus a
+/// `code` where a client needs to branch on it) under its status.
+#[derive(Debug, thiserror::Error)]
 pub enum AppError {
-  Storage(StorageError),
+  #[error(transparent)]
+  Storage(#[from] StorageError),
+  #[error("{0}")]
   BadRequest(String),
+  #[error("{0}")]
+  Forbidden(String),
+  #[error("{0}")]
+  NotFound(String),
+  #[error("{0}")]
+  BadGateway(String),
+  #[error("Internal server error")]
+  Internal,
+  #[error("{UNKNOWN_CURSOR}")]
   UnknownCursor,
+  #[error("{READ_TIMED_OUT}")]
   TimedOut,
 }
 
-impl From<StorageError> for AppError {
-  fn from(e: StorageError) -> Self {
-    Self::Storage(e)
+/// The JSON body of an error response.
+fn error_body(message: &str, code: Option<&str>) -> serde_json::Value {
+  match code {
+    Some(code) => serde_json::json!({ "error": message, "code": code }),
+    None => serde_json::json!({ "error": message }),
+  }
+}
+
+/// Status and client-facing message for a storage failure, logging the
+/// detail the client does not get.
+fn storage_failure(error: &StorageError) -> (StatusCode, String) {
+  match error {
+    StorageError::NotFound(_) => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
+    StorageError::Database(e) => {
+      tracing::error!(error = %e, "Database error");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    StorageError::AttachmentCorrupt {
+      message_id,
+      attachment_id,
+      transfer_encoding,
+      expected_size,
+      actual_size,
+    } => {
+      tracing::error!(
+        event = "attachment_corrupt",
+        message_id = %message_id,
+        attachment_id = %attachment_id,
+        transfer_encoding = ?transfer_encoding,
+        expected_size = ?expected_size,
+        actual_size = ?actual_size,
+        "Stored attachment failed its integrity check; re-send the message to store it again"
+      );
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    StorageError::ContentCorrupt { message_id, reason } => {
+      tracing::error!(
+        event = "content_corrupt",
+        message_id = %message_id,
+        reason = %reason,
+        "Stored message source failed its integrity check; delete the message and re-send it"
+      );
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    e @ StorageError::Compress(_) => {
+      tracing::error!(error = %e, "Message compression failed");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    e @ StorageError::DecodeAborted(_) => {
+      tracing::error!(error = %e, "Stored content decode aborted");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    e @ (StorageError::NewerSchema { .. }
+    | StorageError::LegacySchema { .. }
+    | StorageError::UnrecognizedSchema { .. }) => {
+      tracing::error!(error = %e, "Unsupported database schema");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
+    e @ (StorageError::MigrationLocked { .. }
+    | StorageError::MigrationRefused(_)
+    | StorageError::RestoreRefused(_)
+    | StorageError::MigrationVerifyFailed { .. }
+    | StorageError::MigrationDiskFull { .. }
+    | StorageError::MigrationIo { .. }
+    | StorageError::MigrationTaskAborted(_)) => {
+      tracing::error!(error = %e, "Storage migration error");
+      (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal server error".to_string(),
+      )
+    }
   }
 }
 
 impl IntoResponse for AppError {
   fn into_response(self) -> axum::response::Response {
     let (status, message) = match &self {
-      AppError::UnknownCursor => {
-        return (
-          StatusCode::BAD_REQUEST,
-          Json(serde_json::json!({ "error": UNKNOWN_CURSOR, "code": UNKNOWN_CURSOR_CODE })),
-        )
-          .into_response();
+      AppError::Storage(error) => storage_failure(error),
+      AppError::BadRequest(_) | AppError::UnknownCursor => {
+        (StatusCode::BAD_REQUEST, self.to_string())
       }
-      AppError::BadRequest(reason) => (StatusCode::BAD_REQUEST, reason.clone()),
-      AppError::TimedOut => (StatusCode::SERVICE_UNAVAILABLE, READ_TIMED_OUT.to_string()),
-      AppError::Storage(StorageError::NotFound(_)) => {
-        (StatusCode::NOT_FOUND, "Resource not found".to_string())
-      }
-      AppError::Storage(StorageError::Database(e)) => {
-        tracing::error!(error = %e, "Database error");
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(StorageError::AttachmentCorrupt {
-        message_id,
-        attachment_id,
-        transfer_encoding,
-        expected_size,
-        actual_size,
-      }) => {
-        tracing::error!(
-          event = "attachment_corrupt",
-          message_id = %message_id,
-          attachment_id = %attachment_id,
-          transfer_encoding = ?transfer_encoding,
-          expected_size = ?expected_size,
-          actual_size = ?actual_size,
-          "Stored attachment failed its integrity check; re-send the message to store it again"
-        );
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(StorageError::ContentCorrupt { message_id, reason }) => {
-        tracing::error!(
-          event = "content_corrupt",
-          message_id = %message_id,
-          reason = %reason,
-          "Stored message source failed its integrity check; delete the message and re-send it"
-        );
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(e @ StorageError::Compress(_)) => {
-        tracing::error!(error = %e, "Message compression failed");
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(e @ StorageError::DecodeAborted(_)) => {
-        tracing::error!(error = %e, "Attachment decode aborted");
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(
-        e @ (StorageError::NewerSchema { .. }
-        | StorageError::LegacySchema { .. }
-        | StorageError::UnrecognizedSchema { .. }),
-      ) => {
-        tracing::error!(error = %e, "Unsupported database schema");
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
-      AppError::Storage(
-        e @ (StorageError::MigrationLocked { .. }
-        | StorageError::MigrationRefused(_)
-        | StorageError::RestoreRefused(_)
-        | StorageError::MigrationVerifyFailed { .. }
-        | StorageError::MigrationDiskFull { .. }
-        | StorageError::MigrationIo { .. }
-        | StorageError::MigrationTaskAborted(_)),
-      ) => {
-        tracing::error!(error = %e, "Storage migration error");
-        (
-          StatusCode::INTERNAL_SERVER_ERROR,
-          "Internal server error".to_string(),
-        )
-      }
+      AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
+      AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+      AppError::BadGateway(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+      AppError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+      AppError::TimedOut => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
     };
+    let code = matches!(self, AppError::UnknownCursor).then_some(UNKNOWN_CURSOR_CODE);
+    (status, Json(error_body(&message, code))).into_response()
+  }
+}
 
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
+#[cfg(test)]
+mod app_error_tests {
+  use super::*;
+  use axum::body::to_bytes;
+
+  async fn rendered(error: AppError) -> (StatusCode, String, Vec<u8>) {
+    let response = error.into_response();
+    let status = response.status();
+    let content_type = response.headers()[header::CONTENT_TYPE]
+      .to_str()
+      .unwrap()
+      .to_string();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, content_type, body.to_vec())
+  }
+
+  #[tokio::test]
+  async fn each_error_renders_the_status_and_body_it_always_had() {
+    let cases = [
+      (
+        AppError::NotFound("Server info is not configured".to_string()),
+        StatusCode::NOT_FOUND,
+        serde_json::json!({ "error": "Server info is not configured" }),
+      ),
+      (
+        AppError::NotFound("Unknown API endpoint".to_string()),
+        StatusCode::NOT_FOUND,
+        serde_json::json!({ "error": "Unknown API endpoint" }),
+      ),
+      (
+        AppError::BadGateway("Failed to establish TLS connection to relay host".to_string()),
+        StatusCode::BAD_GATEWAY,
+        serde_json::json!({ "error": "Failed to establish TLS connection to relay host" }),
+      ),
+      (
+        AppError::Forbidden(
+          "Email release is disabled. Configure --release-host to enable.".to_string(),
+        ),
+        StatusCode::FORBIDDEN,
+        serde_json::json!({ "error": "Email release is disabled. Configure --release-host to enable." }),
+      ),
+      (
+        AppError::Internal,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        serde_json::json!({ "error": "Internal server error" }),
+      ),
+      (
+        AppError::TimedOut,
+        StatusCode::SERVICE_UNAVAILABLE,
+        serde_json::json!({ "error": READ_TIMED_OUT }),
+      ),
+      (
+        AppError::UnknownCursor,
+        StatusCode::BAD_REQUEST,
+        serde_json::json!({ "error": UNKNOWN_CURSOR, "code": UNKNOWN_CURSOR_CODE }),
+      ),
+      (
+        AppError::Storage(StorageError::NotFound(
+          "01J0000000000000000000000Z".to_string(),
+        )),
+        StatusCode::NOT_FOUND,
+        serde_json::json!({ "error": "Resource not found" }),
+      ),
+    ];
+    for (error, status, body) in cases {
+      let (got_status, content_type, got_body) = rendered(error).await;
+      assert_eq!(got_status, status, "{body}");
+      assert_eq!(content_type, "application/json", "{body}");
+      assert_eq!(got_body, serde_json::to_vec(&body).unwrap(), "{body}");
+    }
   }
 }
 
@@ -1491,6 +1529,28 @@ mod relay_transport_tests {
       .map(|c| c.split(' ').next().unwrap_or_default())
       .collect();
     assert_eq!(verbs, ["EHLO", "STARTTLS"]);
+  }
+
+  #[tokio::test]
+  async fn a_bare_ipv6_relay_host_reaches_the_relay() {
+    const IPV6_LOOPBACK: &str = "::1";
+    let listener = TcpListener::bind((IPV6_LOOPBACK, 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let relay = tokio::spawn(plaintext_commands_until_close(listener, EHLO_WITH_STARTTLS));
+
+    let tls = TlsParameters::new(IPV6_LOOPBACK.to_string()).unwrap();
+    let mailer =
+      relay_transport(IPV6_LOOPBACK, port, RelaySecurity::RequiredStartTls, tls).unwrap();
+    let sent = tokio::time::timeout(EXCHANGE_TIMEOUT, mailer.send_raw(&envelope(), RAW_MESSAGE))
+      .await
+      .expect("the client never gave up on the relay");
+    assert!(sent.is_err());
+
+    let commands = tokio::time::timeout(EXCHANGE_TIMEOUT, relay)
+      .await
+      .unwrap()
+      .unwrap();
+    assert_eq!(commands.last().map(String::as_str), Some("STARTTLS"));
   }
 
   #[tokio::test]

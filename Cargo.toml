@@ -18,6 +18,10 @@ repository = "https://github.com/rustmailapp/rustmail"
 homepage = "https://github.com/rustmailapp/rustmail"
 readme = "README.md"
 
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
 [workspace.dependencies]
 tokio = { version = "1.44", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -44,6 +48,7 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 dirs = "6.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-tungstenite = "0.28"
 yaml-rust2 = "0.13"
 
 rustmail-smtp = { path = "crates/rustmail-smtp" }

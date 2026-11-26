@@ -22,9 +22,10 @@ export function releasing(id: string): boolean {
   return inFlight().has(id);
 }
 
-/** The relay as the user reads it: `host:port`. */
+/** The relay as the user reads it: `host:port`, `[addr]:port` for IPv6. */
 export function relayLabel(target: ReleaseTarget): string {
-  return `${target.host}:${target.port}`;
+  const host = target.host.includes(":") ? `[${target.host}]` : target.host;
+  return `${host}:${target.port}`;
 }
 
 /**

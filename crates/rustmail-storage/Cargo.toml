@@ -11,6 +11,9 @@ description = "SQLite storage layer with FTS5 full-text search for the RustMail 
 keywords = ["smtp", "email", "sqlite", "storage"]
 categories = ["development-tools", "database"]
 
+[features]
+test-util = []
+
 [dependencies]
 tokio = { workspace = true }
 sqlx = { workspace = true }
@@ -22,3 +25,9 @@ ulid = { workspace = true }
 mail-parser = { workspace = true }
 zstd = { workspace = true }
 time = { workspace = true }
+
+[dev-dependencies]
+rustmail-storage = { path = ".", features = ["test-util"] }
+
+[lints]
+workspace = true

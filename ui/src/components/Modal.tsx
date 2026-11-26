@@ -1,5 +1,6 @@
 import { Show, onMount, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
+import { focusableIn } from "./focusable";
 import { returnFocusOnCleanup } from "./focusReturn";
 
 interface ModalProps {
@@ -13,18 +14,6 @@ interface ModalProps {
   /** Where the panel sits: centred, or near the top so its height can change without moving it. */
   align?: "center" | "top";
   children: JSX.Element;
-}
-
-const FOCUSABLE =
-  'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-
-function focusableIn(panel: HTMLElement): HTMLElement[] {
-  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-    (element) =>
-      !element.matches(":disabled") &&
-      element.tabIndex !== -1 &&
-      element.getClientRects().length > 0,
-  );
 }
 
 /**
