@@ -14,7 +14,7 @@ use crate::models::{
   Attachment, AttachmentSummary, Message, MessageSummary, Release, ReleaseOutcome,
 };
 use crate::prepared::{AttachmentStorage, PreparedMessage};
-use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page};
+use crate::query::{Cursor, MessageFilter, PageStart, push_filter, push_page, push_tagged_seqs};
 use crate::reclaim::{
   DELETE_ALL_RECLAIM_BUDGET, RETENTION_RECLAIM_BUDGET, ReclaimTrigger, page_stats, reclaim,
 };
@@ -1085,7 +1085,13 @@ const SUMMARY_COLUMNS: &str = "m.id, m.sender, m.recipients, m.subject, m.size, 
 
 /// The listing behind [`MessageRepository::list_page`]: `messages` alone,
 /// newest first.
+///
+/// A filter on tags alone pages through `message_tags` instead, see
+/// [`tagged_list_statement`].
 fn list_statement(filter: &MessageFilter, start: PageStart, limit: i64) -> QueryBuilder<Sqlite> {
+  if filter.is_tags_only() {
+    return tagged_list_statement(&filter.tags, start, limit);
+  }
   let mut builder = QueryBuilder::<Sqlite>::new(format!(
     "SELECT {SUMMARY_COLUMNS} FROM messages m WHERE 1=1"
   ));
@@ -1122,9 +1128,41 @@ fn search_count_statement(quoted: String, filter: &MessageFilter) -> QueryBuilde
   builder
 }
 
+/// The page of messages carrying any of `tags`, newest first.
+///
+/// The page window is taken from the tagged `seq`s before any message is
+/// read, so a page costs its own rows however many messages carry the tags,
+/// where filtering `messages` first collects every tagged `seq`. Every
+/// `message_tags` row has its message, so the window counts messages.
+fn tagged_list_statement(tags: &[String], start: PageStart, limit: i64) -> QueryBuilder<Sqlite> {
+  let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT {SUMMARY_COLUMNS} FROM ("));
+  let bound = match start {
+    PageStart::Before(Cursor(bound)) => Some(bound),
+    PageStart::Offset(_) => None,
+  };
+  push_tagged_seqs(&mut builder, tags, bound);
+  builder.push(" ORDER BY message_seq DESC LIMIT ");
+  builder.push_bind(limit);
+  if let PageStart::Offset(offset) = start {
+    builder.push(" OFFSET ");
+    builder.push_bind(offset);
+  }
+  builder.push(") t INNER JOIN messages m ON m.seq = t.message_seq ORDER BY t.message_seq DESC");
+  builder
+}
+
 /// The count behind [`MessageRepository::count_filtered`] when a filter is
 /// set.
+///
+/// A filter on tags alone counts the distinct tagged `seq`s in
+/// `message_tags` without reading `messages`.
 fn count_statement(filter: &MessageFilter) -> QueryBuilder<Sqlite> {
+  if filter.is_tags_only() {
+    let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM (");
+    push_tagged_seqs(&mut builder, &filter.tags, None);
+    builder.push(")");
+    return builder;
+  }
   let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) FROM messages m WHERE 1=1");
   push_filter(&mut builder, "m", filter);
   builder
@@ -3178,7 +3216,7 @@ mod tests {
       assert!(
         plan
           .iter()
-          .any(|step| step.starts_with("SEARCH message_tags USING PRIMARY KEY (tag=?)")),
+          .any(|step| step.starts_with("SEARCH message_tags USING PRIMARY KEY (tag=?")),
         "{path} does not look the tags up in message_tags: {plan:?}"
       );
       assert!(
@@ -3186,6 +3224,26 @@ mod tests {
         "{path} scans a whole table: {plan:?}"
       );
     }
+  }
+
+  #[tokio::test]
+  async fn a_tags_only_count_reads_only_message_tags() {
+    let repo = test_repo().await;
+    let sql = count_statement(&tagged_a_or_b()).into_string();
+
+    let plan = plan_of(&repo, &sql).await;
+
+    assert!(
+      tables_read(&repo, &sql)
+        .await
+        .iter()
+        .all(|table| table == "message_tags" || table.starts_with("(subquery")),
+      "the tags-only count reads more than message_tags: {plan:?}"
+    );
+    assert!(
+      !plan.iter().any(|step| step.starts_with("USE TEMP B-TREE")),
+      "the tags-only count collects its matches in a temporary table: {plan:?}"
+    );
   }
 
   #[tokio::test]
@@ -3538,6 +3596,52 @@ mod tests {
       .unwrap()
   }
 
+  const ORACLE_PAGE: i64 = 7;
+
+  async fn paged_by_offset(repo: &MessageRepository, filter: &MessageFilter) -> Vec<String> {
+    let mut ids = Vec::new();
+    loop {
+      let page = repo
+        .list_page(filter, PageStart::Offset(ids.len() as i64), ORACLE_PAGE)
+        .await
+        .unwrap();
+      let last_page = (page.len() as i64) < ORACLE_PAGE;
+      ids.extend(page.into_iter().map(|m| m.id));
+      if last_page {
+        return ids;
+      }
+    }
+  }
+
+  async fn paged_by_cursor(repo: &MessageRepository, filter: &MessageFilter) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    loop {
+      let start = match ids.last() {
+        Some(last) => PageStart::Before(repo.cursor(last).await.unwrap()),
+        None => PageStart::Offset(0),
+      };
+      let page = repo.list_page(filter, start, ORACLE_PAGE).await.unwrap();
+      let last_page = (page.len() as i64) < ORACLE_PAGE;
+      ids.extend(page.into_iter().map(|m| m.id));
+      if last_page {
+        return ids;
+      }
+    }
+  }
+
+  #[tokio::test]
+  async fn a_filter_with_hundreds_of_tags_still_lists_and_counts() {
+    let repo = test_repo().await;
+    let ids = insert_subjects(&repo, &["m0", "m1"]).await;
+    tag(&repo, &ids[1], &["wanted"]).await;
+    let mut tags: Vec<String> = (0..600).map(|i| format!("absent-{i}")).collect();
+    tags.push("wanted".into());
+    let filter = MessageFilter { tags, ..all() };
+
+    assert_eq!(filtered(&repo, &filter).await, [ids[1].clone()]);
+    assert_eq!(repo.count_filtered(&filter).await.unwrap(), 1);
+  }
+
   #[tokio::test]
   async fn filtered_listings_and_counts_agree_with_the_tags_json() {
     let repo = test_repo().await;
@@ -3555,6 +3659,16 @@ mod tests {
         .map(|m| m.id)
         .collect();
       assert_eq!(listed, expected, "listing disagrees for {filter:?}");
+      assert_eq!(
+        paged_by_offset(&repo, &filter).await,
+        expected,
+        "offset pages disagree for {filter:?}"
+      );
+      assert_eq!(
+        paged_by_cursor(&repo, &filter).await,
+        expected,
+        "cursor pages disagree for {filter:?}"
+      );
       assert_eq!(
         repo.count_filtered(&filter).await.unwrap(),
         expected.len() as i64,

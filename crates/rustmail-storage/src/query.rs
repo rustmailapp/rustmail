@@ -1,5 +1,12 @@
 use sqlx::{QueryBuilder, Sqlite};
 
+/// Most tags a tags-only filter reads as one `message_tags` range each.
+///
+/// Each range is one arm of a compound `SELECT`, and SQLite refuses more than
+/// 500 arms by default. A filter with more tags takes the `messages` path,
+/// which returns the same rows.
+const MAX_MERGED_TAGS: usize = 64;
+
 /// Narrows a listing to the messages that pass every condition set here.
 ///
 /// An unset field does not filter. Set fields combine with `AND`, and with a
@@ -20,6 +27,18 @@ impl MessageFilter {
   /// Whether this filter lets every message through.
   pub fn is_empty(&self) -> bool {
     *self == Self::default()
+  }
+
+  /// Whether this filter sets tags and nothing else, few enough to be read
+  /// one `message_tags` range per tag.
+  pub(crate) fn is_tags_only(&self) -> bool {
+    !self.tags.is_empty()
+      && self.tags.len() <= MAX_MERGED_TAGS
+      && *self
+        == Self {
+          tags: self.tags.clone(),
+          ..Self::default()
+        }
   }
 }
 
@@ -66,6 +85,30 @@ pub(crate) fn push_filter(
       tags.push_bind(tag.clone());
     }
     builder.push("))");
+  }
+}
+
+/// Appends the `seq` of every message carrying one of `tags`, each once.
+///
+/// One primary-key range of `message_tags` per tag, joined by `UNION`, which
+/// SQLite runs as a merge of ranges already in `message_seq` order: no
+/// temporary table, and a `LIMIT` after it stops reading early. `bound`, when
+/// set, keeps only rows below that `seq`.
+pub(crate) fn push_tagged_seqs(
+  builder: &mut QueryBuilder<Sqlite>,
+  tags: &[String],
+  bound: Option<i64>,
+) {
+  for (index, tag) in tags.iter().enumerate() {
+    if index > 0 {
+      builder.push(" UNION ");
+    }
+    builder.push("SELECT message_seq FROM message_tags WHERE tag = ");
+    builder.push_bind(tag.clone());
+    if let Some(bound) = bound {
+      builder.push(" AND message_seq < ");
+      builder.push_bind(bound);
+    }
   }
 }
 
