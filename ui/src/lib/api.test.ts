@@ -7,6 +7,7 @@ import {
   getMessage,
   listMessages,
   RELEASE_REQUEST_TIMEOUT_MS,
+  ReleaseError,
   releaseMessage,
   REQUEST_TIMEOUT_MS,
   ResponseShapeError,
@@ -29,6 +30,8 @@ function messageBody(
     is_starred: false,
     tags: [],
     created_at: "2026-01-01T00:00:00Z",
+    released_at: null,
+    release_outcome: null,
     text_body: "Body",
     html_body: null,
     ...over,
@@ -170,6 +173,40 @@ describe("response shape", () => {
     fetchMock.mockResolvedValue(Response.json(messageBody()));
 
     await expect(getMessage("msg-0000")).resolves.toEqual(messageBody());
+  });
+
+  it("reads a message an older server sends without release fields as never released", async () => {
+    const {
+      released_at: _at,
+      release_outcome: _outcome,
+      ...fromOlderServer
+    } = messageBody();
+    fetchMock.mockResolvedValue(Response.json(fromOlderServer));
+
+    await expect(getMessage("msg-0000")).resolves.toEqual(messageBody());
+  });
+
+  it("reads the release recorded on a message", async () => {
+    const released = {
+      released_at: "2026-11-26T13:05:09.123Z",
+      release_outcome: "unknown",
+    };
+    fetchMock.mockResolvedValue(Response.json(messageBody(released)));
+
+    await expect(getMessage("msg-0000")).resolves.toMatchObject(released);
+  });
+
+  it("rejects a release outcome the API does not document", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        messageBody({
+          released_at: "2026-11-26T13:05:09Z",
+          release_outcome: "bounced",
+        }),
+      ),
+    );
+
+    await expect(getMessage("msg-0000")).rejects.toThrow(ResponseShapeError);
   });
 
   it("keeps a field the UI does not know about out of the domain model", async () => {
@@ -443,6 +480,65 @@ describe("release", () => {
     await expect(releaseMessage("msg-1", TARGET)).rejects.toMatchObject({
       status: 504,
       code: "release_outcome_unknown",
+      recorded: null,
+    });
+  });
+
+  it("returns the release the server recorded", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({
+        released: true,
+        released_at: "2026-11-26T13:05:09Z",
+        release_outcome: "sent",
+      }),
+    );
+
+    await expect(releaseMessage("msg-1", TARGET)).resolves.toEqual({
+      released_at: "2026-11-26T13:05:09Z",
+      release_outcome: "sent",
+    });
+  });
+
+  it("returns no record when the server answers without one", async () => {
+    fetchMock.mockResolvedValue(Response.json({ released: true }));
+
+    await expect(releaseMessage("msg-1", TARGET)).resolves.toBeNull();
+  });
+
+  it("carries the release the server recorded for an unknown outcome", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json(
+        {
+          error: "timed out",
+          code: "release_outcome_unknown",
+          released_at: "2026-11-26T13:05:09Z",
+          release_outcome: "sent",
+        },
+        { status: 504 },
+      ),
+    );
+
+    const failure = releaseMessage("msg-1", TARGET);
+
+    await expect(failure).rejects.toBeInstanceOf(ReleaseError);
+    await expect(failure).rejects.toMatchObject({
+      status: 504,
+      recorded: {
+        released_at: "2026-11-26T13:05:09Z",
+        release_outcome: "sent",
+      },
+    });
+  });
+
+  it("carries no record when the relay refused", async () => {
+    fetchMock.mockResolvedValue(
+      Response.json({ error: "refused" }, { status: 502 }),
+    );
+
+    await expect(releaseMessage("msg-1", TARGET)).rejects.toMatchObject({
+      status: 502,
+      code: null,
+      recorded: null,
     });
   });
 });

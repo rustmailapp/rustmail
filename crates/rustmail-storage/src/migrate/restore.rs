@@ -13,11 +13,8 @@ use super::{
   exists, fingerprint_of, inspect_db, inspect_db_immutable, io_error, rename, sidecar, sync_parent,
 };
 use crate::error::{RestoreRefusal, StorageError};
-use crate::schema::{FileSchema, probe};
+use crate::schema::{FileSchema, SCHEMA_VERSION, probe};
 
-/// Suffix of the name the migrated database is kept under, before its
-/// timestamp.
-const KEPT_SUFFIX: &str = ".schema2-";
 /// The files beside a database that mean a process has it open or that
 /// SQLite would apply to it on the next open.
 const SIDE_SUFFIXES: [&str; 3] = [WAL_SUFFIX, SHM_SUFFIX, JOURNAL_SUFFIX];
@@ -33,12 +30,13 @@ const TIME_DIGITS: usize = 6;
 pub struct RestoreReport {
   /// The database path, which now holds the restored file.
   pub database: PathBuf,
-  /// Where the restored file was kept as the backup: `<db>.schema1.bak` for
-  /// a database migrated from rustmail 0.8 or 0.9, `<db>.schema0.bak` for one
-  /// migrated from 0.7 or earlier.
+  /// Where the restored file was kept as the backup: `<db>.schema2.bak` for
+  /// a database migrated from rustmail 0.10, `<db>.schema1.bak` for one
+  /// migrated from 0.8 or 0.9, `<db>.schema0.bak` for one migrated from 0.7
+  /// or earlier.
   pub restored_from: PathBuf,
-  /// Where the migrated schema-2 database was moved,
-  /// `<db>.schema2-<UTC timestamp>`. Mail received since the migration is
+  /// Where the migrated schema-3 database was moved,
+  /// `<db>.schema3-<UTC timestamp>`. Mail received since the migration is
   /// only in this file.
   pub kept_as: PathBuf,
 }
@@ -46,19 +44,19 @@ pub struct RestoreReport {
 /// Puts the database kept by a migration back at `path`, so the rustmail
 /// that wrote it can open it again.
 ///
-/// Takes `<path>.migration-lock` first. Requires `path` to be a schema-2
+/// Takes `<path>.migration-lock` first. Requires `path` to be a schema-3
 /// database with no migration copy beside it, made by a migration, and the
 /// backup that migration kept to be an intact database of the schema it was
-/// migrated from that no process has open. The schema-2 database is
-/// checkpointed and closed, then moved to `<path>.schema2-<UTC timestamp>`
+/// migrated from that no process has open. The schema-3 database is
+/// checkpointed and closed, then moved to `<path>.schema3-<UTC timestamp>`
 /// and never deleted; the backup is moved to `path` and the directory is
 /// synced. Neither file keeps a `-wal`, `-shm` or `-journal`, so nothing of
 /// one can be applied to the other.
 ///
 /// A restore that stopped between those two renames is finished instead:
-/// when `path` is missing, the newest `<path>.schema2-<UTC timestamp>` beside
+/// when `path` is missing, the newest `<path>.schema3-<UTC timestamp>` beside
 /// it has no `-wal`, `-shm` or `-journal` and reads, without being written,
-/// as a schema-2 database made by a migration, and the backup that migration
+/// as a schema-3 database made by a migration, and the backup that migration
 /// kept passes the same checks with nothing having `path` or the backup open,
 /// the backup is moved to `path` and the directory is synced. Every kept file
 /// is left as it is.
@@ -123,7 +121,7 @@ pub async fn restore_backup(path: &Path) -> Result<RestoreReport, StorageError> 
   checkpoint(&paths.db).await?;
   refuse_side_files(&paths.db, &paths.db).await?;
 
-  let kept_as = sidecar(&paths.db, &format!("{KEPT_SUFFIX}{}", timestamp()));
+  let kept_as = sidecar(&paths.db, &format!("{}{}", kept_suffix(), timestamp()));
   if exists(&kept_as).await? {
     return Err(RestoreRefusal::KeptNameTaken { kept: kept_as }.into());
   }
@@ -154,7 +152,7 @@ async fn migrated_from(
   }))
 }
 
-/// Finishes a restore that moved the schema-2 database away but not the
+/// Finishes a restore that moved the schema-3 database away but not the
 /// backup into its place, after the same checks a restore starts with.
 async fn finish_interrupted_restore(paths: Paths) -> Result<RestoreReport, StorageError> {
   let (kept_as, backup, source) = interrupted_kept_file(&paths).await?;
@@ -194,12 +192,12 @@ async fn put_backup_in_place(
   })
 }
 
-/// The schema-2 database an interrupted restore moved away, the backup its
+/// The schema-3 database an interrupted restore moved away, the backup its
 /// migration kept and the schema that backup is in.
 ///
-/// The kept file is the newest `<db>.schema2-<UTC timestamp>` beside the
+/// The kept file is the newest `<db>.schema3-<UTC timestamp>` beside the
 /// missing database. It must have no `-wal`, `-shm` or `-journal`, read as a
-/// schema-2 database, and record the migration that made it; it is opened as
+/// schema-3 database, and record the migration that made it; it is opened as
 /// immutable so the check never writes it. Older ones are kept files of
 /// earlier restores.
 async fn interrupted_kept_file(
@@ -219,7 +217,7 @@ async fn interrupted_kept_file(
       &fallback_backup,
       format!(
         "no {}<UTC timestamp> file sits beside it",
-        sidecar(&paths.db, KEPT_SUFFIX).display()
+        sidecar(&paths.db, &kept_suffix()).display()
       ),
     ));
   };
@@ -230,7 +228,7 @@ async fn interrupted_kept_file(
       return Err(refuse(
         &fallback_backup,
         format!(
-          "{} is {}, not schema 2",
+          "{} is {}, not schema {SCHEMA_VERSION}",
           kept_as.display(),
           state.describe()
         ),
@@ -280,7 +278,13 @@ async fn interrupted_kept_file(
   Ok((kept_as, backup, source))
 }
 
-/// The files named `<db>.schema2-<UTC timestamp>` beside `db`, oldest first.
+/// Suffix of the name the migrated database is kept under, before its
+/// timestamp: `.schema3-`.
+fn kept_suffix() -> String {
+  format!(".schema{SCHEMA_VERSION}-")
+}
+
+/// The files named `<db>.schema3-<UTC timestamp>` beside `db`, oldest first.
 async fn kept_files(db: &Path) -> Result<Vec<PathBuf>, StorageError> {
   let parent = db.parent().unwrap_or(Path::new("")).to_path_buf();
   let listed = if parent.as_os_str().is_empty() {
@@ -288,7 +292,7 @@ async fn kept_files(db: &Path) -> Result<Vec<PathBuf>, StorageError> {
   } else {
     parent.clone()
   };
-  let prefix = sidecar(db, KEPT_SUFFIX).to_string_lossy().into_owned();
+  let prefix = sidecar(db, &kept_suffix()).to_string_lossy().into_owned();
   blocking(move || {
     let list_error = |source| io_error("list the directory", &listed, source);
     let mut kept = Vec::new();
@@ -358,6 +362,7 @@ async fn check_backup(backup: &Path, source: SourceSchema) -> Result<(), Storage
   let expected = match source {
     SourceSchema::Legacy => FileSchema::Legacy,
     SourceSchema::Previous => FileSchema::Previous,
+    SourceSchema::Compressed => FileSchema::Compressed,
   };
   match checked {
     Ok((schema, integrity)) if schema == expected && integrity == QUICK_CHECK_OK => Ok(()),
@@ -367,7 +372,8 @@ async fn check_backup(backup: &Path, source: SourceSchema) -> Result<(), Storage
     Ok((FileSchema::Empty, _)) => Err(invalid("it has no tables".to_string()).into()),
     Ok((FileSchema::Legacy, _)) => Err(invalid("it is schema 0".to_string()).into()),
     Ok((FileSchema::Previous, _)) => Err(invalid("it is schema 1".to_string()).into()),
-    Ok((FileSchema::Current, _)) => Err(invalid("it is schema 2".to_string()).into()),
+    Ok((FileSchema::Compressed, _)) => Err(invalid("it is schema 2".to_string()).into()),
+    Ok((FileSchema::Current, _)) => Err(invalid(format!("it is schema {SCHEMA_VERSION}")).into()),
     Err(error) => Err(invalid(error.to_string()).into()),
   }
 }

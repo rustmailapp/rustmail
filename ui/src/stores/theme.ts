@@ -41,3 +41,4 @@ function setTheme(t: Theme) {
 }
 
 export { theme, setTheme };
+export type { Theme };

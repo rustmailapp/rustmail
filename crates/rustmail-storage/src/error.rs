@@ -24,7 +24,7 @@ pub enum StorageError {
     supported: i64,
   },
   /// The database was written by an older rustmail: schema 0 by 0.7 and
-  /// earlier, schema 1 by 0.8 and 0.9. It is refused before anything is
+  /// earlier, schema 1 by 0.8 and 0.9, schema 2 by 0.10. It is refused before anything is
   /// written to it; [`crate::prepare_database_file`] migrates it first.
   #[error(
     "{database} is schema {found}, written by an older rustmail; \
@@ -247,6 +247,17 @@ pub enum MigrationRefusal {
     /// The database.
     database: PathBuf,
   },
+  /// An older rustmail wrote to the database between the end of the
+  /// migration copy and the swap. The swap was undone; nothing was lost.
+  #[error(
+    "{} was written to while its migrated copy was being swapped in, so the swap was undone \
+     and the database is as it was; stop every older rustmail using it and restart to migrate it again",
+    .database.display()
+  )]
+  SourceChangedDuringSwap {
+    /// The database.
+    database: PathBuf,
+  },
   /// Any other combination of database, backups and migration copy.
   #[error(
     "cannot tell how to open {}: the database is {}, the backups beside it are {}, and the \
@@ -261,7 +272,7 @@ pub enum MigrationRefusal {
   UnknownState {
     /// The database.
     database: PathBuf,
-    /// What the database is: absent, empty, schema 0, 1 or 2.
+    /// What the database is: absent, empty, schema 0, 1, 2 or 3.
     database_state: &'static str,
     /// The backups that exist.
     backups: Vec<PathBuf>,
@@ -292,7 +303,7 @@ pub enum RestoreRefusal {
   /// The database is not a file at the current schema, so there is nothing
   /// to restore the backup over.
   #[error(
-    "{} is {}, not a schema-2 database, so there is nothing to restore the backup over; \
+    "{} is {}, not a schema-3 database, so there is nothing to restore the backup over; \
      restore-backup only undoes a completed storage migration (was the backup already restored?)",
     .database.display(),
     .database_state
@@ -300,7 +311,7 @@ pub enum RestoreRefusal {
   NotMigrated {
     /// The database.
     database: PathBuf,
-    /// What the database is: absent, empty, schema 0 or schema 1.
+    /// What the database is: absent, empty, schema 0, 1 or 2.
     database_state: &'static str,
   },
   /// No backup sits beside the database.

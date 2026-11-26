@@ -540,12 +540,12 @@ fn transactions(deliveries: Vec<Delivery>) -> Vec<Vec<(ReceivedMessage, Delivery
 /// How long after a batch is taken off the queue it may still fall back to
 /// storing its messages one at a time.
 ///
-/// A session answers `451` once [`STORE_ACK_TIMEOUT`] passes without a
-/// verdict, and a message committed after that is captured twice once the
-/// sender retries. Half the timeout leaves the other half for the insert
-/// already running when the budget runs out, which SQLite's `busy_timeout`
-/// and the repository's retries can stretch to ten seconds, and for the time
-/// the delivery waited in the queue before its batch was taken.
+/// Every message in the batch has begun its write by then, so its session
+/// waits for the outcome past [`STORE_ACK_TIMEOUT`] if need be. The budget is
+/// what bounds that wait: once it runs out, the messages not yet tried are
+/// refused, which is safe because none of them has committed. A session
+/// therefore waits at most the budget plus one insert, which SQLite's
+/// `busy_timeout` and the repository's retries can stretch to ten seconds.
 const FALLBACK_BUDGET: std::time::Duration =
   std::time::Duration::from_secs(STORE_ACK_TIMEOUT.as_secs() / 2);
 
@@ -604,7 +604,7 @@ async fn store_group(
   let mut messages = Vec::with_capacity(group.len());
   let mut acks = Vec::with_capacity(group.len());
   for (received, ack) in group {
-    if ack.is_abandoned() {
+    if !ack.begin_write() {
       warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
       continue;
     }
@@ -645,9 +645,8 @@ async fn store_group(
 /// refuses fails alone rather than taking its batch with it.
 ///
 /// Refuses every message not yet tried once the store reports a failure that
-/// is not specific to one message, or once `deadline` has passed, since a
-/// message committed after its session answered `451` is captured again when
-/// the sender retries.
+/// is not specific to one message, or once `deadline` has passed, since each
+/// session waits for its message's outcome however long this takes.
 async fn store_one_by_one(
   repo: &MessageRepository,
   messages: Vec<PreparedMessage>,
@@ -658,10 +657,6 @@ async fn store_one_by_one(
   let mut stored = Vec::with_capacity(messages.len());
   let mut pending = messages.iter().zip(acks);
   while let Some((message, ack)) = pending.next() {
-    if ack.is_abandoned() {
-      warn!("Skipped a message whose session gave up waiting; the sender was asked to retry");
-      continue;
-    }
     if Instant::now() >= deadline {
       ack.rejected();
       let remaining = 1 + reject_rest(pending);
@@ -1335,7 +1330,7 @@ mod ws_buffer_tests {
 #[cfg(test)]
 mod delivery_tests {
   use super::*;
-  use rustmail_smtp::DeliveryOutcome;
+  use rustmail_smtp::{DeliveryOutcome, Verdict};
 
   fn sample() -> ReceivedMessage {
     titled("Hello")
@@ -1359,13 +1354,11 @@ mod delivery_tests {
     open_repository(IN_MEMORY_DB_URL, true).await.unwrap()
   }
 
-  fn deliveries(
-    messages: Vec<ReceivedMessage>,
-  ) -> (Vec<Delivery>, Vec<oneshot::Receiver<DeliveryOutcome>>) {
+  fn deliveries(messages: Vec<ReceivedMessage>) -> (Vec<Delivery>, Vec<Verdict>) {
     messages.into_iter().map(Delivery::new).unzip()
   }
 
-  async fn outcomes(verdicts: Vec<oneshot::Receiver<DeliveryOutcome>>) -> Vec<DeliveryOutcome> {
+  async fn outcomes(verdicts: Vec<Verdict>) -> Vec<DeliveryOutcome> {
     let mut outcomes = Vec::with_capacity(verdicts.len());
     for verdict in verdicts {
       outcomes.push(verdict.await.unwrap());
@@ -1594,7 +1587,10 @@ mod delivery_tests {
     store_and_announce(&repo, batch, &|_| {
       let mut decided = second_decided_at_first_announce.lock().unwrap();
       if decided.is_none() {
-        *decided = Some(second_verdict.lock().unwrap().try_recv().is_ok());
+        let mut verdict = second_verdict.lock().unwrap();
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        let polled = std::pin::Pin::new(&mut *verdict).poll(&mut context);
+        *decided = Some(matches!(polled, std::task::Poll::Ready(Ok(_))));
       }
     })
     .await;
@@ -1622,6 +1618,157 @@ mod delivery_tests {
     assert_eq!(subjects, [Some("waiting")]);
     assert_eq!(repo.count().await.unwrap(), 1);
     assert_eq!(outcomes(verdicts).await, [DeliveryOutcome::Stored]);
+  }
+
+  const SHORT_STORE_ACK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+  const WRITE_LOCK_HELD_FOR: std::time::Duration = std::time::Duration::from_millis(800);
+  const SENDER_ATTEMPTS: usize = 5;
+  const SMTP_EXCHANGE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+  /// Stores every delivery from `rx` through [`store_batch`] the way `serve` does.
+  fn spawn_store_loop(repo: &MessageRepository, mut rx: mpsc::Receiver<Delivery>) {
+    let repo = repo.clone();
+    tokio::spawn(async move {
+      let mut batch = Vec::new();
+      while next_batch(&mut rx, &mut None, &mut batch).await {
+        store_batch(&repo, std::mem::take(&mut batch)).await;
+      }
+    });
+  }
+
+  /// Serves SMTP on an ephemeral port, handing every message to `tx` with a
+  /// short store deadline.
+  async fn spawn_smtp_into(tx: mpsc::Sender<Delivery>) -> std::net::SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+      while let Ok((stream, peer)) = listener.accept().await {
+        let session = rustmail_smtp::Session::new(stream, peer, tx.clone(), 1 << 20, None)
+          .with_store_ack_timeout(SHORT_STORE_ACK_TIMEOUT);
+        tokio::spawn(async move {
+          let mut session = session;
+          let _ = session.handle().await;
+        });
+      }
+    });
+    addr
+  }
+
+  /// Sends one message and returns the server's reply to its terminating dot.
+  async fn send_over_smtp(addr: std::net::SocketAddr) -> String {
+    tokio::time::timeout(SMTP_EXCHANGE_DEADLINE, smtp_exchange(addr))
+      .await
+      .expect("the SMTP exchange never finished")
+  }
+
+  async fn smtp_exchange(addr: std::net::SocketAddr) -> String {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    async fn read_reply(stream: &mut BufReader<tokio::net::TcpStream>) -> String {
+      let mut line = String::new();
+      loop {
+        line.clear();
+        stream.read_line(&mut line).await.unwrap();
+        if line.as_bytes().get(3) != Some(&b'-') {
+          return line;
+        }
+      }
+    }
+
+    let mut stream = BufReader::new(tokio::net::TcpStream::connect(addr).await.unwrap());
+    read_reply(&mut stream).await;
+    for command in [
+      "EHLO test\r\n",
+      "MAIL FROM:<alice@test.com>\r\n",
+      "RCPT TO:<bob@test.com>\r\n",
+      "DATA\r\n",
+    ] {
+      stream
+        .get_mut()
+        .write_all(command.as_bytes())
+        .await
+        .unwrap();
+      read_reply(&mut stream).await;
+    }
+    stream
+      .get_mut()
+      .write_all(b"Subject: retried\r\n\r\nbody\r\n.\r\n")
+      .await
+      .unwrap();
+    let answer = read_reply(&mut stream).await;
+    stream.get_mut().write_all(b"QUIT\r\n").await.unwrap();
+    answer
+  }
+
+  /// A write still waiting on the lock when the session's deadline passes
+  /// must be answered by its commit, not by a `451`.
+  ///
+  /// A sender retries on `451`, so a message that commits after one is
+  /// captured twice. The lock is held by another connection past the
+  /// deadline, and the sender keeps retrying until it hears `250`.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_write_in_flight_at_the_deadline_is_answered_by_its_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = format!("sqlite:{}?mode=rwc", dir.path().join("ack.db").display());
+    let repo = open_repository(&url, false).await.unwrap();
+    let mut lock = <sqlx::SqliteConnection as sqlx::Connection>::connect(&url)
+      .await
+      .unwrap();
+    sqlx::query("BEGIN IMMEDIATE")
+      .execute(&mut lock)
+      .await
+      .unwrap();
+    let release = tokio::spawn(async move {
+      tokio::time::sleep(WRITE_LOCK_HELD_FOR).await;
+      sqlx::query("COMMIT").execute(&mut lock).await.unwrap();
+    });
+    let (tx, rx) = mpsc::channel(MAX_BATCH_MESSAGES);
+    spawn_store_loop(&repo, rx);
+    let addr = spawn_smtp_into(tx).await;
+
+    let mut replies = Vec::new();
+    while replies.len() < SENDER_ATTEMPTS {
+      let reply = send_over_smtp(addr).await;
+      let accepted = reply.starts_with("250");
+      replies.push(reply);
+      if accepted {
+        break;
+      }
+    }
+    release.await.unwrap();
+
+    assert_eq!(
+      replies.len(),
+      1,
+      "the sender was told to retry a message whose write was in flight: {replies:?}"
+    );
+    assert_eq!(
+      repo.count().await.unwrap(),
+      1,
+      "the message was captured more than once"
+    );
+    repo.close().await;
+  }
+
+  /// A message still queued when the session's deadline passes is withdrawn:
+  /// the sender hears `451` and the store never writes it.
+  #[tokio::test(flavor = "multi_thread")]
+  async fn a_message_still_queued_at_the_deadline_is_withdrawn() {
+    let repo = memory_repo().await;
+    let (tx, rx) = mpsc::channel(MAX_BATCH_MESSAGES);
+    let addr = spawn_smtp_into(tx).await;
+
+    let reply = send_over_smtp(addr).await;
+    spawn_store_loop(&repo, rx);
+    let retry = send_over_smtp(addr).await;
+
+    assert!(reply.starts_with("451"), "got {reply:?}");
+    assert!(retry.starts_with("250"), "got {retry:?}");
+    assert_eq!(
+      repo.count().await.unwrap(),
+      1,
+      "the withdrawn message was stored anyway"
+    );
   }
 
   #[test]

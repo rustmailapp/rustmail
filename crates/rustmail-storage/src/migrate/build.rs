@@ -32,7 +32,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 /// `target_schema`; they were all built from schema 0 into schema 1.
 /// `source_fingerprint` holds the [`qualified_fingerprint`], or the bare one
 /// in copies made by 0.8, 0.9 and 0.10.0.
-const MIGRATION_ORIGIN_DDL: &str = r#"
+pub(crate) const MIGRATION_ORIGIN_DDL: &str = r#"
   CREATE TABLE migration_origin (
     id                    INTEGER PRIMARY KEY CHECK (id = 1),
     source_fingerprint    TEXT NOT NULL,
@@ -160,7 +160,7 @@ pub(crate) struct Target {
   source: PathBuf,
 }
 
-fn target_options(path: &Path, options: &MigrationOptions) -> SqliteConnectOptions {
+pub(crate) fn target_options(path: &Path, options: &MigrationOptions) -> SqliteConnectOptions {
   let tuned = tuned(
     SqliteConnectOptions::new()
       .filename(path)

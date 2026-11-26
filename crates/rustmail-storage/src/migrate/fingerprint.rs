@@ -103,6 +103,8 @@ pub(crate) enum SourceSchema {
   Legacy,
   /// Schema 1, written by rustmail 0.8 and 0.9.
   Previous,
+  /// Schema 2, written by rustmail 0.10.
+  Compressed,
 }
 
 impl SourceSchema {
@@ -111,12 +113,13 @@ impl SourceSchema {
     match self {
       Self::Legacy => 0,
       Self::Previous => crate::schema::PREVIOUS_SCHEMA_VERSION,
+      Self::Compressed => crate::schema::COMPRESSED_SCHEMA_VERSION,
     }
   }
 
   /// The schema whose `user_version` is `version`, if it is an older one.
   pub(crate) fn from_version(version: i64) -> Option<Self> {
-    [Self::Legacy, Self::Previous]
+    [Self::Legacy, Self::Previous, Self::Compressed]
       .into_iter()
       .find(|schema| schema.version() == version)
   }
@@ -127,6 +130,9 @@ impl SourceSchema {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum SourceLayout {
   Legacy(LegacyColumns),
+  /// Schema 1 or 2, whose messages and attachments are keyed by `seq`. Only
+  /// a schema-1 source is copied batch by batch; a schema-2 one is
+  /// fingerprinted alone.
   Previous,
 }
 
@@ -139,7 +145,7 @@ impl SourceLayout {
   ) -> Result<Self, StorageError> {
     Ok(match source {
       SourceSchema::Legacy => Self::Legacy(LegacyColumns::probe(conn, schema).await?),
-      SourceSchema::Previous => Self::Previous,
+      SourceSchema::Previous | SourceSchema::Compressed => Self::Previous,
     })
   }
 
@@ -201,7 +207,7 @@ type AttachmentKey = (i64, Option<String>, Option<String>, Option<i64>);
 /// Hashes, in `seq` order, `(seq, id, is_read, is_starred, tags, raw
 /// length)` of every message and `(rowid, id, parent, length(content))` of
 /// every attachment, then both counts. The parent is the message's id in
-/// schema 0 and its `seq` in schema 1. Anything an older rustmail writes
+/// schema 0 and its `seq` in schemas 1 and 2. Anything an older rustmail writes
 /// changes one of those: a new or deleted message, a flag or tag edit.
 /// `length()` reads a blob's size from its row header, so the scan never
 /// loads a body.

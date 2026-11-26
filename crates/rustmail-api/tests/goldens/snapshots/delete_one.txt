@@ -100,7 +100,7 @@ body-json:
 >>> GET /api/v1/messages?limit=3
 <<< 200 OK
 cache-control: no-store
-content-length: 857
+content-length: 983
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -120,6 +120,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 10469086,
       "subject": "Ten mebibytes with a seven megabyte attachment",
@@ -134,6 +136,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 541,
       "subject": "Malformed base64",
@@ -148,6 +152,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "files@example.com",
       "size": 467,
       "subject": "Attachment with no Content-Type",
@@ -161,7 +167,7 @@ body-json:
 >>> GET /api/v1/messages?q=planning
 <<< 200 OK
 cache-control: no-store
-content-length: 827
+content-length: 953
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -181,6 +187,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",
@@ -198,6 +206,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "news@example.org",
       "size": 331,
       "subject": "Weekly digest: Rust tips",
@@ -214,6 +224,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "alice@example.com",
       "size": 273,
       "subject": "Welcome aboard",
@@ -227,7 +239,7 @@ body-json:
 >>> GET /api/v1/messages?tag=urgent
 <<< 200 OK
 cache-control: no-store
-content-length: 323
+content-length: 365
 content-security-policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; connect-src 'self' ws: wss:; frame-src 'self'
 content-type: application/json
 referrer-policy: no-referrer
@@ -247,6 +259,8 @@ body-json:
       "recipients": [
         "bob@example.test"
       ],
+      "release_outcome": null,
+      "released_at": null,
       "sender": "billing@example.com",
       "size": 283,
       "subject": "Invoice 2026-091 reminder",

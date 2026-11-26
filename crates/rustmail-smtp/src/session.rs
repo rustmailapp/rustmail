@@ -51,13 +51,20 @@ const IO_TIMEOUT: Duration = Duration::from_secs(60);
 /// peer from holding a session open while still allowing a large message to
 /// arrive over a slow link.
 const DATA_PHASE_TIMEOUT: Duration = Duration::from_secs(120);
-/// How long the session waits to hear whether the message was stored.
+/// Longest wait for a write already in flight when [`STORE_ACK_TIMEOUT`] passes.
 ///
-/// The reply is held until the consumer answers, so this is the cap on a
-/// consumer that stops answering at all. It sits well above the storage
-/// budget — SQLite waits out a lock for `busy_timeout` and the repository
-/// retries for as long again — because answering `451` on a write that was
-/// about to succeed invites the sender to deliver the message twice.
+/// RFC 5321 (4.5.3.2.6) has the sender give up on the reply to the
+/// terminating dot after ten minutes, so past this nobody reads an answer.
+/// The session closes the connection rather than answering `451` for a write
+/// that may still commit.
+const IN_FLIGHT_WRITE_CEILING: Duration = Duration::from_secs(600);
+/// How long the session waits for the consumer to begin writing a message.
+///
+/// Past it, a message whose write has not begun is withdrawn and answered
+/// `451`. One whose write has begun is waited out instead, since answering
+/// `451` on a write that then commits invites the sender to deliver the
+/// message twice; the store bounds that write through SQLite's
+/// `busy_timeout` and its own retries.
 pub const STORE_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 enum SmtpStream {
@@ -126,6 +133,7 @@ pub struct Session {
   greeted: bool,
   mail_from: Option<String>,
   rcpt_to: Vec<String>,
+  store_ack_timeout: Duration,
 }
 
 impl Session {
@@ -145,7 +153,16 @@ impl Session {
       greeted: false,
       mail_from: None,
       rcpt_to: Vec::new(),
+      store_ack_timeout: STORE_ACK_TIMEOUT,
     }
+  }
+
+  /// Replaces [`STORE_ACK_TIMEOUT`] for this session, so a test can outlast it
+  /// without waiting half a minute.
+  #[cfg(feature = "test-util")]
+  pub fn with_store_ack_timeout(mut self, store_ack_timeout: Duration) -> Self {
+    self.store_ack_timeout = store_ack_timeout;
+    self
   }
 
   pub async fn handle(&mut self) -> Result<(), SessionError> {
@@ -410,28 +427,38 @@ impl Session {
   /// Hands the message over and answers for whatever the consumer reports.
   ///
   /// `250` is reserved for a message that reached storage. Every other outcome
-  /// — a closed channel, a refused write, a consumer that dropped the delivery
-  /// or never answered — is a `451`, which tells the sender to try again
-  /// rather than leaving it believing a lost message was accepted.
+  /// is a `451`: a closed channel, a refused write, a consumer that dropped the
+  /// delivery or never began writing it. That tells the sender to try again
+  /// rather than leaving it believing a lost message was accepted, and it goes
+  /// out only once the message is known not to have committed.
   async fn deliver(&mut self, message: ReceivedMessage) -> Result<(), SessionError> {
-    let (delivery, verdict) = Delivery::new(message);
+    let (delivery, mut verdict) = Delivery::new(message);
     if self.sender.send(delivery).await.is_err() {
       warn!(peer = %self.peer, "Channel closed, message not stored");
       return self.write(LOCAL_ERROR).await;
     }
 
-    match timeout(STORE_ACK_TIMEOUT, verdict).await {
-      Ok(Ok(DeliveryOutcome::Stored)) => self.write(OK).await,
-      Ok(Ok(DeliveryOutcome::Rejected)) => {
+    let outcome = match timeout(self.store_ack_timeout, &mut verdict).await {
+      Ok(outcome) => outcome,
+      Err(_) if verdict.withdraw() => {
+        warn!(peer = %self.peer, "Timed out before the message's write began, asking the sender to retry");
+        return self.write(LOCAL_ERROR).await;
+      }
+      Err(_) => {
+        warn!(peer = %self.peer, "Store deadline passed with the write in flight, waiting for it to finish");
+        timeout(IN_FLIGHT_WRITE_CEILING, verdict)
+          .await
+          .map_err(|_| SessionError::Timeout)?
+      }
+    };
+    match outcome {
+      Ok(DeliveryOutcome::Stored) => self.write(OK).await,
+      Ok(DeliveryOutcome::Rejected) => {
         warn!(peer = %self.peer, "Storing the message failed, asking the sender to retry");
         self.write(LOCAL_ERROR).await
       }
-      Ok(Err(_)) => {
-        warn!(peer = %self.peer, "Message dropped before it was stored, asking the sender to retry");
-        self.write(LOCAL_ERROR).await
-      }
       Err(_) => {
-        warn!(peer = %self.peer, "Timed out waiting for the message to be stored");
+        warn!(peer = %self.peer, "Message dropped before it was stored, asking the sender to retry");
         self.write(LOCAL_ERROR).await
       }
     }

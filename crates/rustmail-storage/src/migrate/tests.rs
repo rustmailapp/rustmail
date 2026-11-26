@@ -8,6 +8,7 @@ use super::*;
 use crate::prepared::AttachmentStorage;
 use crate::{MessageRepository, PreparedMessage, connect_options, initialize_database};
 
+mod compressed;
 #[path = "../../tests/common/legacy_v0_7_0.rs"]
 mod legacy;
 mod restore;
@@ -585,7 +586,7 @@ async fn a_copy_stores_a_fingerprint_rustmail_0_9_does_not_match() {
     .unwrap();
 
   let stored = stored_fingerprint(&sidecar(&db, MIGRATING_SUFFIX)).await;
-  assert_eq!(stored, Some(format!("schema2:{bare}")));
+  assert_eq!(stored, Some(format!("schema3:{bare}")));
 }
 
 #[tokio::test]
@@ -612,7 +613,7 @@ async fn a_copy_paused_by_0_10_0_is_qualified_and_resumed_where_it_stopped() {
   );
   assert_eq!(
     stored_fingerprint(&copy).await,
-    Some(format!("schema2:{bare}"))
+    Some(format!("schema3:{bare}"))
   );
   let Preparation::Ready(Some(_)) = prepare_with(&db, &small_batches(), &never).await.unwrap()
   else {
@@ -784,7 +785,7 @@ async fn a_complete_copy_left_by_0_10_0_is_swapped_without_rebuilding() {
   );
   assert_eq!(
     stored_fingerprint(&db).await,
-    Some(format!("schema2:{bare}"))
+    Some(format!("schema3:{bare}"))
   );
 }
 
@@ -1249,4 +1250,42 @@ async fn an_incomplete_copy_left_by_0_9_is_rebuilt() {
   );
   let (messages, _) = migrated_snapshot(&db).await;
   assert_eq!(messages, legacy_messages);
+}
+
+fn add_one_legacy_message(
+  db: PathBuf,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+  Box::pin(async move { add_to_legacy(&db, MESSAGES).await })
+}
+
+#[tokio::test]
+async fn a_write_between_the_lock_release_and_the_swap_undoes_the_swap() {
+  let (_dir, db) = scratch();
+  legacy_database(&db, MESSAGES).await;
+  let options = MigrationOptions {
+    before_swap: Some(add_one_legacy_message),
+    ..MigrationOptions::default()
+  };
+
+  let error = prepare_with(&db, &options, &never).await.unwrap_err();
+
+  assert!(
+    matches!(
+      error,
+      StorageError::MigrationRefused(MigrationRefusal::SourceChangedDuringSwap { .. })
+    ),
+    "got {error:?}"
+  );
+  assert!(!sidecar(&db, LEGACY_BACKUP_SUFFIX).exists());
+  assert!(sidecar(&db, MIGRATING_SUFFIX).exists());
+  let (legacy_messages, legacy_attachments) = legacy_snapshot(&db).await;
+  assert_eq!(legacy_messages.len(), MESSAGES + 1);
+
+  assert!(matches!(
+    migrate(&db).await.unwrap(),
+    Preparation::Ready(Some(_))
+  ));
+  let (messages, attachments) = migrated_snapshot(&db).await;
+  assert_eq!(messages, legacy_messages);
+  assert_eq!(attachments, legacy_attachments);
 }

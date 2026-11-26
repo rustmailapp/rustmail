@@ -7,6 +7,7 @@ import type {
   ListResponse,
   Message,
   MessageHeader,
+  ReleaseRecord,
   ReleaseTarget,
   ServerInfo,
 } from "./types";
@@ -122,15 +123,51 @@ async function rejection(
   res: Response,
   signal: AbortSignal,
 ): Promise<ApiError> {
-  let body: unknown;
+  return rejectionOf(res, await optionalJson(res, signal));
+}
+
+/** A response body decoded as JSON, or `undefined` when it is not JSON. */
+async function optionalJson(
+  res: Response,
+  signal: AbortSignal,
+): Promise<unknown> {
   try {
-    body = await res.json();
+    return (await res.json()) as unknown;
   } catch {
     signal.throwIfAborted();
-    return new ApiError(res);
+    return undefined;
   }
+}
+
+function rejectionOf(res: Response, body: unknown): ApiError {
   const parsed = schema.errorCode.safeParse(body);
   return new ApiError(res, parsed.success ? parsed.data.code : null);
+}
+
+/**
+ * A release the server answered with a failure.
+ *
+ * `recorded` is the release the server holds on the message after this
+ * attempt, when its answer names one: a release cut off with its outcome
+ * unknown is recorded, and an earlier delivery stays recorded as sent.
+ */
+export class ReleaseError extends ApiError {
+  readonly recorded: ReleaseRecord | null;
+
+  constructor(
+    res: Response,
+    code: string | null,
+    recorded: ReleaseRecord | null,
+  ) {
+    super(res, code);
+    this.name = "ReleaseError";
+    this.recorded = recorded;
+  }
+}
+
+function releaseRecordIn(body: unknown): ReleaseRecord | null {
+  const parsed = schema.releaseRecord.safeParse(body);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -357,20 +394,30 @@ export async function getHeaders(
  * `target` is the relay the user confirmed: the server refuses any other, so
  * a server restarted with a different relay rejects the send instead of
  * delivering through a relay nobody saw.
+ *
+ * Resolves to the release the server recorded, or `null` when the answer
+ * names none, as a server older than release recording answers. The message
+ * was delivered either way, so an answer without a record is not a failure.
+ * A failure rejects with a {@link ReleaseError}.
  */
 export async function releaseMessage(
   id: string,
   target: ReleaseTarget,
-): Promise<void> {
-  await fetchVoid(
-    `${BASE}/messages/${enc(id)}/release`,
-    {
+): Promise<ReleaseRecord | null> {
+  return withDeadline(null, RELEASE_REQUEST_TIMEOUT_MS, async (signal) => {
+    const res = await fetch(`${BASE}/messages/${enc(id)}/release`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ host: target.host, port: target.port }),
-    },
-    RELEASE_REQUEST_TIMEOUT_MS,
-  );
+      signal,
+    });
+    const body = await optionalJson(res, signal);
+    if (!res.ok) {
+      const { code } = rejectionOf(res, body);
+      throw new ReleaseError(res, code, releaseRecordIn(body));
+    }
+    return releaseRecordIn(body);
+  });
 }
 
 /** Fetches the running server's version, SMTP port and release relay. */
