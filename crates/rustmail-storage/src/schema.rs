@@ -77,7 +77,8 @@ const JOURNAL_SIZE_LIMIT_BYTES: &str = "67108864";
 /// its `tags` change, and the rows follow a deleted message by cascade, so
 /// every write path keeps the two equal without touching `message_tags`
 /// itself. `idx_messages_unread` holds only unread messages, like the starred
-/// index.
+/// index, and [`HAS_ATTACHMENTS_INDEX_DDL`] holds only messages with
+/// attachments.
 ///
 /// An attachment is either located or inline, never both. A located one
 /// keeps `raw_offset`, `raw_len` and `transfer_encoding` (0 identity, 1
@@ -96,6 +97,7 @@ pub(crate) const SCHEMA_DDL: &[&str] = &[
   "CREATE INDEX idx_messages_created_at ON messages(created_at)",
   "CREATE INDEX idx_messages_starred ON messages(is_starred) WHERE is_starred = 1",
   "CREATE INDEX idx_messages_unread ON messages(is_read) WHERE is_read = 0",
+  HAS_ATTACHMENTS_INDEX_DDL,
   r#"
   CREATE TABLE message_content (
     seq INTEGER PRIMARY KEY REFERENCES messages(seq) ON DELETE CASCADE,
@@ -120,6 +122,15 @@ pub(crate) const SCHEMA_DDL: &[&str] = &[
   MESSAGE_TAGS_INSERT_TRIGGER_DDL,
   MESSAGE_TAGS_UPDATE_TRIGGER_DDL,
 ];
+
+/// Indexes the attachment filter, so it no longer reads every message.
+///
+/// It came after schema 3 was released, so [`initialize_database`] also
+/// creates it on every open. An index holds nothing that is not in its
+/// table, and SQLite keeps it current whichever rustmail writes, so the file
+/// stays schema 3 and an earlier schema-3 rustmail still opens it.
+const HAS_ATTACHMENTS_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS idx_messages_has_attachments \
+  ON messages(has_attachments) WHERE has_attachments = 1";
 
 /// Statements that turn a schema-2 `messages` table into the schema-3 one.
 ///
@@ -303,6 +314,8 @@ enum Layout {
 /// | 3 | – | opened |
 /// | > 3 | – | [`StorageError::NewerSchema`] |
 ///
+/// An opened file gains any index added to schema 3 since it was written.
+///
 /// Creating the schema is one `IMMEDIATE` transaction whose last statement sets
 /// `user_version`, so a crash midway leaves an empty file, and a second
 /// process racing to create the same file finds the finished schema instead.
@@ -317,6 +330,9 @@ pub async fn initialize_database(pool: &SqlitePool) -> Result<(), StorageError> 
   if let Layout::Empty = inspect_layout(&mut conn).await? {
     create_schema(&mut conn).await?;
   }
+  sqlx::query(HAS_ATTACHMENTS_INDEX_DDL)
+    .execute(&mut *conn)
+    .await?;
   sqlx::query("PRAGMA journal_mode=WAL")
     .execute(&mut *conn)
     .await?;
@@ -882,6 +898,30 @@ mod tests {
       .await
       .unwrap();
     assert_eq!(ids, ["kept"]);
+  }
+
+  #[tokio::test]
+  async fn a_current_file_without_the_attachment_index_gains_it_on_open() {
+    let (_guard, path) = scratch_database("attachment-index");
+    let pool = open_tuned(&path).await;
+    initialize_database(&pool).await.unwrap();
+    sqlx::query("DROP INDEX idx_messages_has_attachments")
+      .execute(&pool)
+      .await
+      .unwrap();
+    pool.close().await;
+
+    let pool = open_tuned(&path).await;
+    initialize_database(&pool).await.unwrap();
+
+    assert_eq!(user_version(&pool).await, SCHEMA_VERSION);
+    let indexed: bool = sqlx::query_scalar(
+      "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_has_attachments')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(indexed, "reopening did not create the attachment index");
   }
 
   #[tokio::test]

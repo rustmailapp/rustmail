@@ -3134,6 +3134,13 @@ mod tests {
     }
   }
 
+  fn only_with_attachments() -> MessageFilter {
+    MessageFilter {
+      has_attachments: true,
+      ..MessageFilter::default()
+    }
+  }
+
   fn only_unread() -> MessageFilter {
     MessageFilter {
       unread: true,
@@ -3193,6 +3200,47 @@ mod tests {
         "{start:?}: the tagged page sorts its matches: {plan:?}"
       );
     }
+  }
+
+  #[tokio::test]
+  async fn the_attachment_filter_lists_from_its_partial_index_without_sorting() {
+    let repo = test_repo().await;
+    let filter = only_with_attachments();
+
+    for start in [PageStart::Offset(0), PageStart::Before(Cursor(1))] {
+      let plan = plan_of(&repo, &list_statement(&filter, start, 50).into_string()).await;
+      assert!(
+        plan
+          .iter()
+          .any(|step| step.starts_with("SEARCH m USING INDEX idx_messages_has_attachments")),
+        "{start:?}: the attachment page does not use idx_messages_has_attachments: {plan:?}"
+      );
+      assert!(
+        !scans_table(&plan, &["m", "messages"]),
+        "{start:?}: the attachment page scans every message: {plan:?}"
+      );
+      assert!(
+        !sorts_for_order_by(&plan),
+        "{start:?}: the attachment page sorts its matches: {plan:?}"
+      );
+    }
+  }
+
+  #[tokio::test]
+  async fn the_attachment_count_reads_only_its_partial_index() {
+    let repo = test_repo().await;
+
+    let plan = plan_of(
+      &repo,
+      &count_statement(&only_with_attachments()).into_string(),
+    )
+    .await;
+
+    assert_eq!(
+      plan,
+      ["SEARCH m USING COVERING INDEX idx_messages_has_attachments (has_attachments=?)"],
+      "the attachment count touches more than the attachment index entries"
+    );
   }
 
   #[tokio::test]
