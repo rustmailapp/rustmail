@@ -1538,6 +1538,7 @@ describe("arrivals while the reader is scrolled away", () => {
     setLiveHeld(true);
     listMessages.mockImplementation(
       async ({ limit, before }: { limit: number; before?: string }) => {
+        if (limit === 1) return page([message(-1)], rows.length + 1);
         if (before === undefined) {
           return page(rows.slice(0, limit), rows.length, rows[limit - 1].id);
         }
@@ -1551,9 +1552,52 @@ describe("arrivals while the reader is scrolled away", () => {
 
     expect(ids()).toEqual(rows.map((m) => m.id));
     expect(heldArrivals()).toBe(1);
-    expect(total()).toBe(rows.length + 1);
+    await vi.waitFor(() => expect(total()).toBe(rows.length + 1));
     setLiveHeld(false);
     expect(ids()[0]).toBe("id--1");
+  });
+
+  it("counts a match a flag change makes between the pages of a held resync", async () => {
+    const starred = (n: number) => message(n, { is_starred: true });
+    const loaded = Array.from({ length: PAGE_SIZE + 20 }, (_, i) =>
+      starred(2 * i),
+    );
+    serve(loaded);
+    toggleFilter("starred");
+    await vi.waitFor(() => expect(loading()).toBe(false));
+    await loadMore();
+    setLiveHeld(true);
+    const late = starred(2 * PAGE_SIZE + 1);
+    const after = [
+      ...loaded.slice(0, PAGE_SIZE + 1),
+      late,
+      ...loaded.slice(PAGE_SIZE + 1),
+    ];
+    listMessages.mockImplementation(
+      async ({ limit, before }: { limit: number; before?: string }) => {
+        if (limit === 1) return page(after.slice(0, 1), after.length);
+        if (before === undefined) {
+          return page(
+            loaded.slice(0, limit),
+            loaded.length,
+            loaded[limit - 1].id,
+          );
+        }
+        deliver(
+          JSON.stringify({
+            type: "message:starred",
+            data: { id: late.id, is_starred: true },
+          }),
+        );
+        const start = after.findIndex((m) => m.id === before) + 1;
+        return page(after.slice(start, start + limit), after.length, null);
+      },
+    );
+
+    await resync();
+
+    expect(ids()).toContain(late.id);
+    await vi.waitFor(() => expect(total()).toBe(after.length));
   });
 
   it("puts the held arrivals on top once the reader is back there", () => {

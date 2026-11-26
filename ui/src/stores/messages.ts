@@ -885,12 +885,14 @@ async function fetchMessages(): Promise<void> {
 
 /**
  * A list read that has landed: the count it read, the ids of the rows it
- * returned, and how to show it.
+ * returned, how to show it, and whether the count and the rows come from one
+ * response.
  */
 type LandedRead = {
   total: number;
   ids: ReadonlySet<string>;
   show: () => void;
+  onePage: boolean;
 };
 
 async function readTopPage(
@@ -909,6 +911,7 @@ async function readTopPage(
       dropHeldArrivals();
       setPageCursor(res.next_cursor, view);
     },
+    onePage: true,
   };
 }
 
@@ -932,7 +935,9 @@ async function readTopPage(
  *
  * The total is the first page's: only that page can hold an arrival, so one
  * that commits while older pages are read is in neither the rows nor the count,
- * and replaying its event counts it once.
+ * and replaying its event counts it once. A flag change made between two pages
+ * may already show in a later page's rows but not in that count, so the read
+ * reports when it spanned more than one page.
  */
 async function readLoadedWindow(
   view: View,
@@ -941,6 +946,7 @@ async function readLoadedWindow(
   const tail = messages().at(-1)?.id;
   const read: MessageSummary[] = [];
   let total: number | undefined;
+  let pages = 0;
   let metAny = false;
   let sinceLoaded = 0;
   let before: string | undefined;
@@ -954,6 +960,7 @@ async function readLoadedWindow(
       signal,
     );
     total ??= res.total;
+    pages += 1;
     let metTail = false;
     for (const m of res.messages) {
       read.push(m);
@@ -975,6 +982,7 @@ async function readLoadedWindow(
         total,
         ids: new Set(read.map((m) => m.id)),
         show: () => reconcileWindow(read, passedAll, ended, view),
+        onePage: pages === 1,
       };
     }
     before = res.next_cursor ?? undefined;
@@ -1032,16 +1040,18 @@ async function readFirstPage(): Promise<boolean> {
       const raced = revision !== deletionRevision;
       const last = attempt === LIST_READ_ATTEMPTS - 1;
       if (raced && !last) continue;
+      const countUnsettled =
+        raced || (!landed.onePage && (eventsDuringRead?.length ?? 0) > 0);
       batch(() => {
         snapshot += 1;
-        countNeedsRefresh = raced;
+        countNeedsRefresh = countUnsettled;
         landed.show();
         setListedWhole(search() === "" && !hasActiveFilters());
         setStoredTotal(landed.total);
         searchStale = false;
         replayEvents(eventsDuringRead ?? [], landed.ids);
       });
-      if (raced) void refreshTotal();
+      if (countUnsettled) void refreshTotal();
       return true;
     }
     return false;
