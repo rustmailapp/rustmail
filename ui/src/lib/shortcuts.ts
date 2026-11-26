@@ -12,7 +12,7 @@ export const KEYS = {
 } as const;
 
 /** Whether the browser runs on an Apple platform, where Command replaces Control. */
-function applePlatform(): boolean {
+export function applePlatform(): boolean {
   return (
     typeof navigator !== "undefined" &&
     /Mac|iPhone|iPad/.test(navigator.userAgent)
@@ -27,18 +27,23 @@ export function commandPaletteKeys(): string {
 /**
  * Whether a key press opens or closes the command palette.
  *
- * Command+K and Control+K both count on every platform, so the chord works
- * whichever key the user reaches for; Shift or Alt make it a different chord.
+ * Command+K on Apple platforms, Control+K elsewhere. On macOS Control+K
+ * deletes to the end of the line in text fields, so it is left alone there;
+ * any other modifier on top makes it a different chord.
  */
 export function isCommandPaletteChord(
   event: Pick<
     KeyboardEvent,
     "key" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey"
   >,
+  apple: boolean,
 ): boolean {
+  const command = apple
+    ? event.metaKey && !event.ctrlKey
+    : event.ctrlKey && !event.metaKey;
   return (
     (event.key === "k" || event.key === "K") &&
-    (event.metaKey || event.ctrlKey) &&
+    command &&
     !event.altKey &&
     !event.shiftKey
   );

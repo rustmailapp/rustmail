@@ -12,7 +12,7 @@ These work anywhere in the UI.
 
 | Key | Action |
 |-----|--------|
-| `Cmd`/`Ctrl`+`K` | Open the [command palette](#command-palette) |
+| `Cmd`+`K` (macOS), `Ctrl`+`K` | Open the [command palette](#command-palette) |
 | `j` | Select next message |
 | `k` | Select previous message |
 | `d` | Delete selected message |
@@ -96,6 +96,7 @@ make no such exception.
 
 Shortcuts are active when no input field is focused, and are ignored when a
 modifier key is held, so browser chords such as `Cmd`/`Ctrl`+`D` keep their
-normal behaviour; `Cmd`/`Ctrl`+`K` is taken by the command palette. The one
-exception is `Esc` inside the details drawer: it closes the drawer even from
-the tag input, and focus goes back to whatever opened it.
+normal behaviour; `Cmd`+`K` on macOS and `Ctrl`+`K` elsewhere open the
+command palette, while `Ctrl`+`K` on macOS keeps deleting to the end of the
+line. The one exception is `Esc` inside the details drawer: it closes the
+drawer even from the tag input, and focus goes back to whatever opened it.

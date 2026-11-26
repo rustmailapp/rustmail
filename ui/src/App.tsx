@@ -39,7 +39,7 @@ import {
   shortcutsOpen,
   toggleCommandPalette,
 } from "./stores/commandPalette";
-import { isCommandPaletteChord } from "./lib/shortcuts";
+import { applePlatform, isCommandPaletteChord } from "./lib/shortcuts";
 import {
   closeDetails,
   detailsDrawerOpen,
@@ -66,7 +66,7 @@ export default function App() {
 
   function handleKeydown(e: KeyboardEvent) {
     if (settingsOpen() || confirmOpen() || shortcutsOpen()) return;
-    if (isCommandPaletteChord(e)) {
+    if (isCommandPaletteChord(e, applePlatform())) {
       e.preventDefault();
       if (!e.repeat) toggleCommandPalette();
       return;

@@ -5,6 +5,13 @@ const MESSAGES = 50;
 const SEARCH_INPUT = 'input[placeholder="Search emails..."]';
 const RELAY = { host: "smtp.example.test", port: 465 };
 const RELEASE = /\/api\/v1\/messages\/[^/]+\/release$/;
+/**
+ * The palette chord for the emulated browser, whatever the host runs.
+ *
+ * The "Desktop Chrome" device reports a Windows user agent, so the app takes
+ * Control+K even on a Mac host, where `ControlOrMeta` would send Command.
+ */
+const CHORD = "Control+K";
 
 async function openInbox(page: Page) {
   const backend = await mockInbox(page, MESSAGES);
@@ -26,7 +33,7 @@ function activeOption(page: Page): Locator {
 }
 
 async function openPalette(page: Page): Promise<void> {
-  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.press(CHORD);
   await expect(combobox(page)).toBeFocused();
 }
 
@@ -67,7 +74,7 @@ test("toggles closed with the chord again", async ({ page }) => {
   await openInbox(page);
   await openPalette(page);
 
-  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.press(CHORD);
 
   await expect(palette(page)).toBeHidden();
 });
