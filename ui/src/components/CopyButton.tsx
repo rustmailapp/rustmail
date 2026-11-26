@@ -42,11 +42,6 @@ export default function CopyButton(props: {
 
   return (
     <>
-      <Show when={feedback() === "manual"}>
-        <span class="text-[11px] text-zinc-600 dark:text-zinc-300">
-          {MANUAL_COPY_HINT}
-        </span>
-      </Show>
       <button
         onClick={copy}
         aria-label={
@@ -59,14 +54,19 @@ export default function CopyButton(props: {
         title={feedback() === "copied" ? "Copied" : "Copy"}
         class="inline-flex shrink-0 items-center gap-1 rounded-md p-1 text-[11px] font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-200/70 dark:hover:bg-zinc-700/60 transition cursor-pointer"
       >
-        <CopyIcon class="size-3.5" />
+        <CopyIcon class="size-3" />
         <Show when={props.showText}>
           <span aria-hidden="true" class="pr-0.5">
             {feedback() === "copied" ? "Copied" : "Copy"}
           </span>
         </Show>
       </button>
-      <span role="status" class="sr-only">
+      <Show when={feedback() === "manual"}>
+        <span class="text-[11px] text-zinc-600 dark:text-zinc-300">
+          {MANUAL_COPY_HINT}
+        </span>
+      </Show>
+      <span aria-live="polite" class="sr-only">
         {feedback() === "copied" ? "Copied" : ""}
       </span>
     </>

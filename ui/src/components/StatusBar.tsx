@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { createMemo, Show, type JSX } from "solid-js";
 import {
   hasMore,
   socketLive,
@@ -8,14 +8,7 @@ import {
 import { wideLayout } from "../stores/layout";
 import { serverInfo, smtpEndpoint } from "../stores/server";
 import { smtpAddress } from "../lib/smtp";
-import {
-  COPIED_FEEDBACK_MS,
-  MANUAL_COPY_HINT,
-  MANUAL_COPY_HINT_MS,
-  writeClipboard,
-  type CopyFeedback,
-} from "../lib/clipboard";
-import { CopyIcon } from "./icons";
+import CopyButton from "./CopyButton";
 
 const ENDPOINT_TITLE =
   "The SMTP port this server listens on. Docker or proxy port mappings can expose a different one.";
@@ -62,25 +55,7 @@ export default function StatusBar() {
     return seenLive ? "Reconnecting" : "Connecting";
   });
 
-  const [feedback, setFeedback] = createSignal<CopyFeedback | null>(null);
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined;
   let endpointText: HTMLSpanElement | undefined;
-  onCleanup(() => clearTimeout(feedbackTimer));
-
-  function showFeedback(kind: CopyFeedback, durationMs: number): void {
-    setFeedback(kind);
-    clearTimeout(feedbackTimer);
-    feedbackTimer = setTimeout(() => setFeedback(null), durationMs);
-  }
-
-  async function copy(text: string): Promise<void> {
-    if (await writeClipboard(text)) {
-      showFeedback("copied", COPIED_FEEDBACK_MS);
-      return;
-    }
-    if (endpointText) window.getSelection()?.selectAllChildren(endpointText);
-    showFeedback("manual", MANUAL_COPY_HINT_MS);
-  }
 
   return (
     <footer class="app-panel flex items-center gap-4 px-3 h-8 shrink-0 text-[11px] text-zinc-500 dark:text-zinc-400 whitespace-nowrap overflow-hidden">
@@ -114,25 +89,11 @@ export default function StatusBar() {
                 {address()}
               </span>
             </span>
-            <button
-              onClick={() => copy(address())}
-              aria-label={
-                feedback() === "copied"
-                  ? "Copied"
-                  : feedback() === "manual"
-                    ? MANUAL_COPY_HINT
-                    : "Copy the SMTP address"
-              }
-              title={feedback() === "copied" ? "Copied" : "Copy"}
-              class="rounded p-0.5 text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition cursor-pointer"
-            >
-              <CopyIcon class="size-3" />
-            </button>
-            <Show when={feedback() === "manual"}>
-              <span class="text-zinc-600 dark:text-zinc-300">
-                {MANUAL_COPY_HINT}
-              </span>
-            </Show>
+            <CopyButton
+              text={address()}
+              label="Copy the SMTP address"
+              source={() => endpointText}
+            />
           </span>
         )}
       </Show>
