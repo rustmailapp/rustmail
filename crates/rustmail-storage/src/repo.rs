@@ -556,11 +556,13 @@ impl MessageRepository {
     deleted
   }
 
-  /// Refreshes the query planner's statistics for every ordinary table on the
-  /// writer.
+  /// Refreshes the query planner's statistics on the writer for every
+  /// ordinary table where they are missing or stale.
   ///
   /// It does not depend on what this connection has queried, so it is the
-  /// call for startup and after a retention sweep has removed rows. `ANALYZE` reads a bounded sample of each index, see
+  /// call for startup and after a retention sweep has removed rows. A table
+  /// whose size has not changed ten-fold since its last analysis is skipped,
+  /// and `ANALYZE` reads a bounded sample of each index, see
   /// [`OPTIMIZE_ANALYSIS_LIMIT`].
   ///
   /// # Errors
@@ -1256,20 +1258,30 @@ async fn foreign_keys_on(conn: &mut SqliteConnection) -> Result<bool, StorageErr
   )
 }
 
-/// Runs `ANALYZE` on `conn` over every ordinary table, reading a bounded
-/// sample of each index.
+/// Runs `ANALYZE` on `conn` over the ordinary tables `PRAGMA optimize` finds
+/// stale, reading a bounded sample of each index.
+///
+/// `PRAGMA optimize = 0x10003` lists, without running them, the `ANALYZE`
+/// statements `PRAGMA optimize = 0x10002` would run: one per table with an
+/// unanalyzed index or a row count that changed ten-fold since its last
+/// analysis. A table without an index is counted row by row whatever the
+/// analysis limit, so analyzing `message_content` on every call would read
+/// the whole mailbox through the memory map.
 ///
 /// Shadow tables are left out. FTS5 looks up its own rows by rowid, and a
 /// `sqlite_stat1` row taken while the index was nearly empty makes SQLite
 /// plan the range delete behind every segment merge as a full scan of
-/// `messages_fts_data`. `PRAGMA optimize` cannot skip a table, so the tables
-/// are named one by one.
+/// `messages_fts_data`. `PRAGMA optimize` cannot skip a table, so its list is
+/// filtered against the ordinary tables.
 async fn refresh_statistics(conn: &mut SqliteConnection) -> Result<(), StorageError> {
   sqlx::query(AssertSqlSafe(format!(
     "PRAGMA analysis_limit = {OPTIMIZE_ANALYSIS_LIMIT}"
   )))
   .execute(&mut *conn)
   .await?;
+  let stale: Vec<String> = sqlx::query_scalar("PRAGMA optimize = 0x10003")
+    .fetch_all(&mut *conn)
+    .await?;
   let tables: Vec<String> = sqlx::query_scalar(
     "SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' \
      AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'",
@@ -1277,12 +1289,12 @@ async fn refresh_statistics(conn: &mut SqliteConnection) -> Result<(), StorageEr
   .fetch_all(&mut *conn)
   .await?;
   for table in tables {
-    sqlx::query(AssertSqlSafe(format!(
-      "ANALYZE main.\"{}\"",
-      table.replace('"', "\"\"")
-    )))
-    .execute(&mut *conn)
-    .await?;
+    let analyze = format!("ANALYZE \"main\".\"{}\"", table.replace('"', "\"\""));
+    if stale.contains(&analyze) {
+      sqlx::query(AssertSqlSafe(analyze))
+        .execute(&mut *conn)
+        .await?;
+    }
   }
   Ok(())
 }
@@ -2799,6 +2811,46 @@ mod tests {
       details.iter().any(|detail| detail.starts_with("SEARCH")),
       "segment cleanup scans messages_fts_data: {details:?}"
     );
+  }
+
+  async fn statistics(pool: &SqlitePool) -> Vec<(String, Option<String>, String)> {
+    sqlx::query_as("SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx")
+      .fetch_all(pool)
+      .await
+      .unwrap()
+  }
+
+  #[tokio::test]
+  async fn optimize_keeps_statistics_while_the_mailbox_has_not_changed_ten_fold() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    insert_subjects(&repo, &["m0", "m1", "m2"]).await;
+    repo.optimize().await.unwrap();
+    let before = statistics(&writer).await;
+    insert_subjects(&repo, &["m3", "m4"]).await;
+
+    repo.optimize().await.unwrap();
+
+    assert_eq!(statistics(&writer).await, before);
+  }
+
+  #[tokio::test]
+  async fn optimize_refreshes_statistics_once_the_mailbox_grew_ten_fold() {
+    let (repo, writer, _dir) = file_repo_with_writer().await;
+    insert_subjects(&repo, &["m0", "m1", "m2"]).await;
+    repo.optimize().await.unwrap();
+    let subjects: Vec<String> = (3..40).map(|index| format!("m{index}")).collect();
+    let subjects: Vec<&str> = subjects.iter().map(String::as_str).collect();
+    insert_subjects(&repo, &subjects).await;
+
+    repo.optimize().await.unwrap();
+
+    let rows: String = sqlx::query_scalar(
+      "SELECT stat FROM sqlite_stat1 WHERE tbl = 'messages' AND idx = 'idx_messages_created_at'",
+    )
+    .fetch_one(&writer)
+    .await
+    .unwrap();
+    assert!(rows.starts_with("40 "), "stale statistics: {rows}");
   }
 
   #[tokio::test]
